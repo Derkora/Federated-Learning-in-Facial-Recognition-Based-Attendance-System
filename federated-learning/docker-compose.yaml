@@ -1,46 +1,46 @@
 services:
-  server:
+  server-fl:
     build: ./server
     ports:
       - "8081:8080"
       - "8085:8085"
     environment:
-      DATABASE_URL: postgresql://admin:admin123@server-db:5432/fl_server
+      DATABASE_URL: postgresql://admin:admin123@server-fl-db:5432/fl_server
     depends_on:
-      server-db:
+      server-fl-db:
         condition: service_healthy
     networks:
       - flnet
 
-  client1:
+  client1-fl:
     build: ./client
     ports:
       - "8082:8080"
     environment:
-      DATABASE_URL: postgresql://client:client123@client1-db:5432/fl_client
-      SERVER_API_URL: http://server:8080
-      FL_SERVER_ADDRESS: server:8085
+      DATABASE_URL: postgresql://client:client123@client1-fl-db:5432/fl_client
+      SERVER_API_URL: http://server-fl:8080
+      FL_SERVER_ADDRESS: server-fl:8085
     depends_on:
-      client1-db:
+      client1-fl-db:
         condition: service_healthy
     networks:
       - flnet
 
-  client2:
+  client2-fl:
     build: ./client
     ports:
       - "8083:8080"
     environment:
-      DATABASE_URL: postgresql://client:client123@client2-db:5432/fl_client
-      SERVER_API_URL: http://server:8080
-      FL_SERVER_ADDRESS: server:8085
+      DATABASE_URL: postgresql://client:client123@client2-fl-db:5432/fl_client
+      SERVER_API_URL: http://server-fl:8080
+      FL_SERVER_ADDRESS: server-fl:8085
     depends_on:
-      client2-db:
+      client2-fl-db:
         condition: service_healthy
     networks:
       - flnet
 
-  server-db:
+  server-fl-db:
     image: postgres:15
     environment:
       - POSTGRES_USER=admin
@@ -58,7 +58,7 @@ services:
       timeout: 5s
       retries: 5
     
-  client1-db:
+  client1-fl-db:
     image: postgres:15
     environment:
       - POSTGRES_USER=client
@@ -74,7 +74,7 @@ services:
       timeout: 5s
       retries: 5
     
-  client2-db:
+  client2-fl-db:
     image: postgres:15
     environment:
       - POSTGRES_USER=client
