@@ -1,0 +1,28 @@
+services:
+  server-cl:
+    build: ./server
+    container_name: centralized_server
+    ports:
+      - "8000:8000"
+    networks:
+      - clnet
+
+  client1-cl:
+    build: ./client
+    container_name: centralized_client1
+    environment:
+      CL_SERVER_ADDRESS: http://server-cl:8000
+    networks:
+      - clnet
+
+  client2-cl:
+    build: ./client
+    container_name: centralized_client2
+    environment:
+      CL_SERVER_ADDRESS: http://server-cl:8000
+    networks:
+      - clnet
+
+networks:
+  clnet:
+    driver: bridge

@@ -1,6 +1,7 @@
 services:
   server-fl:
     build: ./server
+    container_name: federated_server
     ports:
       - "8081:8080"
       - "8085:8085"
@@ -14,6 +15,7 @@ services:
 
   client1-fl:
     build: ./client
+    container_name: federated_client1
     ports:
       - "8082:8080"
     environment:
@@ -28,6 +30,7 @@ services:
 
   client2-fl:
     build: ./client
+    container_name: federated_client2
     ports:
       - "8083:8080"
     environment:
