@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Pengenalan Wajah</title>
+    <style>
+        body { font-family: sans-serif; max-width: 600px; margin: 2rem auto; padding: 20px; text-align: center; }
+        .upload-area { border: 2px dashed #ccc; padding: 40px; cursor: pointer; margin-bottom: 20px; }
+        .upload-area:hover { background-color: #f9f9f9; }
+        #preview { max-width: 100%; max-height: 300px; margin: 20px 0; display: none; border-radius: 8px; }
+        .result-box { font-size: 1.5em; font-weight: bold; margin-top: 20px; }
+        .conf { font-size: 0.8em; color: #666; }
+        .back-link { display: block; margin-top: 40px; color: #007bff; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <h1>Test Pengenalan Wajah</h1>
+    
+    <div class="upload-area" onclick="document.getElementById('file').click()">
+        <p>Klik di sini untuk upload foto atau ambil gambar</p>
+        <input type="file" id="file" name="file" accept="image/*" style="display: none;" onchange="previewAndSubmit(this)">
+    </div>
+
+    <img id="preview" alt="Preview Image">
+    
+    <div id="loading" style="display:none;">Menganalisa...</div>
+    
+    <div id="result" class="result-box"></div>
+    <div id="confidence" class="conf"></div>
+
+    <a href="/" class="back-link">← Kembali ke Home</a>
+
+    <script>
+        function previewAndSubmit(input) {
+            if (input.files && input.files[0]) {
+                var reader = new FileReader();
+                reader.onload = function(e) {
+                    document.getElementById('preview').src = e.target.result;
+                    document.getElementById('preview').style.display = 'inline-block';
+                    submitImage(input.files[0]);
+                }
+                reader.readAsDataURL(input.files[0]);
+            }
+        }
+
+        async function submitImage(file) {
+            const resultDiv = document.getElementById('result');
+            const confDiv = document.getElementById('confidence');
+            const loading = document.getElementById('loading');
+            
+            resultDiv.innerText = "";
+            confDiv.innerText = "";
+            loading.style.display = "block";
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch('/api/recognize', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                
+                loading.style.display = "none";
+                
+                if (data.status === 'success') {
+                    resultDiv.style.color = "#28a745";
+                    resultDiv.innerText = "Halo, " + data.name + "!";
+                    confDiv.innerText = "Confidence: " + data.confidence;
+                } else if (data.status === 'unknown') {
+                    resultDiv.style.color = "#dc3545";
+                    resultDiv.innerText = "Wajah Tidak Dikenali";
+                    confDiv.innerText = `Mirip dengan ${data.closest_match} (${data.confidence})`;
+                } else {
+                    resultDiv.style.color = "orange";
+                    resultDiv.innerText = data.message;
+                }
+            } catch (err) {
+                loading.style.display = "none";
+                resultDiv.innerText = "Error sistem.";
+            }
+        }
+    </script>
+</body>
+</html>

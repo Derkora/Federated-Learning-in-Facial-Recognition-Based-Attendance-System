@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edge Client - Face Recognition</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header style="border-bottom: 2px solid #eee; margin-bottom: 20px; padding-bottom: 10px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <h2>Edge Computing Node</h2>
+                <nav>
+                    <a href="/">Dashboard</a> | 
+                    <a href="/register-page">Registrasi</a> | 
+                    <a href="/attendance-page">Absensi</a>
+                </nav>
+            </div>
+        </header>
+
+        {% block content %}{% endblock %}
+
+        <footer style="margin-top: 50px; text-align: center; font-size: 0.8em; color: #888;">
+            &copy; 2025 Federated Learning Attendance System
+        </footer>
+    </div>
+</body>
+</html>

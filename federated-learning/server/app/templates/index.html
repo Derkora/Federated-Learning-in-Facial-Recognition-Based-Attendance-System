@@ -1,0 +1,195 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="card">
+    <h1>Federated Learning Control</h1>
+
+    <div id="statusBox" class="status-box {{ 'running' if status.running else 'stopped' }}">
+        <h3>
+            <span id="liveDot" class="live-indicator {{ 'active' if status.running else '' }}"></span>
+            Status: <span id="statusText">{{ "SEDANG TRAINING..." if status.running else "MENUNGGU / SELESAI" }}</span>
+        </h3>
+        <div style="font-size: 1.2em; margin-top: 5px;">
+            Progress Ronde: <strong id="roundText">{{ status.current_round }}</strong> / <span id="totalRoundText">{{
+                status.total_rounds }}</span>
+        </div>
+    </div>
+
+    <div class="metric-grid">
+        <div class="metric-card">
+            <div class="metric-label">Waktu Berjalan</div>
+            <div class="metric-val" id="timeText">{{ status.elapsed_time }}</div>
+        </div>
+        <div class="metric-card" style="border-left-color: #e67e22;">
+            <div class="metric-label">Est. Bandwidth</div>
+            <div class="metric-val" id="bwText">{{ status.bandwidth_kb }}</div>
+        </div>
+    </div>
+
+    <div style="margin-top: 20px;" id="actionContainer">
+        {% if not status.running %}
+        <form action="/action/start" method="post" style="display:inline-block;">
+            <button type="submit" class="btn btn-start">
+                ▶ Mulai Training Baru (10 Ronde)
+            </button>
+        </form>
+        <button onclick="resetModel()" class="btn" style="background-color: #dc3545; color: white; margin-left: 10px;">
+            ⟳ Reset Model
+        </button>
+        {% else %}
+        <p style="color: #666; font-style: italic;">
+            Training sedang berlangsung...
+        </p>
+        {% endif %}
+    </div>
+
+    <div class="card" style="margin-top: 20px; text-align: left;">
+        <h3>Training Metrics History</h3>
+        <div style="max-height: 200px; overflow-y: auto;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 0.9em;">
+                <thead style="position: sticky; top: 0; background: #eee;">
+                    <tr>
+                        <th style="padding: 8px;">Round</th>
+                        <th style="padding: 8px;">Avg Loss</th>
+                        <th style="padding: 8px;">Avg Accuracy</th>
+                    </tr>
+                </thead>
+                <tbody id="metricsTableBody">
+                    <!-- Data populated by JS -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card" style="margin-top: 20px; text-align: left;">
+        <h3>Status Node Client</h3>
+        <table style="width: 100%; border-collapse: collapse;">
+            <thead>
+                <tr style="background: #eee; text-align: left;">
+                    <th style="padding: 10px;">ID Client</th>
+                    <th style="padding: 10px;">IP Address</th>
+                    <th style="padding: 10px;">Status Aktivitas</th>
+                    <th style="padding: 10px;">Terakhir Aktif</th>
+                </tr>
+            </thead>
+            <tbody id="clientTableBody">
+                <tr>
+                    <td colspan="4" style="padding:10px; text-align:center;">Menunggu data client...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    function initDashboard() {
+        const evtSource = new EventSource("/api/training/stream_status");
+
+        evtSource.onmessage = function (event) {
+            const data = JSON.parse(event.data);
+
+            const statusBox = document.getElementById('statusBox');
+            const statusText = document.getElementById('statusText');
+            const liveDot = document.getElementById('liveDot');
+            const actionContainer = document.getElementById('actionContainer');
+
+            if (data.running) {
+                statusBox.className = 'status-box running';
+                statusText.innerText = "SEDANG TRAINING...";
+                liveDot.className = "live-indicator active";
+                actionContainer.innerHTML = '<p style="color: #666; font-style: italic;">Training sedang berlangsung...</p>';
+            } else {
+                statusBox.className = 'status-box stopped';
+                statusText.innerText = "MENUNGGU / SELESAI";
+                liveDot.className = "live-indicator";
+                if (!actionContainer.querySelector('form')) {
+                    actionContainer.innerHTML = `
+                        <form action="/action/start" method="post" style="display:inline-block;">
+                            <button type="submit" class="btn btn-start">▶ Mulai Training Baru (10 Ronde)</button>
+                        </form>
+                        <button onclick="resetModel()" class="btn" style="background-color: #dc3545; color: white; margin-left: 10px;">
+                            ⟳ Reset Model
+                        </button>
+                        `;
+                }
+            }
+
+            document.getElementById('roundText').innerText = data.current_round;
+            document.getElementById('totalRoundText').innerText = data.total_rounds;
+            document.getElementById('timeText').innerText = data.elapsed_time;
+            document.getElementById('bwText').innerText = data.bandwidth_kb;
+
+            // Update Metrics History Table
+            const metricsBody = document.getElementById('metricsTableBody');
+            if (data.metrics_history) {
+                metricsBody.innerHTML = '';
+                data.metrics_history.forEach(m => {
+                    const row = `
+                    <tr style="border-bottom: 1px solid #eee;">
+                        <td style="padding: 8px; text-align:center;">${m.round}</td>
+                        <td style="padding: 8px; text-align:center;">${m.loss.toFixed(4)}</td>
+                        <td style="padding: 8px; text-align:center;">${(m.accuracy * 100).toFixed(1)}%</td>
+                    </tr>
+                    `;
+                    metricsBody.innerHTML += row;
+                });
+                metricsBody.parentElement.scrollTop = metricsBody.parentElement.scrollHeight;
+            }
+
+            const tbody = document.getElementById('clientTableBody');
+            tbody.innerHTML = '';
+
+            if (data.clients && data.clients.length > 0) {
+                data.clients.forEach(client => {
+                    let statusColor = '#6c757d';
+
+                    if (client.fl_status.includes('Training')) statusColor = '#e67e22';
+                    if (client.fl_status.includes('Selesai')) statusColor = '#28a745';
+                    if (client.fl_status.includes('Error')) statusColor = '#dc3545';
+                    if (client.fl_status.includes('Online')) statusColor = '#17a2b8';
+
+                    const row = `
+                        <tr style="border-bottom: 1px solid #eee;">
+                            <td style="padding: 10px;"><strong>${client.id}</strong></td>
+                            <td style="padding: 10px;">${client.ip_address}</td>
+                            <td style="padding: 10px;">
+                                <span style="background:${statusColor}; color:white; padding:3px 8px; border-radius:4px; font-size:0.9em;">
+                                    ${client.fl_status}
+                                </span>
+                            </td>
+                            <td style="padding: 10px; color:#666;">${client.last_seen}</td>
+                        </tr>
+                    `;
+                    tbody.innerHTML += row;
+                });
+            } else {
+                tbody.innerHTML = '<tr><td colspan="4" style="padding:10px; text-align:center;">Belum ada client yang melapor.</td></tr>';
+            }
+        };
+
+        evtSource.onerror = function (err) {
+            console.error("EventSource failed:", err);
+            setTimeout(() => {
+                initDashboard();
+            }, 5000);
+        };
+    }
+
+    function resetModel() {
+        if (!confirm("Apakah Anda yakin ingin me-reset model? Semua progress training akan hilang dan model akan kembali ke inisialisasi awal.")) return;
+
+        fetch('/api/training/reset', { method: 'POST' })
+            .then(res => {
+                if (res.ok) alert("Model berhasil di-reset!");
+                else alert("Gagal reset model.");
+            })
+            .catch(err => alert("Error: " + err));
+    }
+
+    // Start SSE
+    initDashboard();
+</script>
+{% endblock %}

@@ -1,0 +1,25 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<h1>Registrasi Pengguna Baru</h1>
+
+<div class="card">
+    <form action="/register" method="post" enctype="multipart/form-data" id="regForm">
+        <label>Nama Lengkap:</label>
+        <input type="text" name="name" required placeholder="Nama Anda">
+
+        <label>NRP:</label>
+        <input type="text" name="nrp" required placeholder="NRP">
+
+        <div id="uploadContainer">
+            <label>Upload Foto Wajah (JPG/PNG):</label>
+            <input type="file" name="files" multiple accept="image/*" id="fileInput" required>
+        </div>
+
+        <div style="margin-top: 20px;">
+            <button type="submit" class="btn btn-start">Daftar Sekarang</button>
+        </div>
+    </form>
+</div>
+
+{% endblock %}

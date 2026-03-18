@@ -1,0 +1,43 @@
+services:
+  client2:
+    build: ../client
+    container_name: client2
+    hostname: client2
+    ports:
+      - "8080:8080" # Standard Web Port for the Device
+    environment:
+      - DATABASE_URL=postgresql://client:client123@client2-db:5432/fl_client
+      - SERVER_API_URL=http://localhost:8081
+      - FL_SERVER_ADDRESS=localhost:8085
+      - HOSTNAME=client2
+    depends_on:
+      client2-db:
+        condition: service_healthy
+    networks:
+      - flnet
+    restart: always
+
+  client2-db:
+    image: postgres:15
+    container_name: client2-db
+    environment:
+      - POSTGRES_USER=client
+      - POSTGRES_PASSWORD=client123
+      - POSTGRES_DB=fl_client
+    volumes:
+      - client2_data:/var/lib/postgresql/data
+    networks:
+      - flnet
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U client -d fl_client" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+networks:
+  flnet:
+    driver: bridge
+
+volumes:
+  client2_data:

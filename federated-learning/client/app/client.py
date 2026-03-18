@@ -1,0 +1,484 @@
+import flwr as fl
+import traceback
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import numpy as np
+import time
+import requests
+import os
+import socket
+import matplotlib.pyplot as plt
+import seaborn as sns
+from datetime import datetime
+from collections import OrderedDict
+from torch.utils.data import DataLoader, TensorDataset, random_split
+from sklearn.metrics import confusion_matrix, classification_report
+
+# Import DB & Models Local
+from app.db.db import SessionLocal
+from app.db.models import UserLocal, Embedding
+from app.utils.security import EmbeddingEncryptor
+from app.utils.classifier import load_backbone, save_backbone, LocalClassifierHead
+from app.utils.mobilefacenet import MobileFaceNet 
+from app.config import config
+
+CLIENT_ID = os.getenv("HOSTNAME", "client-unknown")
+# SERVER_URL removed, will use config.get_server_url()
+MAX_USERS_CAPACITY = 100
+EMBEDDING_SIZE = 128
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"[CLIENT] Running on device: {DEVICE}")
+
+def get_global_label(nrp: str, name: str = "", client_id: str = ""): # Menambahkan client_id
+    try:
+        payload = {"nrp": nrp, "name": name, "registered_edge_id": client_id} # Kirim CLIENT_ID
+        response = requests.post(f"{config.get_server_url()}/api/training/get_label", json=payload, timeout=5)
+        if response.status_code == 200:
+            return response.json() # Mengembalikan seluruh data (termasuk label & registered_edge_id)
+    except Exception as e:
+        print(f"[SYNC ERROR] {e}")
+    return None
+
+def sync_users_from_server():
+    print("[SYNC] Service Sinkronisasi User Berjalan (Setiap 30 detik)...")
+    while True:
+        try:
+            # print("[SYNC] Mengecek update user dari server...")
+            response = requests.get(f"{config.get_server_url()}/api/training/global_users", timeout=5)
+            if response.status_code == 200:
+                global_users = response.json() 
+                db = SessionLocal()
+                
+                # Tambah User Baru
+                for u_data in global_users:
+                    nrp = u_data['nrp']
+                    name = u_data['name']
+                    
+                    if u_data.get('registered_edge_id') and u_data.get('registered_edge_id') != CLIENT_ID:
+                        # Skip user yang terdaftar di edge lain
+                        continue
+
+                    exists = db.query(UserLocal).filter(UserLocal.nrp == nrp).first()
+                    if not exists:
+                        print(f"[SYNC] Menambahkan user baru dari server: {name}")
+                        new_user = UserLocal(name=name, nrp=nrp)
+                        db.add(new_user)
+                
+                if len(global_users) > 0: 
+                    valid_nrps = {u['nrp'] for u in global_users}
+                    
+                    local_users = db.query(UserLocal).all()
+                    
+                    for lu in local_users:
+                        if lu.nrp not in valid_nrps:
+                            print(f"[SYNC] Menghapus user lokal {lu.name} ({lu.nrp}) karena telah dihapus di server.")
+                            db.query(Embedding).filter(Embedding.user_id == lu.user_id).delete()
+                            db.delete(lu)
+                
+                db.commit()
+                db.close()
+            
+        except Exception as e:
+            print(f"[SYNC FAILED] {e}")
+            
+        time.sleep(30) # Cek setiap 30 detik
+        
+
+CURRENT_RESET_COUNTER = -1 # Inisialisasi awal
+
+def report_status(status_msg, metrics=None):
+    global CURRENT_RESET_COUNTER
+    try:
+        payload = {
+            "id": CLIENT_ID,
+            "ip_address": socket.gethostbyname(socket.gethostname()),
+            "fl_status": status_msg,
+            "last_seen": datetime.now().strftime("%H:%M:%S")
+        }
+        if metrics:
+            payload["metrics"] = metrics
+        response = requests.post(f"{config.get_server_url()}/api/clients/register", json=payload, timeout=2)
+        
+        if response.status_code == 200:
+            data = response.json()
+            server_counter = data.get("server_reset_counter", 0)
+            
+            # Init counter saat pertama kali connect
+            if CURRENT_RESET_COUNTER == -1:
+                CURRENT_RESET_COUNTER = server_counter
+            
+            # Cek jika server telah di-reset (counter naik)
+            elif server_counter > CURRENT_RESET_COUNTER:
+                print(f"[CLIENT] Detected Server Reset (Counter: {server_counter}). Resetting Local Model...")
+                if os.path.exists("local_backbone.pth"):
+                    os.remove("local_backbone.pth")
+                    print("[CLIENT] local_backbone.pth deleted.")
+                
+                CURRENT_RESET_COUNTER = server_counter
+                
+    except Exception as e:
+        print(f"[CLIENT REPORT] Gagal lapor status: {e}")
+
+def save_confusion_matrix(y_true, y_pred):
+    """Menyimpan Confusion Matrix sebagai gambar untuk debugging"""
+    try:
+        cm = confusion_matrix(y_true, y_pred)
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+        plt.title(f'Confusion Matrix - {CLIENT_ID}')
+        plt.ylabel('Label Asli')
+        plt.xlabel('Prediksi')
+        
+        # Simpan di folder static agar bisa diakses web (opsional)
+        output_path = "app/static/confusion_matrix.png"
+        os.makedirs("app/static", exist_ok=True)
+        plt.savefig(output_path)
+        plt.close()
+        print(f"[METRICS] Confusion Matrix disimpan di {output_path}")
+    except Exception as e:
+        print(f"[METRICS] Gagal simpan confusion matrix: {e}")
+
+def validate_model(backbone, head, test_loader):
+    """Validasi model (Backbone + Head Lokal) + Generate Confusion Matrix"""
+    criterion = nn.CrossEntropyLoss()
+    backbone.eval()
+    head.eval()
+    
+    val_loss = 0.0
+    correct = 0
+    total = 0
+    
+    all_preds = []
+    all_labels = []
+    
+    with torch.no_grad():
+        for images, labels in test_loader:
+            images, labels = images.to(DEVICE), labels.to(DEVICE)
+            # Ekstraksi embedding
+            embeddings = backbone(images)
+            # Klasifikasi dengan head lokal
+            output = head(embeddings) 
+            
+            loss = criterion(output, labels)
+            val_loss += loss.item()
+            
+            _, predicted = torch.max(output.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+            
+            all_preds.extend(predicted.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+            
+    if len(test_loader) > 0:
+        val_loss /= len(test_loader)
+    
+    accuracy = correct / total if total > 0 else 0.0
+    
+    # Simpan CM jika ini adalah tahap evaluasi
+    save_confusion_matrix(all_labels, all_preds)
+    
+    return val_loss, accuracy
+
+def train_model(backbone, head, train_loader, val_loader=None, epochs=5, patience=3):
+    """Training Backbone + Head Lokal dengan Early Stopping & Scheduler"""
+    criterion = nn.CrossEntropyLoss()
+    
+    # Membekukan 50% parameter awal backbone untuk mengurangi beban komputasi
+    total_layers = len(list(backbone.named_parameters()))
+    freeze_split = int(total_layers * 0.5)
+    
+    for i, (name, param) in enumerate(backbone.named_parameters()):
+        if i < freeze_split:
+            param.requires_grad = False
+        else:
+            param.requires_grad = True # Pastikan layer akhir bisa dilatih
+
+    for module in backbone.modules():
+        if isinstance(module, nn.BatchNorm2d):
+            module.eval() 
+
+    # Optimasi hanya parameter yang requires_grad=True
+    trainable_params = [p for p in backbone.parameters() if p.requires_grad] + list(head.parameters())
+    # LR diturunkan sangat kecil untuk mencegah NaN/Exploding Gradient pada awal training
+    optimizer = optim.SGD(trainable_params, lr=0.0001, momentum=0.9, weight_decay=1e-4) # 0.001 -> 0.0001
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
+    
+    backbone.to(DEVICE)
+    head.to(DEVICE)
+    backbone.train() 
+    # Force BN back to eval after .train() call
+    for module in backbone.modules():
+        if isinstance(module, nn.BatchNorm2d):
+            module.eval()
+            
+    head.train()
+    
+    best_loss = float('inf')
+    patience_counter = 0
+    final_loss = None 
+    final_acc = 0.0
+    
+    # Simpan state awal MobileFaceNet
+    best_state = backbone.state_dict()
+
+    for epoch in range(epochs):
+        running_loss = 0.0
+        correct = 0
+        total = 0
+        
+        for images, labels in train_loader:
+            images, labels = images.to(DEVICE), labels.to(DEVICE)
+            optimizer.zero_grad()
+            
+            # Forward pass
+            embeddings = backbone(images)
+            output = head(embeddings)
+
+            loss = criterion(output, labels)
+            
+            if torch.isnan(loss):
+                print(f"[TRAIN ERROR] NaN Loss detected at Epoch {epoch+1}!")
+                continue
+
+            loss.backward()
+            
+            # Gradient Clipping untuk mencegah Exploding Gradient
+            torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=5.0)
+            
+            optimizer.step()
+            
+            running_loss += loss.item()
+            _, predicted = torch.max(output.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+        
+        scheduler.step()
+        
+        epoch_loss = running_loss / len(train_loader) if len(train_loader) > 0 else 0.0
+        epoch_loss = float(epoch_loss) # Ensure standard float
+        epoch_acc = correct / total if total > 0 else 0.0
+        
+        print(f"[CLIENT TRAIN] Epoch {epoch+1}/{epochs} - Loss: {epoch_loss:.4f} - Acc: {epoch_acc:.1%}")
+        
+        if epoch_loss < 0.0001:
+             print("[TRAIN INFO] Skipping Metric Update for Invalid/Zero Loss")
+             continue 
+
+        current_val_loss = epoch_loss
+        if val_loader:
+            v_loss, _ = validate_model(backbone, head, val_loader)
+            current_val_loss = v_loss
+            backbone.train() 
+            head.train()
+
+        if current_val_loss < best_loss:
+            best_loss = current_val_loss
+            final_loss = epoch_loss
+            final_acc = epoch_acc
+            # Hanya simpan state dict dari MobileFaceNet (backbone)
+            best_state = backbone.state_dict()
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            
+        if patience_counter >= patience:
+            print(f"[EARLY STOPPING] Berhenti di epoch {epoch+1}")
+            break
+    
+    # Fallback jika final_loss masih None (tidak pernah improve dari inf)
+    if final_loss is None:
+        final_loss = epoch_loss
+        final_acc = epoch_acc
+
+    # Kembalikan bobot terbaik yang ditemukan ke backbone
+    backbone.load_state_dict(best_state)
+    return final_loss, final_acc
+
+def load_data_from_db():
+    db = SessionLocal()
+    encryptor = EmbeddingEncryptor()
+    
+    try:  
+        users = db.query(UserLocal).all()
+        user_to_label = {}
+
+        print(f"[CLIENT DATA] Sinkronisasi {len(users)} user lokal...")
+        for u in users:
+            # Mengambil data label
+            global_label_data = get_global_label(u.nrp, client_id=CLIENT_ID) 
+            if global_label_data and global_label_data.get("label") is not None:
+                user_to_label[u.user_id] = global_label_data.get("label")
+
+        embeddings = db.query(Embedding).all()
+        print(f"[CLIENT DATA] Found {len(embeddings)} total embeddings in DB.")
+        
+        X_list, y_list = [], []
+        image_count = 0
+        
+        for emb in embeddings:
+            try:
+                # Decrypt Data
+                if emb.encrypted_image:
+                     image_count += 1
+                     
+                     # Extract IV dan Ciphertext (Format: 16 bytes IV + Data)
+                     blob = emb.encrypted_image
+                     if len(blob) < 17: # Minimal 16 bytes IV + data
+                         print(f"[DATA] Skip sample {emb.embedding_id}: Image blob too short.")
+                         continue
+                         
+                     img_iv = blob[:16]
+                     img_ciphertext = blob[16:]
+                     
+                     img_np = encryptor.decrypt_embedding(img_ciphertext, img_iv)
+                     
+                     # Preprocessing (Standardization yang sama dengan face_pipeline)
+                     # Image Standardization: (x - 127.5) / 128.0
+                     img_std = (img_np.astype(np.float32) - 127.5) / 128.0
+                     
+                     # Convert to Tensor (HWC -> CHW)
+                     img_tensor = torch.tensor(img_std).permute(2, 0, 1).float()
+                     
+                     # Ensure the user_id exists in user_to_label and get the global label
+                     if emb.user_id in user_to_label:
+                         lbl = user_to_label[emb.user_id]
+                         if lbl >= MAX_USERS_CAPACITY:
+                             print(f"[DATA WARNING] Skip User {emb.user_id}: Label {lbl} >= Max Capacity {MAX_USERS_CAPACITY}")
+                             continue
+                             
+                         X_list.append(img_tensor.numpy()) # Append as numpy for now, later stacked
+                         y_list.append(lbl) # Gunakan label global
+                     else:
+                         print(f"[DATA] Skip sample {emb.embedding_id}: User {emb.user_id} not found in global labels. Available users: {list(user_to_label.keys())[:5]}...")
+                         continue
+                else:
+                    continue
+                    
+            except Exception as e:
+                print(f"[DATA] Decrypt error for {emb.embedding_id}: {e}")
+                continue
+        
+        print(f"[CLIENT DATA] Loaded {len(X_list)} valid samples (from {image_count} with images).")
+        if len(X_list) == 0:
+            return None, None
+            
+        X_tensor = torch.tensor(np.array(X_list), dtype=torch.float32)
+        y_tensor = torch.tensor(np.array(y_list), dtype=torch.long)
+        full_dataset = TensorDataset(X_tensor, y_tensor)
+        
+        if len(full_dataset) == 1:
+            train_size = 1
+            test_size = 0
+        else:
+            train_size = int(0.8 * len(full_dataset))
+            test_size = len(full_dataset) - train_size
+            
+        train_dataset, test_dataset = random_split(full_dataset, [train_size, test_size])
+        
+        train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True)
+        test_loader = DataLoader(test_dataset, batch_size=4, shuffle=False)
+        
+        return train_loader, test_loader
+        
+    except Exception as e:
+        print(f"[CLIENT DATA] Error loading data: {e}")
+        return None, None
+    finally:
+        db.close()
+
+class RealClient(fl.client.NumPyClient):
+    def __init__(self):
+        # Menggunakan MobileFaceNet sebagai model FL (Backbone)
+        self.backbone = MobileFaceNet(embedding_size=EMBEDDING_SIZE).to(DEVICE)
+        # Head classifier lokal
+        self.local_head = LocalClassifierHead(num_classes=MAX_USERS_CAPACITY).to(DEVICE)
+
+    def get_parameters(self, config):
+        return [val.cpu().numpy().astype(np.float16) for _, val in self.backbone.state_dict().items()]
+
+    def fit(self, parameters, config):
+        try:
+            rnd = config.get('round', '?')
+            print(f"[CLIENT] Round {rnd} dimulai.")
+            report_status(f"Sedang Training (Ronde {rnd})")
+
+            # Load Global Model Backbone
+            # Harus sesuai dengan urutan parameter di MobileFaceNet
+            params_dict = zip(self.backbone.state_dict().keys(), parameters)
+            state_dict = OrderedDict({k: torch.tensor(v) for k, v in params_dict})
+            self.backbone.load_state_dict(state_dict, strict=True)
+            
+            # Simpan backbone yang baru di-load untuk digunakan di /attendance
+            save_backbone(self.backbone, path="local_backbone.pth")
+
+            # Load & Split Data
+            trainloader, valloader = load_data_from_db()
+            if trainloader is None:
+                # Mengembalikan parameter yang sama jika tidak ada data
+                return self.get_parameters({}), 0, {}
+
+            # Training Backbone + Head Lokal
+            loss, accuracy = train_model(self.backbone, self.local_head, trainloader, valloader, epochs=5, patience=3)
+
+            # Simpan Model Backbone Lokal 
+            save_backbone(self.backbone, path="local_backbone.pth")
+            
+            print("[CLIENT] Menambahkan DP Noise...")
+            params = self.get_parameters(config={})
+            noise_multiplier = 0.005 # Tingkat noise
+            noisy_params = []
+            for p in params:
+                noise = np.random.normal(0, noise_multiplier, p.shape)
+                noisy_params.append(p + noise)
+            
+            status_msg = f"Selesai (L:{loss:.3f}, A:{accuracy:.1%})"
+            report_status(status_msg, metrics={"loss": loss, "accuracy": accuracy})
+            
+            # Mengembalikan parameter MobileFaceNet yang sudah ditambahkan noise
+            return noisy_params, len(trainloader.dataset), {"loss": loss, "accuracy": accuracy}
+        except Exception as e:
+            print(f"[CLIENT FIT ERROR] {e}")
+            traceback.print_exc()
+            return [], 0, {}  # Return empty to avoid crash propagation
+
+    def evaluate(self, parameters, config):
+        try:
+            # Load Global Model Backbone
+            params_dict = zip(self.backbone.state_dict().keys(), parameters)
+            state_dict = OrderedDict({k: torch.tensor(v) for k, v in params_dict})
+            self.backbone.load_state_dict(state_dict, strict=True)
+            
+            # Inisialisasi Head lokal (untuk evaluasi)
+            local_head_eval = LocalClassifierHead(num_classes=MAX_USERS_CAPACITY)
+
+            _, testloader = load_data_from_db()
+            
+            if testloader is None or len(testloader.dataset) == 0:
+                return 0.0, 0, {"accuracy": 0.0}
+
+            # Evaluasi dengan Head Lokal yang baru diinisialisasi
+            loss, accuracy = validate_model(self.backbone, local_head_eval, testloader)
+            
+            print(f"[CLIENT] Evaluasi (Test Set). Loss: {loss:.4f}, Acc: {accuracy:.1%}")
+            return float(loss), len(testloader.dataset), {"accuracy": float(accuracy)}
+        except Exception as e:
+            print(f"[CLIENT EVAL ERROR] {e}")
+            traceback.print_exc()
+            return 0.0, 0, {"accuracy": 0.0}
+
+def start_flower_client():
+    report_status("Online (Menunggu Server)")
+    while True:
+        try:
+            print("[CLIENT] Connecting to FL Server...")
+            server_addr = config.get_fl_server_address()
+            fl.client.start_client(server_address=server_addr, client=RealClient().to_client())
+            print("[CLIENT] FL Session ended or Server stopped. Returning to standby.")
+            report_status("Online (Menunggu Server)")
+            time.sleep(5)
+        except Exception as e:
+            print(f"[CLIENT ERROR] Connection failed or ended with error: {e}")
+            print(f"[CLIENT] Standby... Waiting for Training Signal from Server Dashboard.")
+            report_status("Online (Menunggu Server)")
+            time.sleep(5)

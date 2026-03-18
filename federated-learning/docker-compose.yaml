@@ -1,0 +1,100 @@
+services:
+  server:
+    build: ./server
+    ports:
+      - "8081:8080"
+      - "8085:8085"
+    environment:
+      DATABASE_URL: postgresql://admin:admin123@server-db:5432/fl_server
+    depends_on:
+      server-db:
+        condition: service_healthy
+    networks:
+      - flnet
+
+  client1:
+    build: ./client
+    ports:
+      - "8082:8080"
+    environment:
+      DATABASE_URL: postgresql://client:client123@client1-db:5432/fl_client
+      SERVER_API_URL: http://server:8080
+      FL_SERVER_ADDRESS: server:8085
+    depends_on:
+      client1-db:
+        condition: service_healthy
+    networks:
+      - flnet
+
+  client2:
+    build: ./client
+    ports:
+      - "8083:8080"
+    environment:
+      DATABASE_URL: postgresql://client:client123@client2-db:5432/fl_client
+      SERVER_API_URL: http://server:8080
+      FL_SERVER_ADDRESS: server:8085
+    depends_on:
+      client2-db:
+        condition: service_healthy
+    networks:
+      - flnet
+
+  server-db:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=admin123
+      - POSTGRES_DB=fl_server
+    ports:
+      - "5432:5432"
+    volumes:
+      - server_data:/var/lib/postgresql/data
+    networks:
+      - flnet
+    healthcheck:  
+      test: ["CMD-SHELL", "pg_isready -U admin -d fl_server"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    
+  client1-db:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=client
+      - POSTGRES_PASSWORD=client123
+      - POSTGRES_DB=fl_client
+    volumes:
+      - client1_data:/var/lib/postgresql/data
+    networks:
+      - flnet
+    healthcheck: 
+      test: ["CMD-SHELL", "pg_isready -U client -d fl_client"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    
+  client2-db:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=client
+      - POSTGRES_PASSWORD=client123
+      - POSTGRES_DB=fl_client
+    volumes:
+      - client2_data:/var/lib/postgresql/data
+    networks:
+      - flnet
+    healthcheck: 
+      test: ["CMD-SHELL", "pg_isready -U client -d fl_client"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+networks:
+  flnet:
+    driver: bridge
+
+volumes:
+  server_data:
+  client1_data:
+  client2_data:

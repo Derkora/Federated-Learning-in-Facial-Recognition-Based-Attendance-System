@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Attendance</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
+    <style>
+        .overlay-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 10;
+        }
+
+        .video-container {
+            position: relative;
+            display: inline-block;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+    </style>
+</head>
+
+<body class="bg-gray-100 min-h-screen flex flex-col items-center py-10">
+
+    <div class="bg-white p-6 rounded-lg shadow-xl w-full max-w-4xl">
+        <div class="flex justify-between items-center mb-6">
+            <h1 class="text-2xl font-bold text-gray-800">Live Face Recognition</h1>
+            <a href="/" class="text-blue-500 hover:text-blue-700 font-semibold">← Kembali ke Dashboard</a>
+        </div>
+
+        <div class="flex justify-center mb-4">
+            <div class="video-container">
+                <video id="video" width="640" height="480" autoplay playsinline class="bg-black"></video>
+                <canvas id="canvas" width="640" height="480" class="overlay-canvas"></canvas>
+            </div>
+        </div>
+
+        <div class="text-center space-y-2">
+            <button id="toggleBtn" class="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700 transition">
+                Start Camera
+            </button>
+            <div id="status" class="text-gray-600 text-sm">Camera Off</div>
+        </div>
+    </div>
+
+    <!-- Hidden canvas for capturing frames -->
+    <canvas id="captureCanvas" width="640" height="480" style="display:none;"></canvas>
+
+    <script>
+        const video = document.getElementById('video');
+        const overlayCanvas = document.getElementById('canvas');
+        const overlayCtx = overlayCanvas.getContext('2d');
+        const captureCanvas = document.getElementById('captureCanvas');
+        const captureCtx = captureCanvas.getContext('2d');
+        const toggleBtn = document.getElementById('toggleBtn');
+        const statusDiv = document.getElementById('status');
+
+        let stream = null;
+        let isRunning = false;
+        let processing = false;
+
+        toggleBtn.addEventListener('click', async () => {
+            if (isRunning) {
+                stopCamera();
+            } else {
+                await startCamera();
+            }
+        });
+
+        async function startCamera() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+                video.srcObject = stream;
+                isRunning = true;
+                toggleBtn.textContent = 'Stop Camera';
+                toggleBtn.classList.replace('bg-blue-600', 'bg-red-600');
+                toggleBtn.classList.replace('hover:bg-blue-700', 'hover:bg-red-700');
+                statusDiv.textContent = 'Camera On - Detecting...';
+
+                // Start Loop
+                requestAnimationFrame(processLoop);
+            } catch (err) {
+                console.error("Camera Error:", err);
+                alert("Gagal mengakses kamera: " + err);
+            }
+        }
+
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+            }
+            isRunning = false;
+            toggleBtn.textContent = 'Start Camera';
+            toggleBtn.classList.replace('bg-red-600', 'bg-blue-600');
+            toggleBtn.classList.replace('hover:bg-red-700', 'hover:bg-blue-700');
+            statusDiv.textContent = 'Camera Off';
+            overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+        }
+
+        async function processLoop() {
+            if (!isRunning) return;
+
+            // Simple rate limiter: only send if not currently processing
+            if (!processing) {
+                processing = true;
+                captureFrameAndDetect();
+            }
+
+            // Loop continue
+            setTimeout(() => {
+                requestAnimationFrame(processLoop);
+            }, 500); // 2 FPS check
+        }
+
+        function captureFrameAndDetect() {
+            // Draw current video frame to hidden canvas
+            captureCtx.drawImage(video, 0, 0, 640, 480);
+
+            // Convert to Blob
+            captureCanvas.toBlob(blob => {
+                if (!blob) {
+                    processing = false;
+                    return;
+                }
+
+                const formData = new FormData();
+                formData.append('file', blob, 'frame.jpg');
+
+                sendToApi(formData);
+            }, 'image/jpeg', 0.8);
+        }
+
+        async function sendToApi(formData) {
+            try {
+                const response = await fetch('/api/attendance/live', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+                drawResult(data);
+
+            } catch (err) {
+                console.error("API Error:", err);
+            } finally {
+                processing = false;
+            }
+        }
+
+        function drawResult(data) {
+            // Clear previous drawing
+            overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+            if (data.box) {
+                const box = data.box; // [x1, y1, x2, y2]
+                const name = data.name || "Unknown";
+                const conf = (data.confidence * 100).toFixed(0);
+                const color = data.status === 'match' ? '#00ff00' : '#ff0000'; // Green vs Red
+
+                // Draw Box
+                overlayCtx.strokeStyle = color;
+                overlayCtx.lineWidth = 3;
+                overlayCtx.strokeRect(box[0], box[1], box[2] - box[0], box[3] - box[1]);
+
+                // Draw Background for Text
+                overlayCtx.fillStyle = color;
+                const text = `${name} (${conf}%)`;
+                const font = "18px Arial";
+                overlayCtx.font = font;
+                const textWidth = overlayCtx.measureText(text).width;
+                overlayCtx.fillRect(box[0], box[1] - 25, textWidth + 10, 25);
+
+                // Draw Text
+                overlayCtx.fillStyle = "#ffffff";
+                overlayCtx.fillText(text, box[0] + 5, box[1] - 7);
+            }
+        }
+    </script>
+</body>
+
+</html>

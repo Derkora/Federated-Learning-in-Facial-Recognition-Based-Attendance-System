@@ -1,0 +1,93 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="card">
+    <h1>User Management</h1>
+    <p>Daftar user yang terdaftar secara global di sistem Federated Learning.</p>
+
+    <div style="text-align: right; margin-bottom: 15px;">
+        <button onclick="fetchUsers()" class="btn btn-start" style="padding: 5px 15px;">🔄 Refresh List</button>
+    </div>
+
+    <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+            <tr style="background: #eee; text-align: left;">
+                <th style="padding: 10px;">NRP / ID</th>
+                <th style="padding: 10px;">Nama</th>
+                <th style="padding: 10px;">Registered Edge ID</th>
+                <th style="padding: 10px;">Global Label</th>
+                <th style="padding: 10px;">Aksi</th>
+            </tr>
+        </thead>
+        <tbody id="usersTableBody">
+            <tr>
+                <td colspan="5" style="text-align: center; padding: 20px;">Loading data...</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    async function fetchUsers() {
+        try {
+            const response = await fetch('/api/training/global_users');
+            const users = await response.json();
+            const tbody = document.getElementById('usersTableBody');
+            tbody.innerHTML = '';
+
+            if (users.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 20px;">Belum ada user terdaftar.</td></tr>';
+                return;
+            }
+
+            // Sort by Label
+            users.sort((a, b) => a.label - b.label);
+
+            users.forEach(user => {
+                const row = `
+                    <tr style="border-bottom: 1px solid #eee;">
+                        <td style="padding: 10px;"><strong>${user.nrp}</strong></td>
+                        <td style="padding: 10px;">${user.name}</td>
+                        <td style="padding: 10px;"><code>${user.registered_edge_id || '-'}</code></td>
+                        <td style="padding: 10px;">${user.label}</td>
+                        <td style="padding: 10px;">
+                            <button onclick="deleteUser('${user.nrp}')" class="btn" style="background-color: #dc3545; color: white; padding: 5px 10px; font-size: 0.9em;">
+                                Hapus
+                            </button>
+                        </td>
+                    </tr>
+                `;
+                tbody.innerHTML += row;
+            });
+
+        } catch (error) {
+            console.error('Error fetching users:', error);
+            document.getElementById('usersTableBody').innerHTML = '<tr><td colspan="5" style="text-align: center; color: red;">Gagal mengambil data user.</td></tr>';
+        }
+    }
+
+    async function deleteUser(nrp) {
+        if (!confirm(`Yakin ingin menghapus user dengan NRP ${nrp}? Client terkait juga akan menghapus data user ini saat sinkronisasi berikutnya.`)) {
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/training/users/${nrp}`, { method: 'DELETE' });
+            if (response.ok) {
+                alert('User berhasil dihapus.');
+                fetchUsers();
+            } else {
+                const data = await response.json();
+                alert('Gagal menghapus: ' + (data.detail || 'Unknown error'));
+            }
+        } catch (error) {
+            alert('Error: ' + error);
+        }
+    }
+
+    // Load initial data
+    fetchUsers();
+</script>
+{% endblock %}

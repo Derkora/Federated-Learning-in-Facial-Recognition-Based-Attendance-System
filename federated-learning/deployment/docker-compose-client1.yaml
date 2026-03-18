@@ -1,0 +1,45 @@
+services:
+  client1:
+    build: ../client
+    container_name: client1
+    hostname: client1
+    ports:
+      - "8080:8080" # Standard Web Port for the Device
+    environment:
+      - DATABASE_URL=postgresql://client:client123@client1-db:5432/fl_client
+      # Default to localhost. Update via Settings UI (http://localhost:8080/settings)
+      # or change these values before deploying.
+      - SERVER_API_URL=http://localhost:8081
+      - FL_SERVER_ADDRESS=localhost:8085
+      - HOSTNAME=client1
+    depends_on:
+      client1-db:
+        condition: service_healthy
+    networks:
+      - flnet
+    restart: always
+
+  client1-db:
+    image: postgres:15
+    container_name: client1-db
+    environment:
+      - POSTGRES_USER=client
+      - POSTGRES_PASSWORD=client123
+      - POSTGRES_DB=fl_client
+    volumes:
+      - client1_data:/var/lib/postgresql/data
+    networks:
+      - flnet
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U client -d fl_client" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+networks:
+  flnet:
+    driver: bridge
+
+volumes:
+  client1_data:

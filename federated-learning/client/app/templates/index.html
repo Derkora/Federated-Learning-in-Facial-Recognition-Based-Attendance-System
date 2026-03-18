@@ -1,0 +1,21 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div style="text-align: center; padding: 40px 0;">
+    <h1>Selamat Datang di Edge Client</h1>
+    <p>Sistem Absensi Terdistribusi dengan Privasi Terjamin</p>
+
+    <div class="card">
+        <h3>Status Node</h3>
+        <p>Total User Terdaftar: <strong>{{ user_count }}</strong></p>
+        <p>Model Status: <span class="{{ 'text-green' if model_exists else 'text-red' }}">
+                {{ "Siap Digunakan" if model_exists else "Belum Dilatih" }}
+            </span></p>
+        <div style="margin-top: 20px; border-top: 1px solid #eee; padding-top: 15px;">
+            <a href="/settings" class="btn" style="text-decoration: none; color: #2980b9; font-weight: bold;">⚙️
+                Pengaturan Koneksi</a>
+        </div>
+    </div>
+
+</div>
+{% endblock %}
