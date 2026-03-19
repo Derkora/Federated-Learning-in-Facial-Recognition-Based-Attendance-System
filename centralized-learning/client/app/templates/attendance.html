@@ -1,0 +1,61 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="glass" style="padding: 1.5rem;">
+    <video id="webcam" autoplay muted playsinline></video>
+    <canvas id="canvas" style="display:none;"></canvas>
+
+    <div class="result-card" id="status-card">
+        Scanning faces...
+    </div>
+</div>
+
+<script>
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('canvas');
+    const statusCard = document.getElementById('status-card');
+
+    async function setupCamera() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            video.srcObject = stream;
+        } catch (err) {
+            console.error("Gagal nyalakan kamera: ", err);
+            statusCard.innerText = "Error: Kamera tidak terdeteksi!";
+            statusCard.style.color = "#ef4444";
+        }
+    }
+
+    async function sendFrame() {
+        if (!video.videoWidth) return;
+
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext('2d').drawImage(video, 0, 0);
+
+        const dataUrl = canvas.toDataURL('image/jpeg');
+        const base64Data = dataUrl.split(',')[1];
+
+        try {
+            const response = await fetch('/api/inference', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: base64Data })
+            });
+            const result = await response.json();
+
+            if (result.matched !== "Unknown") {
+                statusCard.innerHTML = `<span style="color: #10b981;">Accepted: ${result.matched}</span> <br><small>${(result.confidence * 100).toFixed(1)}% | ${result.latency_ms}ms</small>`;
+            } else {
+                statusCard.innerText = "Scanning faces...";
+                statusCard.style.color = "#f8fafc";
+            }
+        } catch (e) {
+            console.error("Inference Error:", e);
+        }
+    }
+
+    setupCamera();
+    setInterval(sendFrame, 1500); // Send frame every 1.5 seconds
+</script>
+{% endblock %}

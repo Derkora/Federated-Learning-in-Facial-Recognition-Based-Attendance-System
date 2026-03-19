@@ -2,7 +2,7 @@ import cv2
 import os
 
 # --- KONFIGURASI ---
-VIDEO_SOURCE = 'videos/Kelas-C-24.mp4'  # Nama file video Komandan
+VIDEO_SOURCE = 'videos/Kelas-C-24.mp4'  # Nama file video an
 OUTPUT_DIR = 'datasets/kelas-c-24'        # Nama folder hasil
 SAMPLING_RATE = 0.17             
 

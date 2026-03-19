@@ -1,0 +1,35 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="glass" style="padding: 1.5rem;">
+    <h2 style="margin-bottom: 2rem;">Attendance Recap</h2>
+    <table style="width: 100%; border-collapse: collapse; text-align: left;">
+        <thead>
+            <tr style="border-bottom: 1px solid var(--text-muted);">
+                <th style="padding: 1rem;">NRP</th>
+                <th style="padding: 1rem;">Name</th>
+                <th style="padding: 1rem;">Edge Client</th>
+                <th style="padding: 1rem;">Confidence</th>
+                <th style="padding: 1rem;">Timestamp</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for rec in attendances %}
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                <td style="padding: 1rem;">{{ rec.user.nrp }}</td>
+                <td style="padding: 1rem;">{{ rec.user.name }}</td>
+                <td style="padding: 1rem;">{{ rec.edge_id }}</td>
+                <td style="padding: 1rem;">{{ (rec.confidence * 100) | round(2) }}%</td>
+                <td style="padding: 1rem; color: var(--text-muted);">{{ rec.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="4" style="padding: 2rem; text-align: center; color: var(--text-muted);">No attendance
+                    records found.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

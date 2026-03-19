@@ -1,0 +1,93 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="stats-grid">
+    <div class="stat-card glass">
+        <div class="stat-label">Clients Online</div>
+        <div class="stat-value" id="count-clients">0</div>
+    </div>
+    <div class="stat-card glass">
+        <div class="stat-label">Students Registered</div>
+        <div class="stat-value" id="count-students">0</div>
+    </div>
+    <div class="stat-card glass">
+        <div class="stat-label">Model Accuracy</div>
+        <div class="stat-value" id="model-acc">--</div>
+    </div>
+    <div class="stat-card glass">
+        <div class="stat-label">Estimated Cost (IDR)</div>
+        <div class="stat-value" id="cost-idr" style="color: #ef4444;">Rp 0</div>
+    </div>
+</div>
+
+<div class="chart-section">
+    <div class="glass" style="padding: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <h2>Training Control Center</h2>
+            <button id="btn-start-process" class="btn btn-primary" onclick="startCentralizedProcess()">START CENTRALIZED
+                PROCESS</button>
+        </div>
+        <div id="training-terminal">
+            [READY] Centralized Researcher Standby...
+        </div>
+    </div>
+
+    <div class="glass" style="padding: 1.5rem;">
+        <h2>Evaluation Metrics</h2>
+        <div style="margin-top: 1rem;">
+            <div
+                style="display: flex; justify-content: space-between; color: var(--text-muted); margin-bottom: 0.5rem;">
+                <span>Payload Transfer:</span>
+                <span id="metric-transfer" style="color: var(--text-main);">0 MB</span>
+            </div>
+            <div
+                style="display: flex; justify-content: space-between; color: var(--text-muted); margin-bottom: 0.5rem;">
+                <span>Round Time:</span>
+                <span id="metric-round" style="color: var(--text-main);">0 s</span>
+            </div>
+            <div
+                style="display: flex; justify-content: space-between; color: var(--text-muted); margin-bottom: 0.5rem;">
+                <span>TAR / FAR:</span>
+                <span id="metric-biometric" style="color: var(--text-main);">-- / --</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    async function startCentralizedProcess() {
+        const terminal = document.getElementById('training-terminal');
+        const btn = document.getElementById('btn-start-process');
+
+        btn.disabled = true;
+        terminal.innerHTML += `<br>[ORCHESTRATOR] Triggering centralized flow...`;
+
+        try {
+            const response = await fetch('/train', { method: 'POST' });
+            const result = await response.json();
+
+            if (result.status === 'success') {
+                terminal.innerHTML += `<br>[DATA] Payload Size: ${result.payload_size_mb || 0} MB`;
+                terminal.innerHTML += `<br>[TRAIN] Success! Accuracy: ${result.accuracy || '--'}%`;
+                terminal.innerHTML += `<br>[DONE] Model and Ref distributed to clients.`;
+
+                // Update UI metrics
+                document.getElementById('metric-transfer').innerText = `${result.payload_size_mb || 0} MB`;
+                document.getElementById('metric-round').innerText = `${result.total_duration_s || 0} s`;
+                document.getElementById('metric-biometric').innerText = `${result.tar || 0}% / ${result.far || 0}% (EER: ${result.eer || 0}%)`;
+                document.getElementById('model-acc').innerText = `${result.accuracy || '--'}%`;
+                document.getElementById('cost-idr').innerText = `Rp ${result.cost_idr || 0}`;
+            } else {
+                terminal.innerHTML += `<br>[ERROR] ${result.message || 'Unknown error'}`;
+            }
+        } catch (e) {
+            terminal.innerHTML += `<br>[ERROR] Gagal menghubungi server: ${e}`;
+        } finally {
+            btn.disabled = false;
+            terminal.scrollTop = terminal.scrollHeight;
+        }
+    }
+
+    // Initial fetch of stats could be added here
+</script>
+{% endblock %}

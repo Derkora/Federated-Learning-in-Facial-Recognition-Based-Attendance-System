@@ -52,7 +52,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - server_data:/var/lib/postgresql/data
+      - server_fl_data:/var/lib/postgresql/data
     networks:
       - flnet
     healthcheck:  
@@ -68,7 +68,7 @@ services:
       - POSTGRES_PASSWORD=client123
       - POSTGRES_DB=fl_client
     volumes:
-      - client1_data:/var/lib/postgresql/data
+      - client1_fl_data:/var/lib/postgresql/data
     networks:
       - flnet
     healthcheck: 
@@ -84,7 +84,7 @@ services:
       - POSTGRES_PASSWORD=client123
       - POSTGRES_DB=fl_client
     volumes:
-      - client2_data:/var/lib/postgresql/data
+      - client2_fl_data:/var/lib/postgresql/data
     networks:
       - flnet
     healthcheck: 
@@ -98,6 +98,6 @@ networks:
     driver: bridge
 
 volumes:
-  server_data:
-  client1_data:
-  client2_data:
+  server_fl_data:
+  client1_fl_data:
+  client2_fl_data:
