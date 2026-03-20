@@ -2,9 +2,9 @@ from pydantic import BaseModel
 from datetime import datetime
 
 class ClientBase(BaseModel):
-    id: str
+    edge_id: str
     ip_address: str
-    cl_status: str
+    status: str
 
 class ClientResponse(ClientBase):
     last_seen: datetime

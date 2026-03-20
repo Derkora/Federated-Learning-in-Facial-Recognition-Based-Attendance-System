@@ -49,6 +49,7 @@ async def request_data():
 
 @app.on_event("startup")
 def startup_event():
+    print(f"[STARTUP] Initializing Centralized Client: {cl_client.client_id}", flush=True)
     cl_client.start_background_tasks()
 
 if __name__ == "__main__":

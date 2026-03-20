@@ -3,16 +3,16 @@
 {% block content %}
 <div class="stats-grid">
     <div class="stat-card glass">
-        <div class="stat-label">Clients Online</div>
-        <div class="stat-value" id="count-clients">0</div>
-    </div>
-    <div class="stat-card glass">
-        <div class="stat-label">Students Registered</div>
-        <div class="stat-value" id="count-students">0</div>
+        <div class="stat-label">System Status</div>
+        <div class="stat-value" id="status-phase" style="font-size: 1.2rem; color: var(--accent);">Standby</div>
     </div>
     <div class="stat-card glass">
         <div class="stat-label">Model Accuracy</div>
         <div class="stat-value" id="model-acc">--</div>
+    </div>
+    <div class="stat-card glass">
+        <div class="stat-label">TAR / FAR (0.65)</div>
+        <div class="stat-value" id="metric-biometric" style="font-size: 1.2rem;">-- / --</div>
     </div>
     <div class="stat-card glass">
         <div class="stat-label">Estimated Cost (IDR)</div>
@@ -20,74 +20,109 @@
     </div>
 </div>
 
-<div class="chart-section">
+<div class="chart-section" style="grid-template-columns: 1fr 350px;">
     <div class="glass" style="padding: 1.5rem;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-            <h2>Training Control Center</h2>
-            <button id="btn-start-process" class="btn btn-primary" onclick="startCentralizedProcess()">START CENTRALIZED
-                PROCESS</button>
+        <div style="margin-bottom: 1.5rem;">
+            <h2>Research Lifecycle Phases</h2>
+            <p style="color: var(--text-muted); font-size: 0.9rem;">Execute each phase sequentially for a granular
+                evaluation.</p>
         </div>
-        <div id="training-terminal">
-            [READY] Centralized Researcher Standby...
+
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem;">
+            <button id="btn-import" class="btn btn-primary" onclick="runPhase('import')">1. IMPORT DATA</button>
+            <button id="btn-preprocess" class="btn btn-primary" onclick="runPhase('preprocess')">2. PREPROCESS</button>
+            <button id="btn-train" class="btn btn-primary" onclick="runPhase('train')">3. TRAIN MODEL</button>
+            <button id="btn-export" class="btn btn-primary" onclick="runPhase('export')">4. EXPORT & EVAL</button>
+        </div>
+
+        <div id="training-terminal" style="margin-top: 1.5rem; height: 300px;">
+            [READY] Centralized Research Environment Initialized.
         </div>
     </div>
 
     <div class="glass" style="padding: 1.5rem;">
-        <h2>Evaluation Metrics</h2>
-        <div style="margin-top: 1rem;">
-            <div
-                style="display: flex; justify-content: space-between; color: var(--text-muted); margin-bottom: 0.5rem;">
+        <h2>Detailed Metrics</h2>
+        <div style="margin-top: 1.2rem;">
+            <div class="metric-row">
                 <span>Payload Transfer:</span>
-                <span id="metric-transfer" style="color: var(--text-main);">0 MB</span>
+                <b id="metric-transfer">0 MB</b>
             </div>
-            <div
-                style="display: flex; justify-content: space-between; color: var(--text-muted); margin-bottom: 0.5rem;">
-                <span>Round Time:</span>
-                <span id="metric-round" style="color: var(--text-main);">0 s</span>
+            <div class="metric-row">
+                <span>Training Time:</span>
+                <b id="metric-train-time">0 s</b>
             </div>
-            <div
-                style="display: flex; justify-content: space-between; color: var(--text-muted); margin-bottom: 0.5rem;">
-                <span>TAR / FAR:</span>
-                <span id="metric-biometric" style="color: var(--text-main);">-- / --</span>
+            <div class="metric-row">
+                <span>Total Round Time:</span>
+                <b id="metric-round">0 s</b>
+            </div>
+            <div class="metric-row">
+                <span>EER (Equal Error Rate):</span>
+                <b id="metric-eer">--</b>
             </div>
         </div>
     </div>
 </div>
 
-<script>
-    async function startCentralizedProcess() {
-        const terminal = document.getElementById('training-terminal');
-        const btn = document.getElementById('btn-start-process');
+<style>
+    .metric-row {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 0.8rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
 
-        btn.disabled = true;
-        terminal.innerHTML += `<br>[ORCHESTRATOR] Triggering centralized flow...`;
+    .metric-row span {
+        color: var(--text-muted);
+    }
+</style>
+
+<script>
+    async function runPhase(phase) {
+        const terminal = document.getElementById('training-terminal');
+        const phaseLabel = document.getElementById('status-phase');
+        const buttons = ['btn-import', 'btn-preprocess', 'btn-train', 'btn-export'];
+
+        buttons.forEach(id => document.getElementById(id).disabled = true);
+        terminal.innerHTML += `<br>[ORCHESTRATOR] Starting Phase: ${phase.toUpperCase()}...`;
+        phaseLabel.innerText = "Running " + phase.toUpperCase();
 
         try {
-            const response = await fetch('/train', { method: 'POST' });
+            const response = await fetch(`/workflow/${phase}`, { method: 'POST' });
             const result = await response.json();
 
             if (result.status === 'success') {
-                terminal.innerHTML += `<br>[DATA] Payload Size: ${result.payload_size_mb || 0} MB`;
-                terminal.innerHTML += `<br>[TRAIN] Success! Accuracy: ${result.accuracy || '--'}%`;
-                terminal.innerHTML += `<br>[DONE] Model and Ref distributed to clients.`;
-
-                // Update UI metrics
-                document.getElementById('metric-transfer').innerText = `${result.payload_size_mb || 0} MB`;
-                document.getElementById('metric-round').innerText = `${result.total_duration_s || 0} s`;
-                document.getElementById('metric-biometric').innerText = `${result.tar || 0}% / ${result.far || 0}% (EER: ${result.eer || 0}%)`;
-                document.getElementById('model-acc').innerText = `${result.accuracy || '--'}%`;
-                document.getElementById('cost-idr').innerText = `Rp ${result.cost_idr || 0}`;
+                terminal.innerHTML += `<br>[SUCCESS] ${phase.toUpperCase()} complete.`;
+                if (phase === 'import') {
+                    terminal.innerHTML += `<br>Received: ${result.payload_mb} MB (${result.images} images)`;
+                    document.getElementById('metric-transfer').innerText = `${result.payload_mb} MB`;
+                }
+                if (phase === 'train') {
+                    terminal.innerHTML += `<br>Final accuracy: ${result.accuracy}%`;
+                    document.getElementById('model-acc').innerText = `${result.accuracy}%`;
+                    document.getElementById('metric-train-time').innerText = `${result.duration_s} s`;
+                }
+                if (phase === 'export') {
+                    terminal.innerHTML += `<br>Biometrics: TAR ${result.tar}% / FAR ${result.far}%`;
+                    document.getElementById('metric-biometric').innerText = `${result.tar}% / ${result.far}%`;
+                    document.getElementById('metric-eer').innerText = `${result.eer}%`;
+                }
+                refreshStats();
             } else {
                 terminal.innerHTML += `<br>[ERROR] ${result.message || 'Unknown error'}`;
             }
         } catch (e) {
-            terminal.innerHTML += `<br>[ERROR] Gagal menghubungi server: ${e}`;
+            terminal.innerHTML += `<br>[ERROR] Network/Server Error: ${e}`;
         } finally {
-            btn.disabled = false;
+            buttons.forEach(id => document.getElementById(id).disabled = false);
+            phaseLabel.innerText = "Standby";
             terminal.scrollTop = terminal.scrollHeight;
         }
     }
 
-    // Initial fetch of stats could be added here
+    async function refreshStats() {
+        // Here we could fetch the full cl_manager status to update everything
+        // document.getElementById('cost-idr').innerText = ...
+    }
 </script>
 {% endblock %}

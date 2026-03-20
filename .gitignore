@@ -14,6 +14,8 @@ dist/
 downloads/
 videos/
 datasets/
+client1_data/
+client2_data/
 datasets_processed/
 datasets_balanced/
 eggs/

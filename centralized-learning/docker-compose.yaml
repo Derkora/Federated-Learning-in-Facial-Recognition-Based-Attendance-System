@@ -23,6 +23,8 @@ services:
         condition: service_healthy
     ports:
       - "8082:8080"
+    volumes:
+      - ../datasets/client1_data:/app/data
     networks:
       - clnet
 
@@ -37,6 +39,8 @@ services:
         condition: service_healthy
     ports:
       - "8083:8080"
+    volumes:
+      - ../datasets/client2_data:/app/data
     networks:
       - clnet
 
