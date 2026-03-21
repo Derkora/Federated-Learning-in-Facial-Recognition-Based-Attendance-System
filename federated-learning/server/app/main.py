@@ -47,8 +47,8 @@ async def user_management(request: Request):
 
 @app.post("/action/start")
 async def action_start_training():
-    # Panggil logic start 
-    fl_manager.start_training(rounds=10)
+    # Panggil logic lifecycle (Lengkap: Sync -> Preprocess -> Train)
+    fl_manager.run_lifecycle(rounds=10)
     # Redirect kembali ke halaman utama agar refresh
     return RedirectResponse(url="/", status_code=303)
 

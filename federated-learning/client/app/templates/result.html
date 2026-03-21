@@ -1,63 +1,50 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div style="text-align: center;">
-    {% if status == 'success' or status == 'registered' %}
-        <h1 style="color: green;">Berhasil</h1>
-    {% elif status == 'unknown' %}
-        <h1 style="color: orange;">Wajah Tidak Dikenali</h1>
-    {% else %}
-        <h1 style="color: red;">Gagal</h1>
-    {% endif %}
-
-    <div class="status-box {{ 'success' if status in ['success', 'registered'] else 'error' }}">
-        <h3>{{ message }}</h3>
-        
-        {% if details %}
-        <ul style="list-style: none; padding: 0;">
-            {% if details['Drawn Image B64'] %}
-                <li>
-                    <strong>Gambar Absensi dengan Bounding Box:</strong><br>
-                    <img src="data:image/jpeg;base64,{{ details['Drawn Image B64'] }}" style="max-width: 300px; border: 1px solid #ccc; margin-top: 10px;">
-                </li>
-            {% endif %}
-            
-            {% for key, value in details.items() %}
-                {% if key != 'Drawn Image B64' and key != 'Debug Logs' %}
-                    <li><strong>{{ key }}:</strong> {{ value }}</li>
-                {% endif %}
-            {% endfor %}
-        </ul>
+<div style="max-width: 800px; margin: 0 auto;">
+    <div class="glass" style="text-align: center; margin-bottom: 2rem;">
+        {% if status == 'success' or status == 'match' or status == 'registered' %}
+        <div style="font-size: 3rem; margin-bottom: 1rem;">✅</div>
+        <h1
+            style="background: linear-gradient(to right, #10b981, #34d399); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;">
+            Success
+        </h1>
+        {% elif status == 'unknown' %}
+        <div style="font-size: 3rem; margin-bottom: 1rem;">🔍</div>
+        <h1 style="color: #f59e0b;">Face Not Recognized</h1>
+        {% else %}
+        <div style="font-size: 3rem; margin-bottom: 1rem;">❌</div>
+        <h1 style="color: var(--danger);">Action Failed</h1>
         {% endif %}
 
-        {% if registration_logs %}
-        <h4 style="margin-top: 20px;">Log Visual Pendaftaran (MTCNN, Crop, Augmentasi)</h4>
-        <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 15px;">
-            {% for log in registration_logs %}
-            <div style="border: 1px solid #ddd; padding: 10px; width: 250px; text-align: left;">
-                <p><strong>Sumber:</strong> {{ log.source }}</p>
-                <p><strong>Status:</strong> <span style="color: {{ 'green' if log.status == 'Success' else 'red' }}">{{ log.status }}</span></p>
-                
-                {% if log.original_img_with_bb_b64 %}
-                <p><strong>Deteksi Wajah:</strong></p>
-                <img src="data:image/jpeg;base64,{{ log.original_img_with_bb_b64 }}" style="max-width: 100%; height: auto; border: 1px solid #ccc;">
-                {% endif %}
-                
-                {% if log.cropped_face_b64 %}
-                <p style="margin-top: 10px;"><strong>Wajah di-Crop (112x112):</strong></p>
-                <img src="data:image/jpeg;base64,{{ log.cropped_face_b64 }}" style="width: 112px; height: 112px; border: 1px solid #ccc;">
-                {% endif %}
+        <h3 style="margin-top: 1rem; color: var(--text-main);">{{ message }}</h3>
+
+        {% if details %}
+        <div
+            style="text-align: left; background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 8px; margin-top: 1.5rem;">
+            {% if details['Drawn Image B64'] %}
+            <div style="text-align: center; margin-bottom: 1rem;">
+                <img src="data:image/jpeg;base64,{{ details['Drawn Image B64'] }}"
+                    style="max-width: 100%; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1);">
             </div>
-            {% endfor %}
+            {% endif %}
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; font-size: 0.9rem;">
+                {% for key, value in details.items() %}
+                {% if key != 'Drawn Image B64' and key != 'Debug Logs' %}
+                <div style="color: var(--text-muted)">{{ key }}:</div>
+                <div style="font-weight: 500;">{{ value }}</div>
+                {% endif %}
+                {% endfor %}
+            </div>
         </div>
         {% endif %}
-        
     </div>
 
-    <div style="margin-top: 30px;">
-        <a href="/" class="btn">Kembali ke Dashboard</a>
+    <div style="display: flex; justify-content: center; gap: 1rem;">
+        <a href="/" class="btn btn-secondary">Back to Dashboard</a>
         {% if next_url %}
-            <a href="{{ next_url }}" class="btn btn-secondary">{{ next_label }}</a>
+        <a href="{{ next_url }}" class="btn btn-primary">{{ next_label }}</a>
         {% endif %}
     </div>
 </div>

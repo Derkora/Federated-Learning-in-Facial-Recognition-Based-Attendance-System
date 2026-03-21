@@ -25,6 +25,8 @@ services:
     depends_on:
       client1-fl-db:
         condition: service_healthy
+    volumes:
+      - ../datasets/client1_data:/app/data
     networks:
       - flnet
 
@@ -40,6 +42,8 @@ services:
     depends_on:
       client2-fl-db:
         condition: service_healthy
+    volumes:
+      - ../datasets/client2_data:/app/data
     networks:
       - flnet
 

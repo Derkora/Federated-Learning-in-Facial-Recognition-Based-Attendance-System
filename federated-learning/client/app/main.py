@@ -17,7 +17,7 @@ from app.utils.classifier import load_backbone, LocalClassifierHead, build_local
 from app.utils.trainer import LocalTrainer
 from app.config import config
 
-from app.client import start_flower_client, get_global_label, sync_users_from_server
+from app.client import start_flower_client, get_global_label, heartbeat_service
 
 CLIENT_ID = os.getenv("HOSTNAME", "client-unknown")
 MAX_USERS_CAPACITY = 100
@@ -29,10 +29,10 @@ app = FastAPI(title="FL Edge Client - Local Mode")
 
 @app.on_event("startup")
 def startup_event():
-    thread = threading.Thread(target=start_flower_client, daemon=True)
-    thread.start()
-    sync_thread = threading.Thread(target=sync_users_from_server, daemon=True)
-    sync_thread.start()
+    # Start Flower Client & Auto-Import / Phase Sync
+    threading.Thread(target=start_flower_client, daemon=True).start()
+    # Start Heartbeat Service
+    threading.Thread(target=heartbeat_service, daemon=True).start()
     
 # Mount Static & Templates
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
@@ -51,13 +51,14 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
         "model_exists": is_model_ready()
     })
 
-@app.get("/register-page", response_class=HTMLResponse)
-async def register_page(request: Request):
-    return templates.TemplateResponse("register.html", {"request": request})
-
 @app.get("/attendance-page", response_class=HTMLResponse)
 async def attendance_page(request: Request):
     return templates.TemplateResponse("attendance_live.html", {"request": request})
+
+@app.get("/api/users")
+async def get_users(db: Session = Depends(get_db)):
+    users = db.query(UserLocal).all()
+    return [{"nrp": u.nrp, "name": u.name} for u in users]
 
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
@@ -167,114 +168,6 @@ async def attendance_live(request: Request, file: UploadFile = File(...), db: Se
             "name": "Unknown",
             "confidence": final_score
          }
-
-@app.post("/register")
-async def register_user(
-    request: Request,
-    name: str = Form(...),
-    nrp: str = Form(...),
-    files: List[UploadFile] = File(...),
-    db: Session = Depends(get_db)
-):
-    valid_embeddings = []
-    errors = []
-    # Log untuk debug visual
-    registration_logs = []
-
-    for file in files:
-        content = await file.read()
-        
-        # Sekarang mengembalikan [(emb, img), ...], pesan, dan log debug
-        data_list, msg, file_debug_logs = face_pipeline.process_with_augmentation(content, filename=file.filename)
-        registration_logs.extend(file_debug_logs)
-        
-        if data_list:
-            valid_embeddings.extend(data_list)
-        else:
-            print(f"[REGISTER ERROR] File {file.filename}: {msg}") 
-            errors.append(f"{file.filename}: {msg}")
-
-    if len(valid_embeddings) == 0:
-        return templates.TemplateResponse("result.html", {
-            "request": request,
-            "status": "error",
-            "message": "Gagal Registrasi: Wajah tidak terdeteksi di semua foto (atau setelah augmentasi).",
-            "details": {"Error Log": errors}, 
-            "registration_logs": registration_logs, # Kirim log debug
-            "next_url": "/register-page",
-            "next_label": "Coba Lagi"
-        })
-    
-    lbl_data = get_global_label(nrp, name, client_id=CLIENT_ID) 
-    
-    if lbl_data is None:
-        return templates.TemplateResponse("result.html", {
-            "request": request,
-            "status": "error",
-            "message": "Gagal menghubungi Server Pusat untuk sinkronisasi Label atau Server Penuh.",
-            "registration_logs": registration_logs, # Kirim log debug
-            "next_url": "/register-page",
-            "next_label": "Coba Lagi Nanti"
-        })
-        
-    # PERUBAHAN: Lakukan pengecekan pembatasan perangkat
-    if lbl_data.get("registered_edge_id") and lbl_data.get("registered_edge_id") != CLIENT_ID:
-        return templates.TemplateResponse("result.html", {
-            "request": request,
-            "status": "error",
-            "message": f"Registrasi Gagal: NRP {nrp} sudah terdaftar di perangkat lain ({lbl_data.get('registered_edge_id')}).",
-            "registration_logs": registration_logs, # Kirim log debug
-            "next_url": "/register-page",
-            "next_label": "Coba Lagi"
-        })
-
-    existing_user = db.query(UserLocal).filter(UserLocal.nrp == nrp).first()
-    
-    if existing_user:
-        new_user = existing_user
-        print(f"[REGISTER] User {name} sudah ada, menambahkan data wajah baru.")
-    else:
-        new_user = UserLocal(name=name, nrp=nrp)
-        db.add(new_user)
-        db.commit()
-        db.refresh(new_user)
-
-    for vec, img_np in valid_embeddings:
-        # Enkripsi Embedding (AES-256)
-        enc_data, iv, salt = encryptor.encrypt_embedding(vec)
-        
-        # Enkripsi Image (AES-256) - Reuse encrypt_embedding karena support numpy
-        enc_img, img_iv, _ = encryptor.encrypt_embedding(img_np)
-        
-        # GABUNGKAN IV + Image Encrypted agar bisa didekripsi tanpa kolom DB baru
-        # IV adalah 16 bytes pertama
-        final_image_blob = img_iv + enc_img
-        
-        db_emb = Embedding(
-            user_id=new_user.user_id,
-            encrypted_embedding=enc_data,
-            encrypted_image=final_image_blob, # Simpan IV + Ciphertext
-            iv=iv, # Ini IV untuk embedding, biarkan saja
-            salt=salt
-        )
-        db.add(db_emb)
-            
-    db.commit()
-    
-    return templates.TemplateResponse("result.html", {
-        "request": request,
-        "status": "registered",
-        "message": f"Registrasi Berhasil untuk {name}",
-        "details": {
-            "Global Label ID": lbl_data.get("label"),
-            "Total Sampel Wajah": len(valid_embeddings), 
-            "NRP": nrp,
-            "Registered on": CLIENT_ID
-        },
-        "registration_logs": registration_logs, # Kirim log visual registrasi
-        "next_url": "/register-page",
-        "next_label": "Daftar Lagi"
-    })
 
 @app.post("/train")
 async def trigger_training(request: Request, db: Session = Depends(get_db)):

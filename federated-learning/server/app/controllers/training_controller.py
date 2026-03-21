@@ -1,69 +1,92 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 from app.server_manager_instance import fl_manager
 from app.controllers.client_controller import registered_clients
-from app.db.db import SessionLocal
-from app.db.models import ModelVersion
+from app.db.db import SessionLocal, get_db
+from app.db import models
+from app.db.models import ModelVersion, TrainingRound, TrainingUpdate
 from app.utils.mobilefacenet import MobileFaceNet
 import torch
 import io
 import asyncio
 import json
 
-router = APIRouter()
-
-global_user_db = {}
-
 class LabelRequest(BaseModel):
     nrp: str
     name: str = ""
     registered_edge_id: Optional[str] = None 
 
+router = APIRouter()
+
 @router.post("/get_label")
-def get_or_create_label(req: LabelRequest):
-    global global_user_db
+def get_or_create_label(req: LabelRequest, db: SessionLocal = Depends(get_db)):
+    user = db.query(models.UserGlobal).filter(models.UserGlobal.nrp == req.nrp).first()
     
-    if req.nrp not in global_user_db:
-        new_label = len(global_user_db)
-        if new_label >= 100: 
+    if not user:
+        # Check capacity
+        count = db.query(models.UserGlobal).count()
+        if count >= 100:
             raise HTTPException(status_code=400, detail="Full")
             
-        global_user_db[req.nrp] = {
-            "label": new_label,
-            "name": req.name,
-            "nrp": req.nrp,
-            # Simpan Edge ID saat registrasi pertama
-            "registered_edge_id": req.registered_edge_id 
-        }
-        print(f"[REGISTRY] New: {req.name} ({req.nrp}) -> Label {new_label} on {req.registered_edge_id}")
-        
+        user = models.UserGlobal(
+            name=req.name,
+            nrp=req.nrp,
+            registered_edge_id=req.registered_edge_id # Auto-assign on first register
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        print(f"[REGISTRY] New: {req.name} ({req.nrp}) -> Label {user.user_id-1} on {user.registered_edge_id}")
     else:
-        print(f"[REGISTRY] Existing: {req.name} ({req.nrp}) -> Label {global_user_db[req.nrp]['label']} on {req.registered_edge_id}")
-        existing_data = global_user_db[req.nrp]
-        if existing_data.get("registered_edge_id") and existing_data.get("registered_edge_id") != req.registered_edge_id and req.registered_edge_id:
-             raise HTTPException(status_code=403, detail=f"User already registered on {existing_data.get('registered_edge_id')}")
-
-    return global_user_db[req.nrp]
+        # If already assigned to someone else
+        if user.registered_edge_id and user.registered_edge_id != req.registered_edge_id and req.registered_edge_id:
+             # Option: allow update if admin hasn't locked it? 
+             # For now, let's keep the existing assignment check
+             print(f"[REGISTRY] User {req.nrp} already belongs to {user.registered_edge_id}")
+    
+    # Return label (we use user_id - 1 as label to match 0-indexed)
+    return {
+        "label": user.user_id - 1,
+        "name": user.name,
+        "nrp": user.nrp,
+        "registered_edge_id": user.registered_edge_id
+    }
 
 @router.get("/global_users")
-def get_all_users():
-    return list(global_user_db.values())
+def get_all_users(db: SessionLocal = Depends(get_db)):
+    users = db.query(models.UserGlobal).all()
+    return [{"label": u.user_id-1, "name": u.name, "nrp": u.nrp, "registered_edge_id": u.registered_edge_id} for u in users]
 
 @router.delete("/users/{nrp}")
-def delete_user(nrp: str):
-    global global_user_db
-    if nrp not in global_user_db:
-        raise HTTPException(status_code=404, detail="User found")
+def delete_user(nrp: str, db: SessionLocal = Depends(get_db)):
+    user = db.query(models.UserGlobal).filter(models.UserGlobal.nrp == nrp).first()
+    if user:
+        db.delete(user)
+        db.commit()
+        print(f"[REGISTRY] User deleted: {nrp}")
+        return {"status": "success", "message": f"User {nrp} deleted"}
+    raise HTTPException(status_code=404, detail="User not found")
+
+class AssignRequest(BaseModel):
+    nrp: str
+    edge_id: str
+
+@router.post("/assign_client")
+def assign_client(req: AssignRequest, db: SessionLocal = Depends(get_db)):
+    user = db.query(models.UserGlobal).filter(models.UserGlobal.nrp == req.nrp).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
     
-    del global_user_db[nrp]
-    print(f"[REGISTRY] User deleted: {nrp}")
-    return {"status": "success", "message": f"User {nrp} deleted"}
+    user.registered_edge_id = req.edge_id
+    db.commit()
+    print(f"[REGISTRY] Assigned {req.nrp} to {req.edge_id}")
+    return {"status": "success", "nrp": req.nrp, "edge_id": req.edge_id}
 
 @router.post("/start")
 async def start_training(rounds: int = 10):
-    fl_manager.start_training(rounds)
+    fl_manager.run_lifecycle(rounds)
     return {"status": "started", "rounds": rounds}
 
 @router.post("/reset")

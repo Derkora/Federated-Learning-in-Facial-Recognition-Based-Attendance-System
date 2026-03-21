@@ -85,40 +85,155 @@ def sync_users_from_server():
         time.sleep(30) # Cek setiap 30 detik
         
 
-CURRENT_RESET_COUNTER = -1 # Inisialisasi awal
+# Phase tracking to avoid double-runs
+LAST_PROCESSED_PHASE = "idle"
+CURRENT_CLIENT_STATUS = "Standby (Siap Training)"
 
-def report_status(status_msg, metrics=None):
-    global CURRENT_RESET_COUNTER
+def report_status(status_msg=None, metrics=None):
+    global CURRENT_CLIENT_STATUS, LAST_PROCESSED_PHASE
+    if status_msg:
+        CURRENT_CLIENT_STATUS = status_msg
+    
     try:
+        # 1. Report Status
         payload = {
             "id": CLIENT_ID,
             "ip_address": socket.gethostbyname(socket.gethostname()),
-            "fl_status": status_msg,
-            "last_seen": datetime.now().strftime("%H:%M:%S")
+            "fl_status": CURRENT_CLIENT_STATUS,
+            "last_seen": time.time()
         }
-        if metrics:
-            payload["metrics"] = metrics
-        response = requests.post(f"{config.get_server_url()}/api/clients/register", json=payload, timeout=2)
+        if metrics: payload["metrics"] = metrics
         
-        if response.status_code == 200:
-            data = response.json()
-            server_counter = data.get("server_reset_counter", 0)
-            
-            # Init counter saat pertama kali connect
-            if CURRENT_RESET_COUNTER == -1:
-                CURRENT_RESET_COUNTER = server_counter
-            
-            # Cek jika server telah di-reset (counter naik)
-            elif server_counter > CURRENT_RESET_COUNTER:
-                print(f"[CLIENT] Detected Server Reset (Counter: {server_counter}). Resetting Local Model...")
-                if os.path.exists("local_backbone.pth"):
-                    os.remove("local_backbone.pth")
-                    print("[CLIENT] local_backbone.pth deleted.")
+        resp = requests.post(f"{config.get_server_url()}/api/clients/register", json=payload, timeout=2)
+        
+        # 2. Poll Server Phase (Heartbeat)
+        if resp.status_code == 200:
+            status = resp.json()
+            # If server provided status in register response (convenience) or we poll /status
+            # For now, let's assume we need to poll /status separately for detail
+            res = requests.get(f"{config.get_server_url()}/api/training/status", timeout=2)
+            if res.status_code == 200:
+                status_data = res.json()
+                phase = status_data.get("current_phase", "idle")
                 
-                CURRENT_RESET_COUNTER = server_counter
+                if phase != LAST_PROCESSED_PHASE:
+                    if phase == "syncing":
+                        print(f"[LIFECYCLE] Entering Sync Phase...")
+                        auto_volume_import()
+                        LAST_PROCESSED_PHASE = "syncing"
+                    elif phase == "preprocessing":
+                        print(f"[LIFECYCLE] Entering Preprocessing Phase...")
+                        # Run the heavy preprocessing once
+                        run_persistent_preprocessing()
+                        LAST_PROCESSED_PHASE = "preprocessing"
+                    elif phase == "idle":
+                        LAST_PROCESSED_PHASE = "idle"
+                
+                # Report detailed status during heavy phases
+                if phase == "preprocessing":
+                     # No-op here, run_persistent_preprocessing handles its own status
+                     pass
+                elif phase == "syncing":
+                     report_status("Syncing Volumes...")
                 
     except Exception as e:
-        print(f"[CLIENT REPORT] Gagal lapor status: {e}")
+        print(f"[CLIENT REPORT] Error: {e}")
+
+def heartbeat_service():
+    """Background service to keep server informed of client presence."""
+    print("[HEARTBEAT] Client Heartbeat Service Started.")
+    while True:
+        try:
+            report_status() # Reports CURRENT_CLIENT_STATUS
+        except: pass
+        time.sleep(5)
+
+def run_persistent_preprocessing():
+    """Performs MTCNN face detection and resizing once and saves to processed folder."""
+    import os
+    import torchvision.transforms as T
+    from PIL import Image
+    from app.utils.face_pipeline import face_pipeline
+    
+    students_dir = "/app/data/students"
+    processed_dir = "/app/data/processed_faces"
+    os.makedirs(processed_dir, exist_ok=True)
+    
+    if not os.path.exists(students_dir): return
+
+    print(f"[PREPROCESS] Starting Persistent Preprocessing...")
+    db = SessionLocal()
+    try:
+        folders = [f for f in os.listdir(students_dir) if os.path.isdir(os.path.join(students_dir, f))]
+        for folder in folders:
+            nrp = folder.split("_")[0] if "_" in folder else folder
+            name = folder.split("_")[1] if "_" in folder else folder
+            
+            # 1. Ensure Global Label (Registration)
+            lbl_data = get_global_label(nrp, name, client_id=CLIENT_ID)
+            if not lbl_data: continue
+            
+            target_folder = os.path.join(processed_dir, nrp)
+            if os.path.exists(target_folder) and len(os.listdir(target_folder)) > 0:
+                # Already processed, skip
+                # print(f"[PREPROCESS] NRP {nrp} already processed. Skipping.")
+                continue
+                
+            # Report progress for this user
+            report_status(f"Preprocessing {name}...")
+
+            os.makedirs(target_folder, exist_ok=True)
+            source_path = os.path.join(students_dir, folder)
+            
+            print(f"[PREPROCESS] Processing {nrp} - {name}...")
+            count = 0
+            for img_name in os.listdir(source_path):
+                if not img_name.lower().endswith(('.jpg', '.jpeg', '.png')): continue
+                try:
+                    img = Image.open(os.path.join(source_path, img_name)).convert('RGB')
+                    face_img, _, _ = face_pipeline._detect_and_crop(img)
+                    
+                    if face_img:
+                        face_img.save(os.path.join(target_folder, f"face_{count}.jpg"))
+                        count += 1
+                except Exception as e:
+                    print(f"[PREPROCESS ERROR] {img_name}: {e}")
+            
+            print(f"[PREPROCESS] Done {nrp}: {count} faces saved.")
+            
+        db.commit()
+    finally:
+        db.close()
+    print(f"[PREPROCESS] Persistent Preprocessing Completed.")
+
+def auto_volume_import():
+    """Scans /app/data/students/ and registers them to server."""
+    report_status("Syncing Volumes...")
+    students_dir = "/app/data/students"
+    if not os.path.exists(students_dir): return
+
+    print(f"[IMPORT] Scanning volume {students_dir}...")
+    db = SessionLocal()
+    try:
+        for folder in os.listdir(students_dir):
+            if "_" in folder:
+                nrp, name = folder.split("_", 1)
+            else:
+                nrp, name = folder, folder
+            
+            # Sync with server (Register student globally)
+            get_global_label(nrp, name, client_id=CLIENT_ID)
+            
+            # Update local DB
+            exists = db.query(UserLocal).filter(UserLocal.nrp == nrp).first()
+            if not exists:
+                new_user = UserLocal(name=name, nrp=nrp)
+                db.add(new_user)
+        db.commit()
+    except Exception as e:
+        print(f"[IMPORT ERROR] {e}")
+    finally:
+        db.close()
 
 def save_confusion_matrix(y_true, y_pred):
     """Menyimpan Confusion Matrix sebagai gambar untuk debugging"""
@@ -198,11 +313,10 @@ def train_model(backbone, head, train_loader, val_loader=None, epochs=5, patienc
         if isinstance(module, nn.BatchNorm2d):
             module.eval() 
 
-    # Optimasi hanya parameter yang requires_grad=True
+    # Optimasi Adam sesuai model.ipynb
     trainable_params = [p for p in backbone.parameters() if p.requires_grad] + list(head.parameters())
-    # LR diturunkan sangat kecil untuk mencegah NaN/Exploding Gradient pada awal training
-    optimizer = optim.SGD(trainable_params, lr=0.0001, momentum=0.9, weight_decay=1e-4) # 0.001 -> 0.0001
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
+    optimizer = optim.Adam(trainable_params, lr=0.001)
+    # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5) # Optional
     
     backbone.to(DEVICE)
     head.to(DEVICE)
@@ -295,94 +409,80 @@ def train_model(backbone, head, train_loader, val_loader=None, epochs=5, patienc
     backbone.load_state_dict(best_state)
     return final_loss, final_acc
 
-def load_data_from_db():
-    db = SessionLocal()
-    encryptor = EmbeddingEncryptor()
+def load_data_from_disk():
+    """Loads pre-processed images from /app/data/processed_students/."""
+    import os
+    import torchvision.transforms as T
+    from PIL import Image
     
-    try:  
+    db = SessionLocal()
+    processed_dir = "/app/data/processed_faces"
+    
+    X_list, y_list = [], []
+    
+    try:
+        if not os.path.exists(processed_dir):
+            print(f"[DISK DATA] Directory {processed_dir} not found. Running preprocessing...")
+            run_persistent_preprocessing()
+            if not os.path.exists(processed_dir): return None, None
+
+        # Get local users mapping (already synced in Phase 1/2)
         users = db.query(UserLocal).all()
         user_to_label = {}
-
-        print(f"[CLIENT DATA] Sinkronisasi {len(users)} user lokal...")
         for u in users:
-            # Mengambil data label
-            global_label_data = get_global_label(u.nrp, client_id=CLIENT_ID) 
-            if global_label_data and global_label_data.get("label") is not None:
-                user_to_label[u.user_id] = global_label_data.get("label")
+            # We don't call server here to be fast, assume already mapped
+            # If not mapped, we'll try a quick sync
+            lbl_data = get_global_label(u.nrp, client_id=CLIENT_ID)
+            if lbl_data:
+                user_to_label[u.nrp] = lbl_data['label']
 
-        embeddings = db.query(Embedding).all()
-        print(f"[CLIENT DATA] Found {len(embeddings)} total embeddings in DB.")
-        
-        X_list, y_list = [], []
-        image_count = 0
-        
-        for emb in embeddings:
-            try:
-                # Decrypt Data
-                if emb.encrypted_image:
-                     image_count += 1
-                     
-                     # Extract IV dan Ciphertext (Format: 16 bytes IV + Data)
-                     blob = emb.encrypted_image
-                     if len(blob) < 17: # Minimal 16 bytes IV + data
-                         print(f"[DATA] Skip sample {emb.embedding_id}: Image blob too short.")
-                         continue
-                         
-                     img_iv = blob[:16]
-                     img_ciphertext = blob[16:]
-                     
-                     img_np = encryptor.decrypt_embedding(img_ciphertext, img_iv)
-                     
-                     # Preprocessing (Standardization yang sama dengan face_pipeline)
-                     # Image Standardization: (x - 127.5) / 128.0
-                     img_std = (img_np.astype(np.float32) - 127.5) / 128.0
-                     
-                     # Convert to Tensor (HWC -> CHW)
-                     img_tensor = torch.tensor(img_std).permute(2, 0, 1).float()
-                     
-                     # Ensure the user_id exists in user_to_label and get the global label
-                     if emb.user_id in user_to_label:
-                         lbl = user_to_label[emb.user_id]
-                         if lbl >= MAX_USERS_CAPACITY:
-                             print(f"[DATA WARNING] Skip User {emb.user_id}: Label {lbl} >= Max Capacity {MAX_USERS_CAPACITY}")
-                             continue
-                             
-                         X_list.append(img_tensor.numpy()) # Append as numpy for now, later stacked
-                         y_list.append(lbl) # Gunakan label global
-                     else:
-                         print(f"[DATA] Skip sample {emb.embedding_id}: User {emb.user_id} not found in global labels. Available users: {list(user_to_label.keys())[:5]}...")
-                         continue
-                else:
-                    continue
-                    
-            except Exception as e:
-                print(f"[DATA] Decrypt error for {emb.embedding_id}: {e}")
+        for nrp_folder in os.listdir(processed_dir):
+            path = os.path.join(processed_dir, nrp_folder)
+            if not os.path.isdir(path): continue
+            
+            if nrp_folder not in user_to_label:
                 continue
+            
+            label = user_to_label[nrp_folder]
+            
+            for img_name in os.listdir(path):
+                img_path = os.path.join(path, img_name)
+                try:
+                    img = Image.open(img_path).convert('RGB')
+                    # Already 112x96, just normalize
+                    face_np = np.array(img).astype(np.float32) / 255.0
+                    face_tensor = torch.tensor(face_np).permute(2, 0, 1)
+                    face_tensor = T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])(face_tensor)
+                    
+                    X_list.append(face_tensor.numpy())
+                    y_list.append(label)
+                except Exception as e:
+                    print(f"[DISK DATA] Error loading {img_path}: {e}")
+                    continue
         
-        print(f"[CLIENT DATA] Loaded {len(X_list)} valid samples (from {image_count} with images).")
-        if len(X_list) == 0:
+        if not X_list: 
+            print("[DISK DATA] No valid samples found.")
             return None, None
+            print("[DISK DATA] No valid samples found.")
+            return None, None
+        
+        print(f"[DISK DATA] Loaded {len(X_list)} samples from disk.")
+        X_tensor = torch.tensor(np.array(X_list))
+        y_tensor = torch.tensor(np.array(y_list))
+        dataset = TensorDataset(X_tensor, y_tensor)
+        
+        # Use batch size 32 from model.ipynb
+        train_size = int(0.9 * len(dataset))
+        test_size = len(dataset) - train_size
+        if test_size == 0 and len(dataset) > 0:
+            train_loader = DataLoader(dataset, batch_size=32, shuffle=True)
+            return train_loader, None
             
-        X_tensor = torch.tensor(np.array(X_list), dtype=torch.float32)
-        y_tensor = torch.tensor(np.array(y_list), dtype=torch.long)
-        full_dataset = TensorDataset(X_tensor, y_tensor)
-        
-        if len(full_dataset) == 1:
-            train_size = 1
-            test_size = 0
-        else:
-            train_size = int(0.8 * len(full_dataset))
-            test_size = len(full_dataset) - train_size
-            
-        train_dataset, test_dataset = random_split(full_dataset, [train_size, test_size])
-        
-        train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True)
-        test_loader = DataLoader(test_dataset, batch_size=4, shuffle=False)
-        
-        return train_loader, test_loader
+        train_ds, test_ds = random_split(dataset, [train_size, test_size])
+        return DataLoader(train_ds, batch_size=32, shuffle=True), DataLoader(test_ds, batch_size=32)
         
     except Exception as e:
-        print(f"[CLIENT DATA] Error loading data: {e}")
+        print(f"[DISK DATA ERROR] {e}")
         return None, None
     finally:
         db.close()
@@ -412,8 +512,8 @@ class RealClient(fl.client.NumPyClient):
             # Simpan backbone yang baru di-load untuk digunakan di /attendance
             save_backbone(self.backbone, path="local_backbone.pth")
 
-            # Load & Split Data
-            trainloader, valloader = load_data_from_db()
+            # Load & Split Data From Disk
+            trainloader, valloader = load_data_from_disk()
             if trainloader is None:
                 # Mengembalikan parameter yang sama jika tidak ada data
                 return self.get_parameters({}), 0, {}
@@ -452,7 +552,7 @@ class RealClient(fl.client.NumPyClient):
             # Inisialisasi Head lokal (untuk evaluasi)
             local_head_eval = LocalClassifierHead(num_classes=MAX_USERS_CAPACITY)
 
-            _, testloader = load_data_from_db()
+            _, testloader = load_data_from_disk()
             
             if testloader is None or len(testloader.dataset) == 0:
                 return 0.0, 0, {"accuracy": 0.0}

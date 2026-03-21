@@ -32,20 +32,12 @@ class FaceAnalysisPipeline:
         print("[PIPELINE] Loading MobileFaceNet Backbone...")
         self.backbone = MobileFaceNet(embedding_size=128).to(self.device)
         self.backbone.eval()
-        # AUGMENTASI (Disesuaikan untuk input 112x112)
+        # AUGMENTASI (Disesuaikan untuk input 112x96 sesuai model.ipynb)
         self.transforms = [
-            T.RandomHorizontalFlip(p=1.0),
-            T.ColorJitter(brightness=0.3, contrast=0.3),
-            T.RandomRotation(degrees=10),
-            # Simulasi Random Crop kecil lalu resize balik
-            T.Compose([
-                T.Resize(int(112 * 1.05)), 
-                T.RandomCrop(112),
-            ]),
-            T.Compose([ 
-                T.RandomHorizontalFlip(p=0.5),
-                T.ColorJitter(brightness=0.2, contrast=0.2)
-            ])
+            T.RandomHorizontalFlip(p=0.5),
+            T.ColorJitter(brightness=0.2, contrast=0.2),
+            T.RandomRotation(degrees=15),
+            T.Resize((112, 96))
         ]
         
     def _pil_to_base64(self, img_pil):
@@ -127,7 +119,7 @@ class FaceAnalysisPipeline:
 
             # Crop wajah manual
             face_img_pil = img_pil.crop(box.astype(int))
-            face_img_pil = face_img_pil.resize((112, 112))
+            face_img_pil = face_img_pil.resize((112, 96)) # TARGET 112x96
             
             # Kembalikan koordinat box ke skala asli agar gambar di UI benar
             if scale_factor != 1.0:
@@ -146,9 +138,13 @@ class FaceAnalysisPipeline:
             # Cek device model
             device = next(net.parameters()).device
             
-            # Konversi ke Tensor dan Normalisasi (fixed_image_standardization: (x - 127.5)/128.0)
-            face_tensor = fixed_image_standardization(np.array(face_img_pil))
-            face_tensor = torch.tensor(face_tensor).permute(2, 0, 1).float() # HWC -> CHW
+            # Konversi ke Tensor dan Normalisasi (model.ipynb: (x - 127.5)/128.0)
+            # face * 0.5 + 0.5 di notebook -> ToTensor (0-1) -> Normalize(0.5, 0.5) 
+            # (x - 0.5)/0.5 = 2x - 1. Jika x = p/255 -> 2p/255 - 1 = (2p - 255)/255. 
+            # Notebook uses: Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]) which is (x-0.5)/0.5
+            face_np = np.array(face_img_pil).astype(np.float32) / 255.0
+            face_tensor = torch.tensor(face_np).permute(2, 0, 1)
+            face_tensor = T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])(face_tensor)
             
             face_batch = face_tensor.unsqueeze(0).to(device)
 

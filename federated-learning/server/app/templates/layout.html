@@ -4,64 +4,43 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Server Aggregator - FL Dashboard</title>
+    <title>Federated Server - Orchestrator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
     <style>
-        /* Simple Navbar Style */
         .navbar {
-            background-color: #343a40;
-            padding: 15px;
-            color: white;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            padding: 1.5rem 0;
+            margin-bottom: 2rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
         }
 
-        .navbar-brand {
-            font-size: 1.5em;
-            font-weight: bold;
-            color: white;
+        .nav-brand {
+            font-size: 1.5rem;
+            font-weight: 800;
             text-decoration: none;
-        }
-
-        .navbar-nav {
-            list-style: none;
-            display: flex;
-            gap: 20px;
-            margin: 0;
-            padding: 0;
-        }
-
-        .nav-link {
-            color: #ddd;
-            text-decoration: none;
-            font-weight: 500;
-        }
-
-        .nav-link:hover,
-        .nav-link.active {
-            color: white;
-            text-decoration: underline;
-        }
-
-        .container {
-            max-width: 1200px;
-            margin: 20px auto;
-            padding: 0 15px;
+            color: #fff;
+            letter-spacing: -0.5px;
         }
     </style>
 </head>
 
 <body>
-    <nav class="navbar">
-        <a href="/" class="navbar-brand">FL Server</a>
-        <ul class="navbar-nav">
-            <li><a href="/" class="nav-link">Dashboard</a></li>
-            <li><a href="/users" class="nav-link">User Management</a></li>
-        </ul>
-    </nav>
-
     <div class="container">
+        <nav class="navbar">
+            <a href="/" class="nav-brand">FL ORCHESTRATOR</a>
+            <div class="nav-links">
+                <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Dashboard</a>
+                <a href="/users" class="{% if request.url.path == '/users' %}active{% endif %}">User Management</a>
+            </div>
+        </nav>
+
         {% block content %}{% endblock %}
     </div>
 

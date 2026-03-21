@@ -1,21 +1,82 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div style="text-align: center; padding: 40px 0;">
-    <h1>Selamat Datang di Edge Client</h1>
-    <p>Sistem Absensi Terdistribusi dengan Privasi Terjamin</p>
+<header>
+    <div>
+        <h1>Edge Node Dashboard</h1>
+        <p style="color: var(--text-muted); margin-top: 0.25rem;">Local Data Storage & FL Status</p>
+    </div>
+    <div id="connection-status">
+        <span class="badge badge-sync">Client Syncing...</span>
+    </div>
+</header>
 
-    <div class="card">
-        <h3>Status Node</h3>
-        <p>Total User Terdaftar: <strong>{{ user_count }}</strong></p>
-        <p>Model Status: <span class="{{ 'text-green' if model_exists else 'text-red' }}">
-                {{ "Siap Digunakan" if model_exists else "Belum Dilatih" }}
-            </span></p>
-        <div style="margin-top: 20px; border-top: 1px solid #eee; padding-top: 15px;">
-            <a href="/settings" class="btn" style="text-decoration: none; color: #2980b9; font-weight: bold;">⚙️
-                Pengaturan Koneksi</a>
+<div class="stats-grid">
+    <div class="glass stat-card">
+        <div class="stat-label">Students Synced</div>
+        <div class="stat-value">{{ user_count }}</div>
+    </div>
+    <div class="glass stat-card">
+        <div class="stat-label">Local Model</div>
+        <div class="stat-value">{% if model_exists %}Ready{% else %}Not Ready{% endif %}</div>
+    </div>
+    <div class="glass stat-card">
+        <div class="stat-label">Server Sync</div>
+        <div class="stat-value">Online</div>
+    </div>
+</div>
+
+<div class="glass" style="margin-bottom: 2rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+        <div>
+            <h3 style="margin: 0;">Local Student Registry</h3>
+            <p style="color: var(--text-muted); font-size: 0.875rem; margin-top: 0.25rem;">Automatically imported from
+                <code>/app/data/students/</code></p>
         </div>
+        <a href="/attendance-page" class="btn btn-primary">
+            🚀 Go to Live Attendance
+        </a>
     </div>
 
+    <div class="student-list" id="student-grid">
+        <!-- Dynamic -->
+    </div>
 </div>
+
+<div class="glass">
+    <h3>Federated Status</h3>
+    <p id="fl-status" style="color: var(--text-muted);">Fetching status from edge thread...</p>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    async function updateDashboard() {
+        try {
+            // Simplified user list - in a real app, we'd have a separate API
+            // For now, we'll refresh the page or fetch from a new endpoint
+            const res = await fetch('/api/users'); // I'll add this endpoint
+            if (res.ok) {
+                const users = await res.json();
+                const grid = document.getElementById('student-grid');
+                grid.innerHTML = users.map(u => `
+                    <div class="student-card">
+                        <div class="avatar">${u.name.charAt(0)}</div>
+                        <div>
+                            <div style="font-weight: 600;">${u.name}</div>
+                            <div style="font-size: 0.8rem; color: var(--text-muted)">${u.nrp}</div>
+                        </div>
+                        <div style="margin-left: auto;">
+                            <span class="badge badge-sync">Synced</span>
+                        </div>
+                    </div>
+                `).join('');
+            }
+        } catch (e) { console.error(e); }
+    }
+
+    setInterval(updateDashboard, 5000);
+    updateDashboard();
+</script>
 {% endblock %}

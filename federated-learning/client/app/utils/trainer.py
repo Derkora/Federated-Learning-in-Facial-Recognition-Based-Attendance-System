@@ -76,7 +76,7 @@ class LocalTrainer:
         all_params = list(backbone.parameters()) + list(head.parameters())
         
         criterion = nn.CrossEntropyLoss()
-        optimizer = optim.SGD(all_params, lr=lr, momentum=0.9)
+        optimizer = optim.Adam(all_params, lr=0.001)
 
         # Training Loop
         print(f"[TRAIN] Start training on {count_used} images for {len(user_map)} users...")
