@@ -41,11 +41,44 @@ async def dashboard(request: Request):
     status = cl_manager.get_status()
     return templates.TemplateResponse("index.html", {"request": request, "title": "Dashboard", "status": status})
 
+@app.get("/records", response_class=HTMLResponse)
+async def view_records(request: Request):
+    return templates.TemplateResponse("records.html", {"request": request, "title": "Attendance Board"})
+
+@app.get("/api/status")
+async def get_status():
+    return cl_manager.get_status()
+
+@app.get("/api/attendance")
+async def get_attendance_recap(dbs: Session = Depends(db.get_db)):
+    from datetime import datetime, time as dt_time
+    today = datetime.utcnow().date()
+    start_of_day = datetime.combine(today, dt_time.min)
+    
+    # Get all global users
+    users = dbs.query(models.UserGlobal).all()
+    recap = []
+    
+    for user in users:
+        # Check for today's attendance
+        last_entry = dbs.query(models.AttendanceRecap).filter(
+            models.AttendanceRecap.user_id == user.user_id,
+            models.AttendanceRecap.timestamp >= start_of_day
+        ).order_by(models.AttendanceRecap.timestamp.desc()).first()
+        
+        recap.append({
+            "name": user.name,
+            "nrp": user.nrp,
+            "status": "✅ Attended" if last_entry else "Not Yet",
+            "time": last_entry.timestamp.strftime("%H:%M:%S") if last_entry else "--:--",
+            "confidence": f"{int(last_entry.confidence * 100)}%" if last_entry else "--"
+        })
+    
+    return recap
+
 @app.get("/ping")
 async def health_check():
-    # Diagnostic Log: Prove clients are polling
-    # print(f"[POLL] Edge terminal checking in...", flush=True)
-    return {"status": "online", "upload_requested": cl_manager.upload_requested}
+    return {"status": "online", "upload_requested": cl_manager.upload_requested, "model_version": cl_manager.model_version}
 
 @app.post("/register-client", response_model=schemas.ClientResponse)
 async def register_client(client_data: schemas.ClientBase, request: Request, dbs: Session = Depends(db.get_db)):
@@ -65,10 +98,11 @@ async def register_client(client_data: schemas.ClientBase, request: Request, dbs
 # --- PHASED RESEARCH WORKFLOW ---
 
 @app.post("/workflow/import")
-async def workflow_import():
+def workflow_import(dbs: Session = Depends(db.get_db)):
     if cl_manager.is_busy: raise HTTPException(400, "Server is busy")
     
     cl_manager.start_phase("Import Data")
+    cl_manager.received_data = [] # Reset received data
     UPLOAD_DIR = "data/students"
     if os.path.exists(UPLOAD_DIR): shutil.rmtree(UPLOAD_DIR)
     os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -76,16 +110,34 @@ async def workflow_import():
     cl_manager.upload_requested = True
     print("[ORCHESTRATOR] Training mode activated. Waiting for clients to check-in and upload...", flush=True)
     try:
-        res = training_controller.fetch_data(wait_timeout=600)
+        # Count online clients to wait for
+        online_count = dbs.query(models.Client).filter(models.Client.status == "online").count()
+        res = training_controller.fetch_data(wait_timeout=600, expected_clients=online_count)
+        
         if res['status'] == 'success':
             cl_manager.update_metrics({"payload_size_mb": res['payload_mb']})
+            # Sync students to database
+            folders = [f for f in os.listdir(UPLOAD_DIR) if os.path.isdir(os.path.join(UPLOAD_DIR, f))]
+            for folder in folders:
+                parts = folder.split("_", 1)
+                nrp = parts[0].strip()
+                name = parts[1].strip() if len(parts) > 1 else "Unknown"
+                
+                # Check if exists
+                existing = dbs.query(models.UserGlobal).filter(models.UserGlobal.nrp == nrp).first()
+                if not existing:
+                    new_student = models.UserGlobal(name=name, nrp=nrp)
+                    dbs.add(new_student)
+            dbs.commit()
+            cl_manager.update_received_data(UPLOAD_DIR)
+            
         return res
     finally:
         cl_manager.upload_requested = False
         cl_manager.end_phase()
 
 @app.post("/workflow/preprocess")
-async def workflow_preprocess():
+def workflow_preprocess():
     if cl_manager.is_busy: raise HTTPException(400, "Server is busy")
     cl_manager.start_phase("Preprocess & Balance")
     print("[ORCHESTRATOR] Starting Preprocessing Phase...", flush=True)
@@ -95,7 +147,7 @@ async def workflow_preprocess():
         cl_manager.end_phase()
 
 @app.post("/workflow/train")
-async def workflow_train(epochs: int = 10):
+def workflow_train(epochs: int = 10):
     if cl_manager.is_busy: raise HTTPException(400, "Server is busy")
     cl_manager.start_phase("Training")
     print(f"[ORCHESTRATOR] Starting Training Phase ({epochs} epochs)...", flush=True)
@@ -111,13 +163,14 @@ async def workflow_train(epochs: int = 10):
         cl_manager.end_phase()
 
 @app.post("/workflow/export")
-async def workflow_export():
+def workflow_export():
     if cl_manager.is_busy: raise HTTPException(400, "Server is busy")
     cl_manager.start_phase("Export & Eval")
     print("[ORCHESTRATOR] Starting Export & Evaluation Phase...", flush=True)
     try:
         res = training_controller.generate_reference_and_eval()
         if res['status'] == 'success':
+            cl_manager.increment_version()
             import time
             cl_manager.update_metrics({
                 "tar": res['tar'],
@@ -129,6 +182,36 @@ async def workflow_export():
     finally:
         cl_manager.end_phase()
 
+@app.post("/workflow/full-lifecycle")
+def workflow_full_lifecycle(dbs: Session = Depends(db.get_db)):
+    if cl_manager.is_busy: raise HTTPException(400, "Server is busy")
+    
+    try:
+        # Phase 1: Import
+        cl_manager.update_logs("Starting Full Training Cycle...")
+        res_import = workflow_import(dbs)
+        if res_import.get('status') != 'success': return res_import
+        
+        # Phase 2: Preprocess
+        res_pre = workflow_preprocess()
+        if res_pre.get('status') != 'success': return res_pre
+        
+        # Phase 3: Train
+        res_train = workflow_train(epochs=10)
+        if res_train.get('status') != 'success': return res_train
+        
+        # Phase 4: Export
+        res_export = workflow_export()
+        cl_manager.update_logs("Full Training Cycle completed successfully.")
+        return res_export
+        
+    except Exception as e:
+        cl_manager.update_logs(f"CRITICAL ERROR in Lifecycle: {e}")
+        return {"status": "error", "message": str(e)}
+    finally:
+        cl_manager.is_busy = False
+        cl_manager.current_phase = "Standby"
+
 # --- Legacy & Support ---
 @app.post("/upload-bulk-zip")
 async def upload_bulk_zip(file: UploadFile = File(...)):
@@ -139,6 +222,7 @@ async def upload_bulk_zip(file: UploadFile = File(...)):
     with open(temp_path, "wb") as f: shutil.copyfileobj(file.file, f)
     with zipfile.ZipFile(temp_path, 'r') as zip_ref: zip_ref.extractall(UPLOAD_DIR)
     os.remove(temp_path)
+    cl_manager.update_received_data(UPLOAD_DIR)
     print(f"[UPLOAD] Successfully extracted {file.filename} to {UPLOAD_DIR}", flush=True)
     return {"status": "success"}
 

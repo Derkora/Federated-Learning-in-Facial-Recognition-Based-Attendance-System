@@ -1,6 +1,7 @@
 import os
 import time
 import threading
+import requests
 from app.utils.mobilefacenet import MobileFaceNet
 from app.controllers.management import ManagementController
 from app.controllers.attendance import AttendanceController
@@ -17,6 +18,7 @@ class CentralizedClientManager:
         self.reference_embeddings = {}
         self.is_registered = False
         self.has_assets = False
+        self.current_model_version = 0
 
     def start_background_tasks(self):
         print(f"[{self.client_id}] Triggering Background Tasks Thread...", flush=True)
@@ -35,26 +37,40 @@ class CentralizedClientManager:
                         time.sleep(5)
                         continue
 
-                # 2. Asset Sync
-                if not self.has_assets:
-                    success, refs = self.management.sync_assets(self.model)
-                    if success:
-                        self.has_assets = True
-                        self.reference_embeddings = refs
-                        print(f"[{self.client_id}] Model and References Synced.", flush=True)
-                    else:
-                        time.sleep(10)
-                        continue
-                
-                # 3. Training Polling
-                if self.management.check_training_request():
-                    print(f"[{self.client_id}] Server requested data (Detected via Polling). Packaging...", flush=True)
-                    success, msg = self.management.package_and_upload()
-                    if success:
-                        print(f"[{self.client_id}] Data upload success. Waiting for training...", flush=True)
-                        time.sleep(60)
-                    else:
-                        print(f"[{self.client_id}] Data upload failed: {msg}", flush=True)
+                # 2. Asset Sync / Check Version
+                try:
+                    res = requests.get(f"{self.server_url}/ping", timeout=3)
+                    if res.status_code == 200:
+                        server_info = res.json()
+                        server_version = server_info.get("model_version", 0)
+                        upload_requested = server_info.get("upload_requested", False)
+                        
+                        # Sync if never synced OR version mismatch
+                        if not self.has_assets or server_version > self.current_model_version:
+                            print(f"[{self.client_id}] Syncing Assets (Server v{server_version}, Local v{self.current_model_version})...", flush=True)
+                            success, refs = self.management.sync_assets(self.model)
+                            if success:
+                                self.has_assets = True
+                                self.reference_embeddings = refs
+                                self.current_model_version = server_version
+                                print(f"[{self.client_id}] Model and References Synced to v{server_version}.", flush=True)
+                            else:
+                                time.sleep(10)
+                                continue
+                        
+                        # 3. Training Polling (using already fetched info)
+                        if upload_requested:
+                            print(f"[{self.client_id}] Server requested data. Packaging...", flush=True)
+                            success, msg = self.management.package_and_upload()
+                            if success:
+                                print(f"[{self.client_id}] Data upload success. Waiting for training...", flush=True)
+                                time.sleep(60)
+                            else:
+                                print(f"[{self.client_id}] Data upload failed: {msg}", flush=True)
+
+                except Exception as e:
+                    print(f"[{self.client_id}] Ping/Sync Error: {e}", flush=True)
+
             except Exception as e:
                 print(f"[{self.client_id}] Error in background loop: {e}", flush=True)
 

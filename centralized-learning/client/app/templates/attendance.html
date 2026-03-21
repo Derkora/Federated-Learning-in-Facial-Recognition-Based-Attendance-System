@@ -1,14 +1,28 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div class="glass" style="padding: 1.5rem;">
-    <video id="webcam" autoplay muted playsinline></video>
-    <canvas id="canvas" style="display:none;"></canvas>
-
-    <div class="result-card" id="status-card">
-        Scanning faces...
-    </div>
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+    <h2 style="margin: 0;">Edge Terminal: {{ client_id }}</h2>
+    <span class="badge" id="model-badge">Model v{{ model_version }}</span>
 </div>
+<video id="webcam" autoplay muted playsinline></video>
+<canvas id="canvas" style="display:none;"></canvas>
+
+<div class="result-card" id="status-card">
+    Scanning faces...
+</div>
+</div>
+
+<style>
+    .badge {
+        background: var(--accent);
+        color: white;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.8rem;
+        font-weight: bold;
+    }
+</style>
 
 <script>
     const video = document.getElementById('webcam');

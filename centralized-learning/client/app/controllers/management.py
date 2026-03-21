@@ -92,6 +92,17 @@ class ManagementController:
         zip_path = "data/upload.zip"
         print(f"[MGMT] Packaging {DATA_DIR} into {zip_path}...", flush=True)
         try:
+            folder_count = 0
+            file_count = 0
+            for root, dirs, files in os.walk(DATA_DIR):
+                folder_count += len(dirs)
+                file_count += len(files)
+            
+            print(f"[MGMT] DIAGNOSTIC: Found {folder_count} student folders and {file_count} total images.", flush=True)
+
+            if file_count == 0:
+                return False, "No images found to upload"
+                
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
                 for root, dirs, files in os.walk(DATA_DIR):
                     for file in files:

@@ -28,32 +28,34 @@
                 evaluation.</p>
         </div>
 
-        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem;">
-            <button id="btn-import" class="btn btn-primary" onclick="runPhase('import')">1. IMPORT DATA</button>
-            <button id="btn-preprocess" class="btn btn-primary" onclick="runPhase('preprocess')">2. PREPROCESS</button>
-            <button id="btn-train" class="btn btn-primary" onclick="runPhase('train')">3. TRAIN MODEL</button>
-            <button id="btn-export" class="btn btn-primary" onclick="runPhase('export')">4. EXPORT & EVAL</button>
+        <div style="display: grid; grid-template-columns: 1fr; gap: 1rem;">
+            <button id="btn-lifecycle" class="btn btn-primary" onclick="runLifecycle()"
+                style="height: 60px; font-size: 1.2rem;">
+                🚀 RUN FULL TRAINING CYCLE
+            </button>
         </div>
 
-        <div id="training-terminal" style="margin-top: 1.5rem; height: 300px;">
+        <div id="training-terminal"
+            style="margin-top: 1.5rem; height: 300px; overflow-y: auto; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 8px; font-family: monospace; font-size: 0.85rem; border: 1px solid var(--accent-low);">
             [READY] Centralized Research Environment Initialized.
         </div>
     </div>
 
     <div class="glass" style="padding: 1.5rem;">
-        <h2>Detailed Metrics</h2>
+        <h2>Received Student Data</h2>
+        <div id="student-list" style="margin-top: 1.2rem; max-height: 400px; overflow-y: auto;">
+            <p style="color: var(--text-muted);">No data received yet.</p>
+        </div>
+        <hr style="margin: 1.5rem 0; border: none; border-top: 1px solid rgba(255,255,255,0.05);">
+        <h2>Biometric Health</h2>
         <div style="margin-top: 1.2rem;">
+            <div class="metric-row">
+                <span>Model Version:</span>
+                <b id="metric-version">v0</b>
+            </div>
             <div class="metric-row">
                 <span>Payload Transfer:</span>
                 <b id="metric-transfer">0 MB</b>
-            </div>
-            <div class="metric-row">
-                <span>Training Time:</span>
-                <b id="metric-train-time">0 s</b>
-            </div>
-            <div class="metric-row">
-                <span>Total Round Time:</span>
-                <b id="metric-round">0 s</b>
             </div>
             <div class="metric-row">
                 <span>EER (Equal Error Rate):</span>
@@ -75,54 +77,85 @@
     .metric-row span {
         color: var(--text-muted);
     }
+
+    .student-item {
+        padding: 5px 10px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        font-size: 0.9rem;
+    }
 </style>
 
 <script>
-    async function runPhase(phase) {
-        const terminal = document.getElementById('training-terminal');
-        const phaseLabel = document.getElementById('status-phase');
-        const buttons = ['btn-import', 'btn-preprocess', 'btn-train', 'btn-export'];
+    let pollInterval = null;
 
-        buttons.forEach(id => document.getElementById(id).disabled = true);
-        terminal.innerHTML += `<br>[ORCHESTRATOR] Starting Phase: ${phase.toUpperCase()}...`;
-        phaseLabel.innerText = "Running " + phase.toUpperCase();
+    async function runLifecycle() {
+        if (!confirm("Start full training cycle (Import -> Preprocess -> Train -> Export)?")) return;
+
+        const btn = document.getElementById('btn-lifecycle');
+        btn.disabled = true;
+
+        startPolling();
 
         try {
-            const response = await fetch(`/workflow/${phase}`, { method: 'POST' });
+            const response = await fetch(`/workflow/full-lifecycle`, { method: 'POST' });
             const result = await response.json();
 
             if (result.status === 'success') {
-                terminal.innerHTML += `<br>[SUCCESS] ${phase.toUpperCase()} complete.`;
-                if (phase === 'import') {
-                    terminal.innerHTML += `<br>Received: ${result.payload_mb} MB (${result.images} images)`;
-                    document.getElementById('metric-transfer').innerText = `${result.payload_mb} MB`;
-                }
-                if (phase === 'train') {
-                    terminal.innerHTML += `<br>Final accuracy: ${result.accuracy}%`;
-                    document.getElementById('model-acc').innerText = `${result.accuracy}%`;
-                    document.getElementById('metric-train-time').innerText = `${result.duration_s} s`;
-                }
-                if (phase === 'export') {
-                    terminal.innerHTML += `<br>Biometrics: TAR ${result.tar}% / FAR ${result.far}%`;
-                    document.getElementById('metric-biometric').innerText = `${result.tar}% / ${result.far}%`;
-                    document.getElementById('metric-eer').innerText = `${result.eer}%`;
-                }
-                refreshStats();
-            } else {
-                terminal.innerHTML += `<br>[ERROR] ${result.message || 'Unknown error'}`;
+                updateUIState(); // Final full update
             }
         } catch (e) {
-            terminal.innerHTML += `<br>[ERROR] Network/Server Error: ${e}`;
+            console.error("Lifecycle Error:", e);
         } finally {
-            buttons.forEach(id => document.getElementById(id).disabled = false);
-            phaseLabel.innerText = "Standby";
-            terminal.scrollTop = terminal.scrollHeight;
+            btn.disabled = false;
         }
     }
 
-    async function refreshStats() {
-        // Here we could fetch the full cl_manager status to update everything
-        // document.getElementById('cost-idr').innerText = ...
+    function startPolling() {
+        if (pollInterval) clearInterval(pollInterval);
+        pollInterval = setInterval(updateUIState, 2000);
     }
+
+    function stopPolling() {
+        if (pollInterval) clearInterval(pollInterval);
+        pollInterval = null;
+    }
+
+    async function updateUIState() {
+        try {
+            // 1. Fetch Status
+            const resStatus = await fetch('/api/status');
+            const status = await resStatus.json();
+
+            // Update Logs & Phase
+            const terminal = document.getElementById('training-terminal');
+            terminal.innerHTML = status.current_logs.join('<br>');
+            terminal.scrollTop = terminal.scrollHeight;
+            document.getElementById('status-phase').innerText = status.is_busy ? "Running " + status.current_phase : "Standby";
+
+            // Update Metrics
+            document.getElementById('metric-version').innerText = `v${status.model_version}`;
+            document.getElementById('metric-transfer').innerText = `${status.metrics.payload_size_mb} MB`;
+            document.getElementById('model-acc').innerText = `${status.metrics.accuracy}%`;
+            document.getElementById('metric-biometric').innerText = `${status.metrics.tar}% / ${status.metrics.far}%`;
+            document.getElementById('metric-eer').innerText = `${status.metrics.eer}%`;
+            document.getElementById('cost-idr').innerText = `Rp ${status.metrics.cost_idr.toLocaleString()}`;
+
+            // Update Student List (Training Data)
+            const list = document.getElementById('student-list');
+            if (status.received_data.length > 0) {
+                list.innerHTML = status.received_data.map(s => `<div class="student-item">✅ ${s}</div>`).join('');
+            } else {
+                list.innerHTML = '<p style="color: var(--text-muted);">No data received yet.</p>';
+            }
+
+            // Persistence of polling if busy
+            if (status.is_busy && !pollInterval) startPolling();
+            if (!status.is_busy && pollInterval && !document.getElementById('btn-lifecycle').disabled) stopPolling();
+
+        } catch (e) { console.error("Poll error:", e); }
+    }
+
+    // Initial load
+    updateUIState();
 </script>
 {% endblock %}

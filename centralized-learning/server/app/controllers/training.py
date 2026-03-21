@@ -13,6 +13,7 @@ from PIL import Image
 from app.utils.face_utils import face_handler, DEVICE
 from app.utils.mobilefacenet import MobileFaceNet, ArcMarginProduct
 from app.db import models
+from app.server_manager_instance import cl_manager
 
 # Constants
 UPLOAD_DIR = "data/students"
@@ -28,11 +29,16 @@ class TrainingController:
         os.makedirs(BALANCED_DATA, exist_ok=True)
         os.makedirs(MODEL_DIR, exist_ok=True)
 
-    def fetch_data(self, wait_timeout=600):
-        """Phase 1: Sync Wait for client data uploads."""
+    def fetch_data(self, wait_timeout=600, expected_clients=None):
+        """Phase 1: Sync Wait for client data uploads with stabilization."""
         print(f"[PHASE 1] Starting wait loop for data in {UPLOAD_DIR}...", flush=True)
-        has_data = False
+        if expected_clients:
+            print(f"[PHASE 1] Expecting data from at least {expected_clients} clients.", flush=True)
+            
         start_time = time.time()
+        last_img_count = -1
+        stable_since = None
+        STABILIZATION_TIME = 15 # Seconds of no change required
         
         while (time.time() - start_time) < wait_timeout:
             try:
@@ -40,17 +46,33 @@ class TrainingController:
                 img_count = 0
                 if len(subdirs) > 0:
                     img_count = sum([len(os.listdir(os.path.join(UPLOAD_DIR, d))) for d in subdirs])
-                    if img_count > 0:
-                        print(f"[PHASE 1] Data detected! Found {len(subdirs)} classes with {img_count} images.", flush=True)
-                        has_data = True
-                        break
-                print(f"[PHASE 1] Still waiting... (Elapsed: {int(time.time() - start_time)}s, Classes: {len(subdirs)}, Images: {img_count})", flush=True)
+                
+                # Check for progress
+                if img_count > 0:
+                    if img_count != last_img_count:
+                        last_img_count = img_count
+                        stable_since = time.time()
+                        msg = f"Progress: {len(subdirs)} classes, {img_count} images detected. Waiting for stabilization..."
+                        print(f"[PHASE 1] {msg}", flush=True)
+                        cl_manager.update_logs(msg)
+                        cl_manager.update_received_data(UPLOAD_DIR)
+                    else:
+                        elapsed_stable = time.time() - stable_since
+                        if elapsed_stable >= STABILIZATION_TIME:
+                            msg = f"Data stabilized! Final count: {len(subdirs)} classes, {img_count} images."
+                            print(f"[PHASE 1] {msg}", flush=True)
+                            cl_manager.update_logs(msg)
+                            break
+                        else:
+                            print(f"[PHASE 1] Still waiting for stabilization... ({int(STABILIZATION_TIME - elapsed_stable)}s remaining)", flush=True)
+                else:
+                    print(f"[PHASE 1] Still waiting for first upload... (Elapsed: {int(time.time() - start_time)}s)", flush=True)
             except Exception as e:
                 print(f"[PHASE 1] Error during check: {e}", flush=True)
             
             time.sleep(5)
         
-        if not has_data:
+        if last_img_count <= 0:
             return {"status": "error", "message": "No data received within timeout."}
             
         # Calculate Payload Size
@@ -62,7 +84,7 @@ class TrainingController:
             "status": "success", 
             "payload_mb": round(total_size / (1024 * 1024), 2),
             "classes": len(subdirs),
-            "images": img_count
+            "images": last_img_count
         }
 
     def preprocess_and_balance(self):
@@ -73,16 +95,24 @@ class TrainingController:
             os.makedirs(PROCESSED_DATA, exist_ok=True)
             
             # 1. MTCNN
-            for nrp_folder in os.listdir(UPLOAD_DIR):
+            folders = [f for f in os.listdir(UPLOAD_DIR) if os.path.isdir(os.path.join(UPLOAD_DIR, f))]
+            total_folders = len(folders)
+            for i, nrp_folder in enumerate(folders):
                 src = os.path.join(UPLOAD_DIR, nrp_folder)
-                if not os.path.isdir(src): continue
                 dst = os.path.join(PROCESSED_DATA, nrp_folder)
                 os.makedirs(dst, exist_ok=True)
+                
+                msg = f"Preprocessing student {i+1}/{total_folders}: {nrp_folder}"
+                print(f"[PHASE 2] {msg}", flush=True)
+                cl_manager.update_logs(msg)
+                
                 for img_name in os.listdir(src):
                     face_handler.detect_and_save(os.path.join(src, img_name), os.path.join(dst, img_name))
             
             # 2. Balancing
-            print("[PHASE 2] Starting Balancing...", flush=True)
+            msg = "Balancing dataset with augmentation..."
+            print(f"[PHASE 2] {msg}", flush=True)
+            cl_manager.update_logs(msg)
             if os.path.exists(BALANCED_DATA): shutil.rmtree(BALANCED_DATA)
             os.makedirs(BALANCED_DATA, exist_ok=True)
             
@@ -147,9 +177,12 @@ class TrainingController:
                     total += label.size(0)
                     correct += (pred == label).sum().item()
                 final_acc = round(100 * correct / total, 2)
-                print(f"[PHASE 3] Epoch {epoch+1}/{epochs} - Acc: {final_acc}%", flush=True)
+                msg = f"Epoch {epoch+1}/{epochs} - Accuracy: {final_acc}%"
+                print(f"[PHASE 3] {msg}", flush=True)
+                cl_manager.update_logs(msg)
             
             torch.save(model.state_dict(), MODEL_PATH)
+            cl_manager.update_logs("Training complete. Model saved.")
             return {
                 "status": "success", 
                 "accuracy": final_acc, 

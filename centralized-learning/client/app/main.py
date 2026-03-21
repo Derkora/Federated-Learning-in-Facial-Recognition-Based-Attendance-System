@@ -19,7 +19,8 @@ templates = Jinja2Templates(directory="app/templates")
 async def index(request: Request):
     return templates.TemplateResponse("attendance.html", {
         "request": request, 
-        "client_id": cl_client.client_id
+        "client_id": cl_client.client_id,
+        "model_version": cl_client.current_model_version
     })
 
 @app.post("/api/inference")
