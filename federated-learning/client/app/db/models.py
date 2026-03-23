@@ -9,6 +9,7 @@ class UserLocal(Base):
     user_id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String)
     nrp = Column(String)
+    global_label = Column(Integer, nullable=True) # ID from server ArcMargin head
     created_at = Column(DateTime, default=datetime.utcnow)
 
     embeddings = relationship("Embedding", back_populates="user")

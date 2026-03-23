@@ -33,17 +33,30 @@ def register_client(client: ClientStatus, db: Session = Depends(get_db)):
             existing.status = "online"
             existing.last_seen = datetime.utcnow()
         else:
-            new_client = models.Client(
-                edge_id=client.id,
-                ip_address=client.ip_address,
-                status="online",
-                last_seen=datetime.utcnow()
-            )
-            db.add(new_client)
+            try:
+                new_client = models.Client(
+                    edge_id=client.id,
+                    ip_address=client.ip_address,
+                    status="online",
+                    last_seen=datetime.utcnow()
+                )
+                db.add(new_client)
+                db.commit()
+                print(f"[REGISTRY] New Client Handshake: {client.id} ({client.ip_address})")
+            except Exception:
+                db.rollback()
+                # If another thread inserted it already, just update it now
+                existing = db.query(models.Client).filter(models.Client.edge_id == client.id).first()
+                if existing:
+                    existing.ip_address = client.ip_address
+                    existing.status = "online"
+                    existing.last_seen = datetime.utcnow()
+                    db.commit()
         db.commit()
     except Exception as e:
         db.rollback()
-        print(f"[DB ERROR] Gagal simpan client {client.id}: {e}")
+        # Suppress loud error for routine heartbeats unless it's really critical
+        pass
 
     # Menyertakan reset_counter dalam response
     return {

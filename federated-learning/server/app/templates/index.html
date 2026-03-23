@@ -39,12 +39,12 @@
         </div>
         <div id="lifecycle-controls">
             <button onclick="startLifecycle()" id="btn-start" class="btn btn-primary">
-                🚀 RUN FULL FL CYCLE
+                🚀 START FULL TRAINING CYCLE
             </button>
         </div>
     </div>
 
-    <div class="lifecycle-section">
+    <div class="lifecycle-section" style="display: grid; grid-template-columns: 300px 1fr; gap: 1.5rem;">
         <div class="phase-indicator">
             <div class="phase-step" id="step-sync">
                 <div style="font-weight: 600;">1. Client Sync</div>
@@ -58,9 +58,14 @@
                 <div style="font-weight: 600;">3. FL Training</div>
                 <div style="font-size: 0.75rem; color: var(--text-muted);">Flower aggregation rounds</div>
             </div>
+
+            <div id="log-terminal" style="margin-top: 1rem; height: 150px;">
+                <div style="color: #64748b;">Waiting for command...</div>
+            </div>
         </div>
-        <div id="log-terminal">
-            <div style="color: #64748b;">Waiting for command...</div>
+
+        <div class="glass" style="background: rgba(0,0,0,0.2); padding: 1rem; height: 350px;">
+            <canvas id="metricsChart"></canvas>
         </div>
     </div>
 </div>
@@ -87,8 +92,47 @@
 
 {% block scripts %}
 <script>
+    let metricsChart = null;
+
+    function initChart() {
+        const ctx = document.getElementById('metricsChart').getContext('2d');
+        metricsChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        label: 'Accuracy',
+                        data: [],
+                        borderColor: '#10b981',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        tension: 0.4,
+                        fill: true,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'Loss',
+                        data: [],
+                        borderColor: '#ef4444',
+                        tension: 0.4,
+                        yAxisID: 'y1'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: { type: 'linear', position: 'left', title: { display: true, text: 'Accuracy' }, min: 0, max: 1 },
+                    y1: { type: 'linear', position: 'right', title: { display: true, text: 'Loss' }, grid: { drawOnChartArea: false } }
+                },
+                plugins: { legend: { labels: { color: '#fff' } } }
+            }
+        });
+    }
+
     async function startLifecycle() {
-        if (!confirm("Start new Federated Learning lifecycle (Sync -> Preprocess -> Train)?")) return;
+        if (!confirm("Start new Federated Learning lifecycle (Training Phase)?")) return;
 
         try {
             const res = await fetch('/action/start', { method: 'POST' });
@@ -105,53 +149,72 @@
 
             // Stats
             document.getElementById('current-round').innerText = `${data.current_round}/${data.total_rounds}`;
-            document.getElementById('model-version').innerText = `v${data.model_version}`;
 
-            const logs = data.phase_logs || [];
+            // Fix double 'v'
+            let ver = data.model_version || "v0";
+            if (ver.startsWith("vv")) ver = ver.substring(1);
+            document.getElementById('model-version').innerText = ver;
+
+            const logs = data.logs || [];
             const term = document.getElementById('log-terminal');
             term.innerHTML = logs.map(l => `<div>${l}</div>`).join('');
             term.scrollTop = term.scrollHeight;
 
-            // Phase Indicators
+            // Phase Indicators (UI Logic)
             const phase = data.current_phase;
-            const steps = {
-                'syncing': 'step-sync',
-                'preprocessing': 'step-preprocess',
-                'training': 'step-train'
-            };
 
+            // Reset states
             document.getElementById('step-sync').className = 'phase-step';
             document.getElementById('step-preprocess').className = 'phase-step';
             document.getElementById('step-train').className = 'phase-step';
 
-            if (steps[phase]) {
-                const el = document.getElementById(steps[phase]);
-                el.classList.add('active');
-
-                // Mark previous as completed
-                if (phase === 'preprocessing') document.getElementById('step-sync').classList.add('completed');
-                if (phase === 'training') {
-                    document.getElementById('step-sync').classList.add('completed');
-                    document.getElementById('step-preprocess').classList.add('completed');
-                }
+            if (phase === 'syncing') {
+                document.getElementById('step-sync').classList.add('active');
+            } else if (phase === 'preprocessing') {
+                document.getElementById('step-sync').classList.add('completed');
+                document.getElementById('step-preprocess').classList.add('active');
+            } else if (phase === 'training') {
+                document.getElementById('step-sync').classList.add('completed');
+                document.getElementById('step-preprocess').classList.add('completed');
+                document.getElementById('step-train').classList.add('active');
+            } else if (phase === 'completed') {
+                document.getElementById('step-sync').classList.add('completed');
+                document.getElementById('step-preprocess').classList.add('completed');
+                document.getElementById('step-train').classList.add('completed');
             }
 
-            // Metrics
+            // Update Chart
             if (data.metrics_history && data.metrics_history.length > 0) {
                 const latest = data.metrics_history[data.metrics_history.length - 1];
                 document.getElementById('global-acc').innerText = `${(latest.accuracy * 100).toFixed(1)}%`;
+
+                if (metricsChart) {
+                    metricsChart.data.labels = data.metrics_history.map(m => `R${m.round}`);
+                    metricsChart.data.datasets[0].data = data.metrics_history.map(m => m.accuracy);
+                    metricsChart.data.datasets[1].data = data.metrics_history.map(m => m.loss);
+                    metricsChart.update('none'); // silent update
+                }
             }
 
             // Button state
             const btn = document.getElementById('btn-start');
-            if (data.running || phase !== 'idle') {
+            if (data.running || phase === 'training') {
                 btn.disabled = true;
-                btn.innerHTML = '🕒 CYCLE IN PROGRESS...';
+                btn.innerHTML = '🕒 TRAINING IN PROGRESS...';
                 btn.style.opacity = '0.5';
+                document.getElementById('phase-desc').innerText = "Flower server is aggregating model updates from clients.";
+            } else if (phase === 'completed') {
+                btn.disabled = false;
+                btn.innerHTML = '✅ TRAINING FINISHED (RESTART)';
+                btn.classList.add('btn-success');
+                btn.style.opacity = '1';
+                document.getElementById('phase-desc').innerText = "Last training cycle finished. Click to start a new 10-round session.";
             } else {
                 btn.disabled = false;
-                btn.innerHTML = '🚀 RUN FULL FL CYCLE';
+                btn.innerHTML = '🚀 START FEDERATED TRAINING';
                 btn.style.opacity = '1';
+                btn.classList.remove('btn-success');
+                document.getElementById('phase-desc').innerText = "Clients prep autonomously. Click to start the manual training rounds.";
             }
 
         } catch (e) { console.error(e); }
@@ -188,6 +251,8 @@
         } catch (e) { console.error(e); }
     }
 
+    // Initialize
+    initChart();
     setInterval(updateStatus, 2000);
     setInterval(updateClients, 2000);
     updateStatus();

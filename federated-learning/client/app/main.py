@@ -17,7 +17,7 @@ from app.utils.classifier import load_backbone, LocalClassifierHead, build_local
 from app.utils.trainer import LocalTrainer
 from app.config import config
 
-from app.client import start_flower_client, get_global_label, heartbeat_service
+from app.client import start_flower_client, get_global_label, heartbeat_service, get_current_status, sync_users_from_server
 
 CLIENT_ID = os.getenv("HOSTNAME", "client-unknown")
 MAX_USERS_CAPACITY = 100
@@ -33,10 +33,16 @@ def startup_event():
     threading.Thread(target=start_flower_client, daemon=True).start()
     # Start Heartbeat Service
     threading.Thread(target=heartbeat_service, daemon=True).start()
+    # Start Global User Sync (Every 30s)
+    threading.Thread(target=sync_users_from_server, daemon=True).start()
     
 # Mount Static & Templates
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
+
+@app.get("/api/status")
+async def get_status():
+    return {"fl_status": get_current_status()}
 
 encryptor = EmbeddingEncryptor()
 def is_model_ready():
@@ -94,7 +100,7 @@ async def attendance_live(request: Request, file: UploadFile = File(...), db: Se
         return {"status": "error", "message": "Model not ready"}
 
     backbone, model_head = build_local_model(num_classes=MAX_USERS_CAPACITY, backbone_path="local_backbone.pth", use_quantized=True)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cpu')
 
     if isinstance(backbone, torch.jit.ScriptModule):
          device = torch.device('cpu') 
@@ -119,19 +125,13 @@ async def attendance_live(request: Request, file: UploadFile = File(...), db: Se
     class_idx = predicted_class.item()
     softmax_score = confidence.item()
     
-    # Identify User
-    matched_name = "Unknown"
-    
-    users = db.query(UserLocal).all()
-    matched_user = None
-    for user in users:
-        lbl_data = get_global_label(user.nrp, client_id=CLIENT_ID)
-        if lbl_data and lbl_data.get("label") == class_idx:
-            matched_user = user
-            matched_name = user.name
-            break
+    # Identify User via Local Cache (Instant)
+    matched_user = db.query(UserLocal).filter(UserLocal.global_label == class_idx).first()
+    matched_name = matched_user.name if matched_user else "Unknown"
             
     if not matched_user:
+         # Log for debug
+         print(f"[RECOG] Predicted global index {class_idx} but no local mapping found.")
          return {
              "status": "unknown", 
              "box": box.tolist(), 
@@ -151,10 +151,18 @@ async def attendance_live(request: Request, file: UploadFile = File(...), db: Se
                 if sim > max_similarity: max_similarity = sim
             except: continue
             
+    # Final confidence for display and decision
     final_score = float(max_similarity) if max_similarity != -1.0 else softmax_score
-    THRESHOLD = 0.50
     
-    if final_score > THRESHOLD:
+    # Decision Logic: Combine Local Verification with Global Model Knowledge
+    THRESHOLD_COSINE = 0.50
+    THRESHOLD_SOFTMAX_ONLY = 0.90 # Revised for lower scale s=16
+    
+    is_verified = (max_similarity > THRESHOLD_COSINE)
+    is_confident_softmax = (softmax_score > THRESHOLD_SOFTMAX_ONLY)
+    
+    if is_verified or (max_similarity == -1.0 and is_confident_softmax):
+        # Kembalikan hanya nama, UI akan menambahkan persentase otomatis
         return {
             "status": "match",
             "box": box.tolist(),
@@ -162,12 +170,12 @@ async def attendance_live(request: Request, file: UploadFile = File(...), db: Se
             "confidence": final_score
         }
     else:
-         return {
+        return {
             "status": "unknown",
             "box": box.tolist(),
             "name": "Unknown",
             "confidence": final_score
-         }
+        }
 
 @app.post("/train")
 async def trigger_training(request: Request, db: Session = Depends(get_db)):
@@ -232,19 +240,13 @@ async def attendance(request: Request, file: UploadFile = File(...), db: Session
     class_idx = predicted_class.item()
     softmax_score = confidence.item()
     
-    # Ambil semua user lokal
-    users = db.query(UserLocal).all()
-    matched_user = None
+    # Identify User via Local Cache (Instant)
+    matched_user = db.query(UserLocal).filter(UserLocal.global_label == class_idx).first()
     
-    # Cari user lokal yang label global-nya cocok dengan hasil klasifikasi
-    for user in users:
-        lbl_data = get_global_label(user.nrp, client_id=CLIENT_ID) # Ambil label global lagi
-        if lbl_data and lbl_data.get("label") == class_idx:
-            matched_user = user
-            attendance_log["Predicted Label"] = class_idx
-            attendance_log["Predicted User NRP"] = user.nrp
-            attendance_log["Predicted User Name"] = user.name
-            break
+    if matched_user:
+        attendance_log["Predicted Label"] = class_idx
+        attendance_log["Predicted User NRP"] = matched_user.nrp
+        attendance_log["Predicted User Name"] = matched_user.name
     
     if not matched_user:
         return templates.TemplateResponse("result.html", {
@@ -281,15 +283,20 @@ async def attendance(request: Request, file: UploadFile = File(...), db: Session
         
         final_score = float(max_similarity)
     
-    THRESHOLD = 0.50 
+    # Decision Logic
+    THRESHOLD_COSINE = 0.50
+    THRESHOLD_SOFTMAX_ONLY = 0.90 
     
-    print(f"[ATTENDANCE] Kandidat: {matched_user.name} | Softmax: {softmax_score:.2f} | Cosine Sim: {final_score:.2f}")
+    is_verified = (max_similarity > THRESHOLD_COSINE)
+    is_confident_softmax = (softmax_score > THRESHOLD_SOFTMAX_ONLY)
+    
+    print(f"[ATTENDANCE] Kandidat: {matched_user.name} | Softmax: {softmax_score:.2f} | Cosine Sim: {max_similarity:.2f}")
 
     attendance_log["Softmax Score"] = f"{softmax_score:.2f}"
-    attendance_log["Cosine Similarity"] = f"{final_score:.2f}"
-    attendance_log["Threshold"] = THRESHOLD
+    attendance_log["Cosine Similarity"] = f"{max_similarity:.2f}"
     
-    if final_score > THRESHOLD:
+    if is_verified or (max_similarity == -1.0 and is_confident_softmax):
+        final_score = float(max_similarity) if max_similarity != -1.0 else softmax_score
         # REKAM LOG
         log = AttendanceLocal(
             user_id=matched_user.user_id,

@@ -16,7 +16,7 @@ os.makedirs(DEBUG_DIR, exist_ok=True)
 
 class FaceAnalysisPipeline:
     def __init__(self):
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = torch.device('cpu')
         
         print(f"[PIPELINE] Loading MTCNN on {self.device}...")
         self.mtcnn = MTCNN(
@@ -119,7 +119,9 @@ class FaceAnalysisPipeline:
 
             # Crop wajah manual
             face_img_pil = img_pil.crop(box.astype(int))
-            face_img_pil = face_img_pil.resize((112, 96)) # TARGET 112x96
+            
+            # Use Torchvision Resize for Height=112, Width=96 
+            face_img_pil = T.Resize((112, 96))(face_img_pil)
             
             # Kembalikan koordinat box ke skala asli agar gambar di UI benar
             if scale_factor != 1.0:

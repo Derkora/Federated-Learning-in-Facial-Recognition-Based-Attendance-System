@@ -8,7 +8,7 @@ from facenet_pytorch import MTCNN
 from mobilefacenet import MobileFaceNet
 import os
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cpu')
 MODEL_PATH = 'test_model.pth'
 DATASET_DIR = 'datasets_balanced' 
 

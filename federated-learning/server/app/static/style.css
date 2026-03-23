@@ -76,6 +76,17 @@ h1 {
     color: white;
 }
 
+.btn-success {
+    background: var(--accent);
+    color: white;
+    box-shadow: 0 4px 6px -1px rgba(16, 185, 129, 0.4);
+}
+
+.btn-success:hover {
+    background: #059669;
+    transform: translateY(-2px);
+}
+
 .stats-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));

@@ -4,79 +4,64 @@
 <header>
     <div>
         <h1>Edge Node Dashboard</h1>
-        <p style="color: var(--text-muted); margin-top: 0.25rem;">Local Data Storage & FL Status</p>
+        <p style="color: var(--text-muted); margin-top: 0.25rem;">Server Connectivity & Local FL Status</p>
     </div>
     <div id="connection-status">
-        <span class="badge badge-sync">Client Syncing...</span>
+        <span class="badge badge-sync">Client Active</span>
     </div>
 </header>
 
 <div class="stats-grid">
     <div class="glass stat-card">
-        <div class="stat-label">Students Synced</div>
-        <div class="stat-value">{{ user_count }}</div>
+        <div class="stat-label">Server Connection</div>
+        <div class="stat-value" id="server-status">Connecting...</div>
     </div>
     <div class="glass stat-card">
         <div class="stat-label">Local Model</div>
         <div class="stat-value">{% if model_exists %}Ready{% else %}Not Ready{% endif %}</div>
     </div>
     <div class="glass stat-card">
-        <div class="stat-label">Server Sync</div>
-        <div class="stat-value">Online</div>
+        <div class="stat-label">Students Synced</div>
+        <div class="stat-value">{{ user_count }}</div>
     </div>
 </div>
 
-<div class="glass" style="margin-bottom: 2rem;">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
-        <div>
-            <h3 style="margin: 0;">Local Student Registry</h3>
-            <p style="color: var(--text-muted); font-size: 0.875rem; margin-top: 0.25rem;">Automatically imported from
-                <code>/app/data/students/</code></p>
-        </div>
-        <a href="/attendance-page" class="btn btn-primary">
-            🚀 Go to Live Attendance
-        </a>
-    </div>
-
-    <div class="student-list" id="student-grid">
-        <!-- Dynamic -->
-    </div>
+<div class="glass" style="margin-bottom: 2rem; text-align: center; padding: 3rem 1rem;">
+    <h3 style="margin-bottom: 1rem;">Face Recognition System</h3>
+    <p style="color: var(--text-muted); margin-bottom: 2.5rem; max-width: 500px; margin-inline: auto;">
+        Sistem ini terhubung ke Orchestrator Pusat untuk sinkronisasi model wajah secara otomatis melalui Federated Learning.
+    </p>
+    <a href="/attendance-page" class="btn btn-primary" style="font-size: 1.1rem; padding: 1rem 2rem;">
+        📷 Launch Camera & Live Attendance
+    </a>
 </div>
 
 <div class="glass">
-    <h3>Federated Status</h3>
-    <p id="fl-status" style="color: var(--text-muted);">Fetching status from edge thread...</p>
+    <h3>Federated Learning Status</h3>
+    <p id="fl-status" style="color: var(--text-muted); font-family: monospace; background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 8px;">
+        Fetching status from edge thread...
+    </p>
 </div>
 
 {% endblock %}
 
 {% block scripts %}
 <script>
-    async function updateDashboard() {
+    async function updateStatus() {
         try {
-            // Simplified user list - in a real app, we'd have a separate API
-            // For now, we'll refresh the page or fetch from a new endpoint
-            const res = await fetch('/api/users'); // I'll add this endpoint
+            const res = await fetch('/api/status'); // We'll make sure this endpoint exists or use current logic
             if (res.ok) {
-                const users = await res.json();
-                const grid = document.getElementById('student-grid');
-                grid.innerHTML = users.map(u => `
-                    <div class="student-card">
-                        <div class="avatar">${u.name.charAt(0)}</div>
-                        <div>
-                            <div style="font-weight: 600;">${u.name}</div>
-                            <div style="font-size: 0.8rem; color: var(--text-muted)">${u.nrp}</div>
-                        </div>
-                        <div style="margin-left: auto;">
-                            <span class="badge badge-sync">Synced</span>
-                        </div>
-                    </div>
-                `).join('');
+                const status = await res.json();
+                document.getElementById('fl-status').innerText = status.fl_status || "Online (Standby)";
+                document.getElementById('server-status').innerText = "Online";
+                document.getElementById('server-status').style.color = "#10b981";
             }
-        } catch (e) { console.error(e); }
+        } catch (e) { 
+            document.getElementById('server-status').innerText = "Offline";
+            document.getElementById('server-status').style.color = "#ef4444";
+        }
     }
-
-    setInterval(updateDashboard, 5000);
-    updateDashboard();
+    setInterval(updateStatus, 3000);
+    updateStatus();
 </script>
 {% endblock %}

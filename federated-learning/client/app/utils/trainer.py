@@ -5,7 +5,7 @@ import numpy as np
 from sqlalchemy.orm import Session
 from app.db.models import UserLocal, Embedding
 from app.utils.security import EmbeddingEncryptor
-from app.utils.classifier import load_backbone, save_backbone, LocalClassifierHead # Import yang diubah
+from app.utils.classifier import load_backbone, save_local_model, LocalClassifierHead 
 import requests
 from app.config import config
 
@@ -15,7 +15,7 @@ class LocalTrainer:
     def __init__(self, db: Session):
         self.db = db
         self.encryptor = EmbeddingEncryptor()
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = torch.device('cpu')
 
     def _fetch_global_label(self, nrp): 
         try:
@@ -96,8 +96,8 @@ class LocalTrainer:
             if epoch % 5 == 0:
                 print(f"Epoch {epoch}: Loss {final_loss:.4f}")
 
-        # Save Model Backbone Lokal 
-        save_backbone(backbone, path="local_backbone.pth")
+        # Save Model Backbone + Head Lokal 
+        save_local_model(backbone, head)
         
         return {
             "status": "success", 
