@@ -37,7 +37,7 @@ class FaceAnalysisPipeline:
             T.RandomHorizontalFlip(p=0.5),
             T.ColorJitter(brightness=0.2, contrast=0.2),
             T.RandomRotation(degrees=15),
-            T.Resize((112, 96))
+            T.Resize((112, 96), interpolation=T.InterpolationMode.LANCZOS)
         ]
         
     def _pil_to_base64(self, img_pil):
@@ -120,8 +120,8 @@ class FaceAnalysisPipeline:
             # Crop wajah manual
             face_img_pil = img_pil.crop(box.astype(int))
             
-            # Use Torchvision Resize for Height=112, Width=96 
-            face_img_pil = T.Resize((112, 96))(face_img_pil)
+            # Use Torchvision Resize for Height=112, Width=96 with Lanczos
+            face_img_pil = T.Resize((112, 96), interpolation=T.InterpolationMode.LANCZOS)(face_img_pil)
             
             # Kembalikan koordinat box ke skala asli agar gambar di UI benar
             if scale_factor != 1.0:

@@ -33,11 +33,18 @@ class LocalTrainer:
 
         user_map = {}
         for u in users:
-            lbl = self._fetch_global_label(u.nrp)
-            if lbl is not None:
-                user_map[u.user_id] = lbl
+            # Update: Prioritize existing global_label from registration/sync
+            if u.global_label is not None:
+                user_map[u.user_id] = u.global_label
             else:
-                print(f"[TRAIN LOCAL] Gagal sync label untuk {u.name}, skip.")
+                # Fallback to server sync
+                lbl = self._fetch_global_label(u.nrp)
+                if lbl is not None:
+                    user_map[u.user_id] = lbl
+                    u.global_label = lbl # Save for next time
+                else:
+                    print(f"[TRAIN LOCAL] Gagal sync label untuk {u.name}, skip.")
+        if users: self.db.commit()
         
         X_train = [] # Data Embedding
         y_train = [] # Label (0, 1, 2...)
@@ -69,14 +76,24 @@ class LocalTrainer:
         backbone = load_backbone(path="local_backbone.pth", embedding_size=128).to(self.device)
         head = LocalClassifierHead(num_classes=MAX_USERS_CAPACITY).to(self.device)
         
+        # FREEZE & THAW STRATEGY:
+        # Bekukan lapisan fitur universal (conv1 s/d blocks) agar tidak rusak oleh data lokal.
+        # Thaw (Cairkan) hanya lapisan terakhir untuk penajaman embedding lokal.
+        for name, param in backbone.named_parameters():
+            if "linear7" in name or "linear1" in name:
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
+        
         backbone.train()
         head.train()
         
-        # Gabungkan parameter untuk dioptimasi
-        all_params = list(backbone.parameters()) + list(head.parameters())
+        # Hanya ambil parameter yang requires_grad untuk optimizer
+        trainable_params = [p for p in backbone.parameters() if p.requires_grad]
+        trainable_params += list(head.parameters())
         
         criterion = nn.CrossEntropyLoss()
-        optimizer = optim.Adam(all_params, lr=0.001)
+        optimizer = optim.Adam(trainable_params, lr=0.001)
 
         # Training Loop
         print(f"[TRAIN] Start training on {count_used} images for {len(user_map)} users...")

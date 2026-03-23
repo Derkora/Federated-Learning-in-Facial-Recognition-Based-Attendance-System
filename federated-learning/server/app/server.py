@@ -141,9 +141,9 @@ class FLServerManager:
                         
                         if aggregated_parameters is not None:
                             ndarrays = parameters_to_ndarrays(aggregated_parameters)
+                            # Update: Only handle Backbone (MobileFaceNet)
                             model = MobileFaceNet(embedding_size=128)
-                            metric_fc = ArcMarginProduct(128, 100)
-                            all_keys = list(model.state_dict().keys()) + list(metric_fc.state_dict().keys())
+                            all_keys = list(model.state_dict().keys())
                             
                             state_dict = OrderedDict()
                             for i, key in enumerate(all_keys):
@@ -196,10 +196,9 @@ class FLServerManager:
                 full_state = torch.load(buffer, map_location="cpu")
                 return ndarrays_to_parameters([val.cpu().numpy() for _, val in full_state.items()])
             else:
+                # Update: Only initial backbone parameters
                 model = MobileFaceNet(embedding_size=128)
-                metric_fc = ArcMarginProduct(128, 100)
                 params = [v.cpu().numpy() for v in model.state_dict().values()]
-                params += [v.cpu().numpy() for v in metric_fc.state_dict().values()]
                 return ndarrays_to_parameters(params)
         finally: db.close()
 

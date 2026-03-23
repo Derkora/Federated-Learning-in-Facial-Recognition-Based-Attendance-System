@@ -290,7 +290,7 @@ def load_data_from_disk():
     if not os.path.exists(processed_dir) or len(os.listdir(processed_dir)) == 0:
         return None, None
     transform = transforms.Compose([
-        transforms.Resize((112, 96)),
+        transforms.Resize((112, 96), interpolation=transforms.InterpolationMode.LANCZOS),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
     ])
@@ -311,19 +311,14 @@ class RealClient(fl.client.NumPyClient):
         if os.path.exists("local_backbone.pth"):
             self.model.load_state_dict(torch.load("local_backbone.pth", map_location=DEVICE))
     def get_parameters(self, config):
+        # Update: Only return Backbone params
         all_params = [val.cpu().numpy() for _, val in self.model.state_dict().items()]
-        all_params += [val.cpu().numpy() for _, val in self.metric_fc.state_dict().items()]
         return all_params
     def set_parameters(self, parameters):
+        # Update: parameters ONLY contains backbone weights
         backbone_keys = list(self.model.state_dict().keys())
-        head_keys = list(self.metric_fc.state_dict().keys())
-        backbone_params = parameters[:len(backbone_keys)]
-        head_params = parameters[len(backbone_keys):]
-        model_dict = OrderedDict({k: torch.tensor(v) for k, v in zip(backbone_keys, backbone_params)})
+        model_dict = OrderedDict({k: torch.tensor(v) for k, v in zip(backbone_keys, parameters)})
         self.model.load_state_dict(model_dict, strict=True)
-        if len(head_params) > 0:
-            head_dict = OrderedDict({k: torch.tensor(v) for k, v in zip(head_keys, head_params)})
-            self.metric_fc.load_state_dict(head_dict, strict=True)
     def fit(self, parameters, config):
         rnd = config.get("round", 0)
         try:

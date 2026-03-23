@@ -154,15 +154,14 @@ async def attendance_live(request: Request, file: UploadFile = File(...), db: Se
     # Final confidence for display and decision
     final_score = float(max_similarity) if max_similarity != -1.0 else softmax_score
     
-    # Decision Logic: Combine Local Verification with Global Model Knowledge
-    THRESHOLD_COSINE = 0.50
-    THRESHOLD_SOFTMAX_ONLY = 0.90 # Revised for lower scale s=16
+    # Decision Logic: Prioritize Cosine Similarity (Strict 0.7 Threshold)
+    # Aligned with evaluation: primary check is against local Embedding DB
+    THRESHOLD_COSINE = 0.70
+    THRESHOLD_SOFTMAX_FOR_REMOTE = 0.95 # Higher for remote users (no local samples)
     
-    is_verified = (max_similarity > THRESHOLD_COSINE)
-    is_confident_softmax = (softmax_score > THRESHOLD_SOFTMAX_ONLY)
+    is_verified = (max_similarity >= THRESHOLD_COSINE)
     
-    if is_verified or (max_similarity == -1.0 and is_confident_softmax):
-        # Kembalikan hanya nama, UI akan menambahkan persentase otomatis
+    if is_verified:
         return {
             "status": "match",
             "box": box.tolist(),
@@ -283,20 +282,19 @@ async def attendance(request: Request, file: UploadFile = File(...), db: Session
         
         final_score = float(max_similarity)
     
-    # Decision Logic
-    THRESHOLD_COSINE = 0.50
-    THRESHOLD_SOFTMAX_ONLY = 0.90 
+    # Decision Logic: Stricter Cosine Primary
+    THRESHOLD_COSINE = 0.70
+    THRESHOLD_SOFTMAX_FOR_REMOTE = 0.95 
     
-    is_verified = (max_similarity > THRESHOLD_COSINE)
-    is_confident_softmax = (softmax_score > THRESHOLD_SOFTMAX_ONLY)
+    is_verified = (max_similarity >= THRESHOLD_COSINE)
     
     print(f"[ATTENDANCE] Kandidat: {matched_user.name} | Softmax: {softmax_score:.2f} | Cosine Sim: {max_similarity:.2f}")
 
     attendance_log["Softmax Score"] = f"{softmax_score:.2f}"
     attendance_log["Cosine Similarity"] = f"{max_similarity:.2f}"
     
-    if is_verified or (max_similarity == -1.0 and is_confident_softmax):
-        final_score = float(max_similarity) if max_similarity != -1.0 else softmax_score
+    if is_verified:
+        final_score = float(max_similarity)
         # REKAM LOG
         log = AttendanceLocal(
             user_id=matched_user.user_id,
