@@ -48,21 +48,6 @@ docker-compose -f deployment/docker-compose-client1.yaml up --build -d
 
 ---
 
-## Konfigurasi Koneksi (PENTING)
-
-Saat client berjalan di perangkat yang berbeda dengan server, Anda perlu mengatur alamat IP Server.
-
-1. Buka Dashboard Client di browser (misal: `http://ip-client:8080` atau `http://localhost:8082` jika simulasi).
-2. Klik tombol **"Pengaturan Koneksi"**.
-3. Masukkan IP Server:
-   - **Server API URL**: `http://[IP_SERVER]:8080`
-   - **Flower Server Address**: `[IP_SERVER]:8085`
-4. Klik **Simpan**. Client akan otomatis mencoba koneksi ulang.
-
-**Catatan**: Pengaturan ini disimpan di file `client/app/config.json`.
-
----
-
 ## Struktur Folder
 - `/server`: Kode backend Server (FastAPI + Flower Server Strategy).
 - `/client`: Kode Edge Client (FastAPI + Flower Client + Face Recognition Pipeline).
