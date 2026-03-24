@@ -117,11 +117,12 @@ class LocalTrainer:
         self.data_path = data_path
         
         # Training Augmentation: Focus on Scale & Translation (as per expert review)
+        from torchvision.transforms import InterpolationMode
         self.transform = transforms.Compose([
-            transforms.Resize((112, 112)), 
+            transforms.Resize((112, 112), interpolation=InterpolationMode.BILINEAR), 
             transforms.RandomHorizontalFlip(),
-            transforms.RandomResizedCrop((112, 96), scale=(0.8, 1.0), ratio=(0.75, 1.33)),
-            transforms.RandomAffine(degrees=10, translate=(0.1, 0.1)),
+            transforms.RandomResizedCrop((112, 112), scale=(0.8, 1.0), interpolation=InterpolationMode.BILINEAR),
+            transforms.RandomAffine(degrees=10, translate=(0.1, 0.1), interpolation=InterpolationMode.BILINEAR),
             transforms.ColorJitter(brightness=0.1, contrast=0.1), # Very subtle
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])

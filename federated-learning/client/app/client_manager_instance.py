@@ -65,22 +65,38 @@ class FLClientManager:
         self.current_phase = "idle"
         self.fl_status = "Online (Menunggu Instruksi)"
         self.last_phase = "idle"
+        
+        # Stability tracking
+        self.is_registered = False
+        self.last_register_attempt = 0
+        self.register_retry_delay = 30 # seconds
 
         # Start heartbeat thread
         threading.Thread(target=self.heartbeat_loop, daemon=True).start()
 
     def report_status(self, status=None):
         if status: self.fl_status = status
+        
+        # Rate limit registration attempts if not successful
+        now = time.time()
+        if self.is_registered and not status: # Routine heartbeat is fine
+            pass # We still want to send heartbeat, let's keep it simple
+        elif not self.is_registered and (now - self.last_register_attempt < self.register_retry_delay):
+            return
+
         try:
+            self.last_register_attempt = now
             payload = {
                 "id": self.client_id,
                 "ip_address": socket.gethostbyname(socket.gethostname()),
                 "fl_status": self.fl_status,
-                "last_seen": time.time()
+                "last_seen": now
             }
-            requests.post(f"{self.server_api_url}/api/clients/register", json=payload, timeout=2)
+            res = requests.post(f"{self.server_api_url}/api/clients/register", json=payload, timeout=2)
+            if res.status_code == 200:
+                self.is_registered = True
         except:
-            pass
+            self.is_registered = False
 
     def heartbeat_loop(self):
         print(f"[CLIENT] Heartbeat service started for {self.client_id}")
@@ -113,11 +129,48 @@ class FLClientManager:
             self.start_fl()
         elif phase == "idle" or phase == "completed":
             self.fl_status = "Online (Selesai)"
-        
-        # POST-TRAINING REFRESH: If we just finished training, refresh embeddings
+            
+        # POST-TRAINING REFRESH: If we just finished training (transition away from training)
         if self.last_phase == "training" and phase != "training":
-            print("[CLIENT] Training finished. Refreshing local embeddings...")
-            threading.Thread(target=self.refresh_local_embeddings, daemon=True).start()
+            print("[CLIENT] Training finished. Downloading latest model and refreshing local embeddings...")
+            def update_task():
+                if self.download_global_model():
+                    self.refresh_local_embeddings()
+            threading.Thread(target=update_task, daemon=True).start()
+
+    def download_global_model(self):
+        """Atomic Update: Download backbone parameters from server and reload."""
+        try:
+            url = f"{self.server_api_url}/api/model/backbone"
+            print(f"[RELOAD] Fetching latest backbone from {url}...")
+            res = requests.get(url, timeout=30)
+            if res.status_code == 200:
+                # Save as ndarrays bytes
+                tmp_path = os.path.join(self.data_path, "backbone_tmp.pth")
+                save_path = os.path.join(self.data_path, "backbone.pth")
+                
+                with open(tmp_path, "wb") as f:
+                    f.write(res.content)
+                
+                # Atomic swap
+                os.replace(tmp_path, save_path)
+                
+                # Load ndarrays
+                parameters = torch.load(save_path, map_location=self.device)
+                
+                # Apply to model
+                from collections import OrderedDict
+                params_dict = zip(self.backbone.state_dict().keys(), parameters)
+                state_dict = OrderedDict({k: torch.tensor(v) for k, v in params_dict})
+                self.backbone.load_state_dict(state_dict, strict=True)
+                
+                print(f"[RELOAD] Backbone updated atomically on {self.device}")
+                return True
+            else:
+                print(f"[RELOAD] Server returned {res.status_code} during model fetch.")
+        except Exception as e:
+            print(f"[RELOAD ERROR] {e}")
+        return False
 
     def run_sync_phase(self):
         self.report_status("Processing: Sinkronisasi Data...")
@@ -205,8 +258,9 @@ class FLClientManager:
                 
                 # We don't need detections since it's already a processed face
                 from torchvision import transforms
+                from torchvision.transforms import InterpolationMode
                 preprocess = transforms.Compose([
-                    transforms.Resize((112, 96)), # MobileFaceNet expected size (matching trainer)
+                    transforms.Resize((112, 112), interpolation=InterpolationMode.BILINEAR), 
                     transforms.ToTensor(),
                     transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
                 ])
@@ -215,7 +269,10 @@ class FLClientManager:
                 
                 with torch.no_grad():
                     self.backbone.eval()
-                    embedding_np = self.backbone(input_tensor).cpu().numpy()[0]
+                    embedding_tensor = self.backbone(input_tensor)
+                    # L2 NORMALIZATION (Expert requirement)
+                    embedding_tensor = torch.nn.functional.normalize(embedding_tensor, p=2, dim=1)
+                    embedding_np = embedding_tensor.cpu().numpy()[0]
                     
                 # Update DB
                 from .utils.encryptor import encryptor

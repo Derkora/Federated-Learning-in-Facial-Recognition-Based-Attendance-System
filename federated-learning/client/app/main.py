@@ -63,7 +63,10 @@ async def api_inference(data: dict, background_tasks: BackgroundTasks, db: Sessi
         
         with torch.no_grad():
             fl_manager.backbone.eval()
-            query_embedding = fl_manager.backbone(input_tensor).cpu().numpy()[0]
+            query_embedding_tensor = fl_manager.backbone(input_tensor)
+            # L2 NORMALIZATION (Critical for similarity)
+            query_embedding_tensor = torch.nn.functional.normalize(query_embedding_tensor, p=2, dim=1)
+            query_embedding = query_embedding_tensor.cpu().numpy()[0]
         
         embeddings = db.query(EmbeddingLocal).all()
         local_refs = {}
@@ -140,9 +143,17 @@ async def register_user(user_id: str, name: str, image_base64: str, db: Session 
         if face_tensor is not None:
             input_tensor = image_processor.prepare_for_model(face_tensor)
             with torch.no_grad():
+                fl_manager.backbone.eval()
                 embedding = fl_manager.backbone(input_tensor)
+                # L2 NORMALIZATION (Expert requirement)
+                embedding = torch.nn.functional.normalize(embedding, p=2, dim=1)
                 embedding_np = embedding.cpu().numpy()[0]
+                
+                # Encrypt and save locally
                 encrypted_data, iv = encryptor.encrypt_embedding(embedding_np)
+                new_emb = EmbeddingLocal(user_id=user_id, embedding_data=encrypted_data, iv=iv, is_global=False)
+                db.add(new_emb)
+                db.commit()
             
             server_url = os.getenv("SERVER_API_URL", "http://server-fl:8080")
             try:

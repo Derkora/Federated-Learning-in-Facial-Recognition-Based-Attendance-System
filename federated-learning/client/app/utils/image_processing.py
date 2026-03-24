@@ -1,5 +1,6 @@
 import torch
 import torchvision.transforms as T
+from torchvision.transforms import InterpolationMode
 import torchvision.transforms.functional as TF
 from facenet_pytorch import MTCNN
 
@@ -18,7 +19,7 @@ class ImageProcessor:
         
         # Preprocessing matching the trainer and model.ipynb (Tensors)
         self.preprocess = T.Compose([
-            T.Resize((112, 96)), 
+            T.Resize((112, 112), interpolation=InterpolationMode.BILINEAR), 
             T.ConvertImageDtype(torch.float32), 
             T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ])

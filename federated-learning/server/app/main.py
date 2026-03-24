@@ -170,6 +170,15 @@ async def register_client(data: dict, db: Session = Depends(get_db)):
         
     return {"status": "ok", "server_time": time.time()}
 
+from fastapi.responses import Response
+
+@app.get("/api/model/backbone")
+async def get_backbone_model(db: Session = Depends(get_db)):
+    global_model = db.query(GlobalModel).order_by(GlobalModel.last_updated.desc()).first()
+    if not global_model or not global_model.weights:
+        raise HTTPException(status_code=404, detail="Global model not found")
+    return Response(content=global_model.weights, media_type="application/octet-stream")
+
 @app.get("/api/training/status")
 async def get_training_status():
     return {
@@ -279,9 +288,30 @@ async def get_fl_status(session_id: str, db: Session = Depends(get_db)):
         "phase_logs": phase_logs
     }
 
+def export_latest_model_to_disk():
+    """Exports the latest global model from DB to disk for visibility/backup."""
+    db = SessionLocal()
+    try:
+        global_model = db.query(GlobalModel).order_by(GlobalModel.last_updated.desc()).first()
+        if global_model and global_model.weights:
+            import io
+            import torch
+            import numpy as np
+            
+            os.makedirs("data", exist_ok=True)
+            # weights are saved as ndarrays in the buffer
+            weights_np = torch.load(io.BytesIO(global_model.weights))
+            torch.save(weights_np, "data/backbone.pth")
+            print(f"[STARTUP] Exported global model (v{global_model.version}) to data/backbone.pth")
+    except Exception as e:
+        print(f"[STARTUP] Failed to export model to disk: {e}")
+    finally:
+        db.close()
+
 @app.on_event("startup")
 def startup_event():
     print(f"[STARTUP] FL Server Dashboard Initialized", flush=True)
+    export_latest_model_to_disk()
 
 if __name__ == "__main__":
     

@@ -1,4 +1,5 @@
 import flwr as fl
+import os
 from typing import List, Tuple, Optional, Dict
 import numpy as np
 import torch
@@ -37,17 +38,14 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
         if aggregated_parameters is not None:
             print(f"Round {server_round} aggregated. Saving to database...")
             
-            # Convert to ndarrays for serialization
             params_np = fl.common.parameters_to_ndarrays(aggregated_parameters)
             
-            # Use aggregated_metrics if FitRes reported them and they were aggregated by weighted_average
             final_loss = aggregated_metrics.get("loss", 0.0)
             final_acc = aggregated_metrics.get("accuracy", 0.0)
             
             # Save to DB
             db = SessionLocal()
             try:
-                # 1. Save Round Info
                 new_round = FLRound(
                     session_id=self.session_id,
                     round_number=server_round,
@@ -56,7 +54,6 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                 )
                 db.add(new_round)
                 
-                # 2. Update Global Model
                 buf = io.BytesIO()
                 torch.save(params_np, buf)
                 
@@ -70,6 +67,13 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                     global_model.last_updated = datetime.utcnow()
                 
                 db.commit()
+                
+                try:
+                    os.makedirs("data", exist_ok=True)
+                    torch.save(params_np, "data/backbone.pth")
+                except Exception as e:
+                    print(f"Warning: Could not save backbone.pth to disk: {e}")
+                    
             except Exception as e:
                 print(f"Error saving round {server_round}: {e}")
                 db.rollback()
