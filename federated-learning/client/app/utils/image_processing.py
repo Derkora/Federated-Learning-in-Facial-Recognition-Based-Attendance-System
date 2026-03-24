@@ -3,7 +3,7 @@ import torchvision.transforms as T
 import torchvision.transforms.functional as TF
 from facenet_pytorch import MTCNN
 
-DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+DEVICE = torch.device('cpu')
 
 class ImageProcessor:
     def __init__(self):

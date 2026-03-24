@@ -116,12 +116,13 @@ class LocalTrainer:
         self.head = head.to(self.device)
         self.data_path = data_path
         
-        # Training Augmentation: Resize (112x96), Jitter, Rotate, Flip, Tensor, Normalize
+        # Training Augmentation: Focus on Scale & Translation (as per expert review)
         self.transform = transforms.Compose([
-            transforms.Resize((112, 96)),
-            transforms.ColorJitter(brightness=0.2, contrast=0.2),
-            transforms.RandomRotation(degrees=15),
-            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.Resize((112, 112)), 
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomResizedCrop((112, 96), scale=(0.8, 1.0), ratio=(0.75, 1.33)),
+            transforms.RandomAffine(degrees=10, translate=(0.1, 0.1)),
+            transforms.ColorJitter(brightness=0.1, contrast=0.1), # Very subtle
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ])
@@ -142,7 +143,7 @@ class LocalTrainer:
         except Exception as e:
             print(f"[METRICS ERROR] Failed to save CM: {e}")
 
-    def train(self, epochs=1, lr=0.01, round_num=0, global_embeddings=None):
+    def train(self, epochs=1, lr=0.0001, round_num=0, global_embeddings=None):
         dataset = FaceDataset(self.data_path, global_embeddings=global_embeddings, transform=self.transform)
         if len(dataset) == 0:
             print("No data found for training.")
@@ -165,7 +166,7 @@ class LocalTrainer:
         
         optimizer = torch.optim.SGD(
             trainable_params, 
-            lr=lr, momentum=0.9, weight_decay=5e-4
+            lr=lr, momentum=0.9, weight_decay=1e-3 # Stronger regularization
         )
         
         self.backbone.train()

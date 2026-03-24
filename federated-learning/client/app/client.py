@@ -39,7 +39,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
             raise e
         
         epochs = config.get("local_epochs", 1)
-        lr = config.get("lr", 0.01)
+        lr = config.get("lr", 0.0001)
         
         print(f"FL Fit [Round {rnd}]: Starting local training for {epochs} epochs...")
         

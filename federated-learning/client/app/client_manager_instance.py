@@ -15,9 +15,8 @@ from .utils.face_pipeline import face_pipeline
 class FLClientManager:
     def __init__(self):
         self.data_path = os.getenv("DATA_PATH", "/app/data")
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        # self.device = torch.device("cpu") # Force CPU if needed
-        print(f"[HARDWARE] Using device: {self.device}")
+        self.device = torch.device("cpu")
+        print(f"[HARDWARE] Forced device: {self.device}")
         
         self.backbone = MobileFaceNet().to(self.device).eval()
         
