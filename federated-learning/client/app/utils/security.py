@@ -13,31 +13,31 @@ class EmbeddingEncryptor:
             self.key = secret.encode()[:32]
             
         if len(self.key) != 32:
-            raise ValueError("AES Key harus 32 bytes (256 bit)")
+            raise ValueError("AES Key must be 32 bytes (256 bits)")
 
     def encrypt_embedding(self, embedding_numpy):
         """
         Input: numpy array
-        Output: (encrypted_bytes, iv, salt)
+        Output: (encrypted_bytes, iv)
         """
         data_bytes = pickle.dumps(embedding_numpy)
 
         iv = os.urandom(16)
-        salt = os.urandom(16) 
-
         cipher = Cipher(algorithms.AES(self.key), modes.CBC(iv), backend=default_backend())
         encryptor = cipher.encryptor()
 
+        # Padding (PKCS7)
         padder = padding.PKCS7(128).padder()
         padded_data = padder.update(data_bytes) + padder.finalize()
 
+        # Encrypt
         encrypted_data = encryptor.update(padded_data) + encryptor.finalize()
 
-        return encrypted_data, iv, salt
+        return encrypted_data, iv
 
     def decrypt_embedding(self, encrypted_data, iv):
         """
-        Mengembalikan numpy array dari data terenkripsi
+        Returns numpy array from encrypted data
         """
         cipher = Cipher(algorithms.AES(self.key), modes.CBC(iv), backend=default_backend())
         decryptor = cipher.decryptor()
@@ -48,3 +48,5 @@ class EmbeddingEncryptor:
         data_bytes = unpadder.update(padded_data) + unpadder.finalize()
 
         return pickle.loads(data_bytes)
+
+encryptor = EmbeddingEncryptor()

@@ -1,0 +1,78 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="glass" style="max-width: 640px; margin: 0 auto; padding: 2rem; text-align: left;">
+    <h2 style="margin-top: 0;">User Registration</h2>
+    <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 2rem;">Register a new student to this
+        terminal. Images will stay local for training.</p>
+
+    <div style="margin-bottom: 1.5rem;">
+        <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem;">Full Name</label>
+        <input type="text" id="name" placeholder="Enter name"
+            style="width: 100%; padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); color: white;">
+    </div>
+
+    <div style="margin-bottom: 1.5rem;">
+        <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem;">User ID (NRP)</label>
+        <input type="text" id="user_id" placeholder="Enter ID"
+            style="width: 100%; padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); color: white;">
+    </div>
+
+    <div style="margin-bottom: 1.5rem;">
+        <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem;">Face Capture</label>
+        <video id="webcam" autoplay muted playsinline
+            style="width: 100%; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1);"></video>
+        <canvas id="canvas" style="display:none;"></canvas>
+    </div>
+
+    <button id="register-btn" class="btn" style="width: 100%;" onclick="register()">REGISTER & SAVE DATA</button>
+    <div id="reg-status" style="margin-top: 1rem; text-align: center; font-size: 0.875rem;"></div>
+</div>
+
+<script>
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('canvas');
+
+    async function setupCamera() {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = stream;
+    }
+
+    async function register() {
+        const name = document.getElementById('name').value;
+        const user_id = document.getElementById('user_id').value;
+        const btn = document.getElementById('register-btn');
+        const status = document.getElementById('reg-status');
+
+        if (!name || !user_id) return alert("Please fill all fields");
+
+        btn.disabled = true;
+        status.innerText = "Processing...";
+
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext('2d').drawImage(video, 0, 0);
+        const imageBase64 = canvas.toDataURL('image/jpeg').split(',')[1];
+
+        try {
+            const res = await fetch(`/api/register?user_id=${user_id}&name=${name}&image_base64=${encodeURIComponent(imageBase64)}`, {
+                method: 'POST'
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                status.innerText = "✅ Registration Successful!";
+                status.style.color = "var(--accent)";
+                setTimeout(() => location.href = "/", 1500);
+            } else {
+                status.innerText = "❌ Error: " + data.detail;
+            }
+        } catch (e) {
+            status.innerText = "❌ Connection failed";
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    setupCamera();
+</script>
+{% endblock %}

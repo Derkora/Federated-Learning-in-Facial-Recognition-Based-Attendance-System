@@ -1,0 +1,138 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div
+    style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; max-width: 640px; margin-left: auto; margin-right: auto;">
+    <h2 style="margin: 0; font-size: 1.1rem; color: var(--text-muted);">Terminal: {{ client_id }}</h2>
+    <div style="display: flex; gap: 0.5rem; align-items: center;">
+        <span class="badge {{ 'badge-training' if is_training else 'badge-online' }}" id="fl-status">
+            {{ "TRAINING" if is_training else "ONLINE" }}
+        </span>
+        <span class="badge" id="version-badge" style="background: var(--accent); color: white; border: none;">
+            v.{{ model_version }}
+        </span>
+    </div>
+</div>
+
+<video id="webcam" autoplay muted playsinline style="display: none;"></video>
+<div id="camera-placeholder"
+    style="width: 100%; max-width: 640px; aspect-ratio: 4/3; margin: 0 auto 1.5rem; background: rgba(255,255,255,0.05); border: 1px dashed rgba(255,255,255,0.2); border-radius: 20px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 1rem;">
+    <div style="font-size: 3rem;">📷</div>
+    <div style="color: var(--text-muted);">Camera is currently OFF</div>
+</div>
+<canvas id="canvas" style="display:none;"></canvas>
+
+<div style="text-align: center; margin-bottom: 2rem;">
+    <button id="camera-toggle" class="glass"
+        style="padding: 10px 24px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.1); color: white; cursor: pointer; transition: 0.3s; font-weight: 600;">
+        Turn Camera ON
+    </button>
+</div>
+
+<div class="result-card" id="status-card">
+    Camera is stopped.
+</div>
+
+<script>
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('canvas');
+    const statusCard = document.getElementById('status-card');
+    const cameraToggle = document.getElementById('camera-toggle');
+    const placeholder = document.getElementById('camera-placeholder');
+
+    let isCameraOn = false;
+    let stream = null;
+
+    async function toggleCamera() {
+        if (!isCameraOn) {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = stream;
+                video.style.display = "block";
+                placeholder.style.display = "none";
+                cameraToggle.innerText = "Turn Camera OFF";
+                cameraToggle.style.background = "rgba(239, 68, 68, 0.2)";
+                isCameraOn = true;
+                statusCard.innerText = "Scanning faces...";
+            } catch (err) {
+                console.error("Gagal nyalakan kamera: ", err);
+                statusCard.innerText = "Error: Kamera tidak terdeteksi!";
+            }
+        } else {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+            video.srcObject = null;
+            video.style.display = "none";
+            placeholder.style.display = "flex";
+            cameraToggle.innerText = "Turn Camera ON";
+            cameraToggle.style.background = "rgba(255, 255, 255, 0.05)";
+            isCameraOn = false;
+            statusCard.innerText = "Camera is stopped.";
+        }
+    }
+
+    cameraToggle.addEventListener('click', toggleCamera);
+
+    async function sendFrame() {
+        if (!isCameraOn || !video.videoWidth) return;
+
+        // Skip inference if training to save CPU
+        const statusBadge = document.getElementById('fl-status');
+        if (statusBadge.innerText.includes('TRAINING')) {
+            statusCard.innerHTML = `<span style="color: var(--accent);">🔄 Training in progress...</span><br><small style="color: var(--text-muted);">Inference paused to boost training speed</small>`;
+            return;
+        }
+
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext('2d').drawImage(video, 0, 0);
+
+        const dataUrl = canvas.toDataURL('image/jpeg');
+        const base64Data = dataUrl.split(',')[1];
+
+        try {
+            const response = await fetch('/api/inference', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: base64Data })
+            });
+            const result = await response.json();
+
+            if (result.matched !== "Unknown" && result.matched !== "Error") {
+                statusCard.innerHTML = `<span style="color: #10b981;">Accepted: ${result.matched}</span> <br><small style="color: var(--text-muted); font-size: 0.8rem;">Confidence: ${(result.confidence * 100).toFixed(1)}% | ${result.latency_ms}ms</small>`;
+            } else if (result.matched === "Error") {
+                statusCard.innerText = "Processing Error";
+                statusCard.style.color = "#ef4444";
+            } else {
+                statusCard.innerText = "Scanning faces...";
+                statusCard.style.color = "#f8fafc";
+            }
+        } catch (e) {
+            console.error("Inference Error:", e);
+        }
+    }
+
+    setInterval(sendFrame, 1500);
+
+    // Auto refresh training status
+    setInterval(async () => {
+        const res = await fetch('/');
+        const text = await res.text();
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(text, 'text/html');
+        const statusElem = doc.getElementById('fl-status');
+        if (!statusElem) return;
+
+        const status = statusElem.innerText;
+        const statusBadge = document.getElementById('fl-status');
+        const versionBadge = document.getElementById('version-badge');
+
+        statusBadge.innerText = status;
+        statusBadge.className = `badge ${status.includes('TRAINING') ? 'badge-training' : 'badge-online'}`;
+
+        const newVersion = doc.getElementById('version-badge').innerText;
+        versionBadge.innerText = newVersion;
+    }, 5000);
+</script>
+{% endblock %}

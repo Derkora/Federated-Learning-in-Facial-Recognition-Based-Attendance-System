@@ -69,7 +69,6 @@ class TrainingRound(Base):
 
 class TrainingUpdate(Base):
     __tablename__ = "training_updates"
-    # Tabel Training Updates (Log kiriman client)
     update_id = Column(Integer, primary_key=True)
     round_id = Column(Integer, ForeignKey("training_rounds.round_id"))
     edge_id = Column(String, ForeignKey("clients.edge_id"))

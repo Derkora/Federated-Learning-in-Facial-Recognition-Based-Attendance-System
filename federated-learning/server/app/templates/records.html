@@ -1,0 +1,53 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="glass" style="padding: 1.5rem;">
+    <h2>Today's Attendance Board</h2>
+    <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 2rem;">Real-time monitoring of today's student
+        check-ins across all terminals.</p>
+
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>NRP</th>
+                    <th>Name</th>
+                    <th>Status</th>
+                    <th>Time</th>
+                    <th>Terminal</th>
+                    <th>Confidence</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for record in records %}
+                <tr>
+                    <td><code>{{ record.nrp }}</code></td>
+                    <td><b>{{ record.name }}</b></td>
+                    <td>
+                        {% if record.status == 'PRESENT' %}
+                        <span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #10b981;">
+                            ✅ PRESENT
+                        </span>
+                        {% else %}
+                        <span class="badge" style="background: rgba(239, 68, 68, 0.2); color: #ef4444;">
+                            ❌ ABSENT
+                        </span>
+                        {% endif %}
+                    </td>
+                    <td>{{ record.timestamp.strftime('%H:%M:%S') if record.timestamp else '-' }}</td>
+                    <td><small>{{ record.edge_id }}</small></td>
+                    <td>{{ (record.confidence * 100) | round(1) }}%</td>
+                </tr>
+                {% endfor %}
+                {% if not records %}
+                <tr>
+                    <td colspan="6" style="padding: 40px; text-align: center; color: var(--text-muted);">
+                        No students registered in the system yet.
+                    </td>
+                </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

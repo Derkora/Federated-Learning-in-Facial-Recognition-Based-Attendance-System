@@ -70,8 +70,6 @@ class MobileFaceNet(nn.Module):
         self.conv2 = ConvBlock(128, 512, 1, 1, 0)
 
         self.linear7 = ConvBlock(512, 512, (7, 6), 1, 0, dw=True, linear=True)
-
-        # UPDATE DI SINI: Gunakan variabel embedding_size, bukan hardcode 128
         self.linear1 = ConvBlock(512, embedding_size, 1, 1, 0, linear=True)
 
         for m in self.modules():
