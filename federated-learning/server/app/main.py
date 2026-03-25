@@ -28,7 +28,7 @@ templates = Jinja2Templates(directory="app/templates")
 # Global state
 active_session_id = None
 is_server_running = False
-current_phase = "idle" # idle, syncing, preprocessing, training, completed
+current_phase = "idle"
 phase_logs = []
 registered_clients = {}
 
@@ -113,23 +113,23 @@ async def start_fl_training(rounds: int = 10, min_clients: int = 2):
                     time.sleep(2)
                 return False
 
-            # 1. SYNCING
-            current_phase = "syncing"
-            add_phase_log("Phase 1: Instructing clients to synchronize student data...")
-            if not wait_for_clients("Siap Preprocess"):
-                add_phase_log("⚠️ Phase 1 Timeout: Not all clients synced in time.")
-            else:
-                add_phase_log(f"Phase 1 Complete: Clients synchronized.")
-
-            # 2. PREPROCESSING
+            # PREPROCESSING 
             current_phase = "preprocessing"
-            add_phase_log("Phase 2: Instructing clients to perform face extraction...")
+            add_phase_log("Phase 1: Instructing clients to perform face extraction and registration...")
             if not wait_for_clients("Siap Training", timeout=600):
-                 add_phase_log("⚠️ Phase 2 Timeout: Preprocessing taking too long.")
+                 add_phase_log("⚠️ Phase 1 Timeout: Preprocessing taking too long.")
             else:
-                add_phase_log(f"Phase 2 Complete: Face extraction finished.")
+                add_phase_log(f"Phase 1 Complete: Face extraction and registration finished.")
 
-            # 3. TRAINING
+            # SYNCING 
+            current_phase = "syncing"
+            add_phase_log("Phase 2: Instructing clients to synchronize collective student data...")
+            if not wait_for_clients("Siap Preprocess"):
+                add_phase_log("⚠️ Phase 2 Timeout: Not all clients synced in time.")
+            else:
+                add_phase_log(f"Phase 2 Complete: Collective knowledge synchronized.")
+
+            # TRAINING
             current_phase = "training"
             add_phase_log(f"Phase 3: Starting Flower Server Training (Rounds: {rounds})...")
             start_flower_server(session_id, rounds=rounds, min_clients=min_clients)
@@ -319,7 +319,7 @@ def export_reference_embeddings():
         for u in users:
             # Convert LargeBinary to numpy then to torch
             emb_np = np.frombuffer(u.embedding, dtype=np.float32)
-            ref_dict[u.nrp] = torch.from_numpy(emb_np)
+            ref_dict[u.nrp] = torch.from_numpy(emb_np.copy())
         
         os.makedirs("data", exist_ok=True)
         torch.save(ref_dict, "data/reference_embeddings.pth")

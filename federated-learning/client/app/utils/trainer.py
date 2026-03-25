@@ -13,16 +13,9 @@ from sklearn.metrics import confusion_matrix, classification_report
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
+import random
 
 class ArcMarginProduct(nn.Module):
-    r"""Implement of large margin arc distance: :
-        Args:
-            in_features: size of each input sample
-            out_features: size of each output sample
-            s: norm of input feature
-            m: margin
-            cos(theta + m)
-        """
     def __init__(self, in_features, out_features, s=30.0, m=0.50, easy_margin=False):
         super(ArcMarginProduct, self).__init__()
         self.in_features = in_features
@@ -46,6 +39,7 @@ class ArcMarginProduct(nn.Module):
             phi = torch.where(cosine > 0, phi, cosine)
         else:
             phi = torch.where(cosine > self.th, phi, cosine - self.mm)
+            
         if label.size(0) == 0:
             return torch.zeros(cosine.size(), device=input.device)
             
@@ -56,14 +50,30 @@ class ArcMarginProduct(nn.Module):
 
         return output
 
+def hybrid_collate(batch):
+    imgs = []
+    embs = []
+    labels = []
+    is_embedding = []
+    
+    for data, label, is_emb in batch:
+        labels.append(label)
+        is_embedding.append(is_emb)
+        if is_emb:
+            embs.append(data.clone())
+            imgs.append(torch.zeros((3, 112, 112)))
+        else:
+            imgs.append(data)
+            embs.append(torch.zeros(128))
+
+    return torch.stack(imgs), torch.stack(embs), torch.tensor(labels), torch.tensor(is_embedding)
+
 class FaceDataset(Dataset):
-    def __init__(self, data_root, global_embeddings=None, transform=None):
+    def __init__(self, data_root, global_embeddings=None, transform=None, val_split=0.2, mode="train", seed=42):
         self.data_root = data_root
         self.transform = transform
         self.samples = []
-        self.id_map = {}
         
-        # 1. Map all identities (Folders + Global Embeddings)
         local_nrps = []
         if os.path.exists(data_root):
             local_nrps = [f for f in os.listdir(data_root) if os.path.isdir(os.path.join(data_root, f))]
@@ -73,25 +83,45 @@ class FaceDataset(Dataset):
             global_nrps = [item['nrp'] for item in global_embeddings]
             
         all_unique_nrps = sorted(list(set(local_nrps + global_nrps)))
-        nrp_to_idx = {nrp: idx for idx, nrp in enumerate(all_unique_nrps)}
-        self.id_map = {idx: nrp for nrp, idx in nrp_to_idx.items()}
+        self.nrp_to_idx = {nrp: idx for idx, nrp in enumerate(all_unique_nrps)}
+        self.id_map = {idx: nrp for nrp, idx in self.nrp_to_idx.items()}
         self.num_classes = len(all_unique_nrps)
 
-        # 2. Add local image samples
+        # Add local image samples
+        local_samples = []
         for nrp in local_nrps:
             folder_path = os.path.join(data_root, nrp)
             paths = glob.glob(os.path.join(folder_path, "*.*"))
-            idx = nrp_to_idx[nrp]
+            idx = self.nrp_to_idx[nrp]
             for p in paths:
-                self.samples.append({"type": "image", "path": p, "label": idx})
+                local_samples.append({"type": "image", "path": p, "label": idx})
+        
+        self.samples.extend(local_samples)
 
-        # 3. Add global embedding samples
+        # Add global embedding samples with OVERSAMPLING for balance
         if global_embeddings:
+            global_samples_base = []
             for item in global_embeddings:
-                idx = nrp_to_idx[item['nrp']]
-                # Duplicate embedding a bit to balance with image counts? 
-                # (Optional, but let's add at least one)
-                self.samples.append({"type": "embedding", "data": item['embedding'], "label": idx})
+                idx = self.nrp_to_idx[item['nrp']]
+                global_samples_base.append({"type": "embedding", "data": item['embedding'], "label": idx})
+            
+            if len(local_samples) > 0 and len(global_samples_base) > 0:
+                multiplier = max(1, len(local_samples) // len(global_samples_base))
+                print(f"[DATASET] Oversampling global embeddings x{multiplier} to balance with {len(local_samples)} local images.")
+                for _ in range(multiplier):
+                    self.samples.extend(global_samples_base)
+            else:
+                self.samples.extend(global_samples_base)
+
+        # Split into train/validation
+        if val_split > 0:
+            random.seed(seed)
+            random.shuffle(self.samples)
+            val_size = int(len(self.samples) * val_split)
+            if mode == "train":
+                self.samples = self.samples[val_size:]
+            else:
+                self.samples = self.samples[:val_size]
 
     def __len__(self):
         return len(self.samples)
@@ -104,10 +134,9 @@ class FaceDataset(Dataset):
             image = Image.open(sample['path']).convert('RGB')
             if self.transform:
                 image = self.transform(image)
-            return image, label, False # is_embedding = False
+            return image, label, False
         else:
-            # It's a pre-computed embedding tensor (already 128-d)
-            return sample['data'], label, True # is_embedding = True
+            return sample['data'], label, True
 
 class LocalTrainer:
     def __init__(self, backbone, head, device="cpu", data_path="/app/data"):
@@ -115,49 +144,30 @@ class LocalTrainer:
         self.backbone = backbone.to(self.device)
         self.head = head.to(self.device)
         self.data_path = data_path
+        self.nrp_to_idx = {} 
         
-        # Training Augmentation: Focus on Scale & Translation (as per expert review)
         from torchvision.transforms import InterpolationMode
         self.transform = transforms.Compose([
             transforms.Resize((112, 112), interpolation=InterpolationMode.BILINEAR), 
             transforms.RandomHorizontalFlip(),
             transforms.RandomResizedCrop((112, 112), scale=(0.8, 1.0), interpolation=InterpolationMode.BILINEAR),
             transforms.RandomAffine(degrees=10, translate=(0.1, 0.1), interpolation=InterpolationMode.BILINEAR),
-            transforms.ColorJitter(brightness=0.1, contrast=0.1), # Very subtle
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ])
 
-    def save_confusion_matrix(self, y_true, y_pred, round_num=0):
-        try:
-            cm = confusion_matrix(y_true, y_pred)
-            plt.figure(figsize=(10, 8))
-            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-            plt.title(f'Confusion Matrix - Round {round_num}')
-            plt.ylabel('Actual')
-            plt.xlabel('Predicted')
-            
-            os.makedirs('/app/artifacts/metrics', exist_ok=True)
-            plt.savefig(f'/app/artifacts/metrics/cm_round_{round_num}.png')
-            plt.close()
-            print(f"[METRICS] Saved confusion matrix for round {round_num}")
-        except Exception as e:
-            print(f"[METRICS ERROR] Failed to save CM: {e}")
-
     def train(self, epochs=1, lr=0.0001, round_num=0, global_embeddings=None):
-        dataset = FaceDataset(self.data_path, global_embeddings=global_embeddings, transform=self.transform)
-        if len(dataset) == 0:
-            print("No data found for training.")
-            return 0.0, 0.0, 0
+        dataset = FaceDataset(self.data_path, global_embeddings=global_embeddings, transform=self.transform, mode="train")
+        if len(dataset) < 2:
+            print(f"[TRAINER] Data too small ({len(dataset)}) for training. Skipping round.")
+            return 0.0, 0.0, len(dataset)
             
-        # Re-initialize head if class count changed (Sync case)
         if dataset.num_classes > 0 and dataset.num_classes != self.head.out_features:
-            print(f"[TRAINER] Dynamic Head Update: {self.head.out_features} -> {dataset.num_classes}")
-            self.head = ArcMarginProduct(self.head.in_features, dataset.num_classes).to(self.device)
+            self._update_head(dataset.num_classes, dataset.nrp_to_idx)
+        else:
+            self.nrp_to_idx = dataset.nrp_to_idx
 
-        dataloader = DataLoader(dataset, batch_size=16, shuffle=True)
-        
-        # Train all layers for better adaptability with limited data
+        dataloader = DataLoader(dataset, batch_size=16, shuffle=True, collate_fn=hybrid_collate, drop_last=True)
         for param in self.backbone.parameters():
             param.requires_grad = True
         
@@ -165,36 +175,31 @@ class LocalTrainer:
         trainable_params = [p for p in self.backbone.parameters() if p.requires_grad]
         trainable_params += list(self.head.parameters())
         
-        optimizer = torch.optim.SGD(
-            trainable_params, 
-            lr=lr, momentum=0.9, weight_decay=1e-3 # Stronger regularization
-        )
+        optimizer = torch.optim.SGD(trainable_params, lr=lr, momentum=0.9, weight_decay=1e-3)
         
         self.backbone.train()
         self.head.train()
         
-        total_loss = 0.0
-        correct = 0
-        total = 0
-        
+        total_loss, correct, total = 0.0, 0, 0
         for epoch in range(epochs):
-            for data, labels, is_embedding in dataloader:
-                data, labels = data.to(self.device), labels.to(self.device)
-                
+            for imgs, embs, labels, is_embedding in dataloader:
+                imgs, embs, labels = imgs.to(self.device), embs.to(self.device), labels.to(self.device)
                 optimizer.zero_grad()
                 
-                # Hybrid Logic: Image -> Backbone, Embedding -> Direct
-                features = torch.zeros((data.size(0), self.head.in_features), device=self.device)
-                
-                # Process images in batch
-                img_mask = ~is_embedding
-                emb_mask = is_embedding
+                features = torch.zeros((labels.size(0), self.head.in_features), device=self.device)
+                img_mask, emb_mask = ~is_embedding, is_embedding
                 
                 if img_mask.any():
-                    features[img_mask] = self.backbone(data[img_mask])
-                
+                    img_input = imgs[img_mask]
+                    if img_input.size(0) == 1:
+                        img_input_fixed = torch.cat([img_input, img_input], dim=0)
+                        features_fixed = self.backbone(img_input_fixed)
+                        features[img_mask] = features_fixed[0:1]
+                    else:
+                        features[img_mask] = self.backbone(img_input)
+                        
                 if emb_mask.any():
-                    features[emb_mask] = data[emb_mask]
+                    features[emb_mask] = embs[emb_mask]
                 
                 outputs = self.head(features, labels)
                 loss = criterion(outputs, labels)
@@ -202,64 +207,121 @@ class LocalTrainer:
                 optimizer.step()
                 
                 total_loss += loss.item()
-                
                 _, predicted = torch.max(outputs.data, 1)
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
                 
-        # Calculate metrics
         avg_loss = total_loss / (len(dataloader) * epochs) if len(dataloader) > 0 else 0.0
         accuracy = correct / total if total > 0 else 0.0
         
-        if round_num > 0 and total > 0:
-            self.save_confusion_matrix(labels.cpu().numpy(), predicted.cpu().numpy(), round_num)
+        return avg_loss, accuracy, total
 
-        # Reset to eval mode for inference
+    def evaluate(self, global_embeddings=None):
+        dataset = FaceDataset(self.data_path, global_embeddings=global_embeddings, transform=self.transform, mode="val")
+        if len(dataset) < 2:
+            return 0.0, 0.0, len(dataset)
+            
+        dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=hybrid_collate)
+        criterion = nn.CrossEntropyLoss()
         self.backbone.eval()
         self.head.eval()
         
+        total_loss, correct, total = 0.0, 0, 0
+        with torch.no_grad():
+            for imgs, embs, labels, is_embedding in dataloader:
+                imgs, embs, labels = imgs.to(self.device), embs.to(self.device), labels.to(self.device)
+                features = torch.zeros((labels.size(0), self.head.in_features), device=self.device)
+                img_mask, emb_mask = ~is_embedding, is_embedding
+                
+                if img_mask.any():
+                    img_input = imgs[img_mask]
+                    if img_input.size(0) == 1:
+                        features_fixed = self.backbone(torch.cat([img_input, img_input], dim=0))
+                        features[img_mask] = features_fixed[0:1]
+                    else:
+                        features[img_mask] = self.backbone(img_input)
+                        
+                if emb_mask.any():
+                    features[emb_mask] = embs[emb_mask]
+                
+                outputs = self.head(features, labels)
+                loss = criterion(outputs, labels)
+                total_loss += loss.item()
+                _, predicted = torch.max(outputs.data, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+                
+        avg_loss = total_loss / len(dataloader) if len(dataloader) > 0 else 0.0
+        accuracy = correct / total if total > 0 else 0.0
         return avg_loss, accuracy, total
 
-    def get_backbone_parameters(self):
-        """Returns only backbone parameters for FL sync, EXCLUDING BatchNorm layers (pFedFace)."""
+    def _update_head(self, new_num_classes, new_nrp_to_idx):
+        old_head = self.head
+        old_nrp_to_idx = self.nrp_to_idx
+        new_head = ArcMarginProduct(old_head.in_features, new_num_classes).to(self.device)
+        
+        copied_count = 0
+        with torch.no_grad():
+            for nrp, new_idx in new_nrp_to_idx.items():
+                if nrp in old_nrp_to_idx:
+                    old_idx = old_nrp_to_idx[nrp]
+                    if old_idx < old_head.weight.shape[0]: 
+                         new_head.weight[new_idx] = old_head.weight[old_idx]
+                         copied_count += 1
+        
+        print(f"[TRAINER] Dynamic Head Update: {old_head.out_features} -> {new_num_classes} (Warm-start: {copied_count} copied)")
+        self.head = new_head
+        self.nrp_to_idx = new_nrp_to_idx
+
+    def _is_bn_param(self, name):
+        name = name.lower()
+        return 'bn' in name or 'running_' in name or 'num_batches_tracked' in name
+
+    def get_backbone_parameters(self, round_num=1):
+        # Round-based filtering for pFedFace: Sync BN only for first 3 rounds
+        include_bn = (round_num <= 3)
+        state_dict = self.backbone.state_dict()
+        shared_keys = [k for k in state_dict.keys() if include_bn or not self._is_bn_param(k)]
+        
         shared_params = []
-        for name, param in self.backbone.state_dict().items():
-            # Filter out BN layers: weight, bias, running_mean, running_var, num_batches_tracked
-            if 'bn' not in name.lower() and 'running_' not in name.lower() and 'num_batches_tracked' not in name.lower():
-                shared_params.append(param.cpu().numpy())
+        for k in shared_keys:
+            shared_params.append(state_dict[k].cpu().numpy().copy())
         return shared_params
 
-    def set_backbone_parameters(self, parameters):
-        """Sets backbone parameters from global model, leaving local BN layers untouched (Adaptive BN)."""
+    def set_backbone_parameters(self, parameters, round_num=1):
+        include_bn = (round_num <= 3)
         state_dict = self.backbone.state_dict()
-        
-        # Identify keys that were shared (same logic as get_backbone_parameters)
-        shared_keys = [k for k in state_dict.keys() if 'bn' not in k.lower() and 'running_' not in k.lower() and 'num_batches_tracked' not in k.lower()]
+        shared_keys = [k for k in state_dict.keys() if include_bn or not self._is_bn_param(k)]
         
         if len(shared_keys) != len(parameters):
-            print(f"WARNING: Parameter mismatch! Model has {len(shared_keys)} shared layers, but received {len(parameters)}.")
-            
-        new_state_dict = OrderedDict(state_dict) # Start with current local state
-        for i, (k, v) in enumerate(zip(shared_keys, parameters)):
+            print(f"[WARNING] Parameter count mismatch! Local filter expects {len(shared_keys)}, but server sent {len(parameters)} (Round: {round_num})")
+            if len(parameters) == len(state_dict):
+                print("[INFO] Correcting to FULL state_dict keys.")
+                shared_keys = list(state_dict.keys())
+            else:
+                non_bn_keys = [k for k in state_dict.keys() if not self._is_bn_param(k)]
+                if len(parameters) == len(non_bn_keys):
+                    print("[INFO] Correcting to NON-BN keys only.")
+                    shared_keys = non_bn_keys
+                else:
+                    print("[ERROR] Fatal Mismatch: Cannot map parameters to model layers. Skipping sync.")
+                    return
+
+        new_state_dict = OrderedDict(state_dict)
+        for k, v in zip(shared_keys, parameters):
             try:
-                # Use from_numpy for efficiency and better type handling
-                tensor_v = torch.from_numpy(np.array(v))
+                # v is a numpy array from Flower
+                tensor_v = torch.from_numpy(v.copy())
                 
-                # Check for shape mismatch before loading
                 if tensor_v.shape != state_dict[k].shape:
-                    print(f"[DEBUG] Shape Mismatch at {k}: Expected {state_dict[k].shape}, got {tensor_v.shape}")
-                    # If it's just a 0-d vs 1-d scalar issue (like num_batches_tracked), reshape it
-                    if tensor_v.numel() == state_dict[k].numel():
-                        tensor_v = tensor_v.view(state_dict[k].shape)
+                    # Provide informative error as requested
+                    print(f"[ERROR] Size mismatch for layer '{k}': Model expects {state_dict[k].shape}, Server sent {tensor_v.shape}")
+                    continue # Do not update this specific layer
                 
                 new_state_dict[k] = tensor_v
             except Exception as e:
-                print(f"[DEBUG] Error processing {k} (index {i}): {e}")
+                print(f"[DEBUG] Error processing layer '{k}': {e}")
                 raise e
         
-        try:
-            self.backbone.load_state_dict(new_state_dict, strict=True)
-            print("[TRAINER] Backbone parameters updated successfully.")
-        except Exception as e:
-            print(f"[DEBUG] load_state_dict failed: {e}")
-            raise e
+        # Load with strict=True to ensure all buffers and params are accounted for
+        self.backbone.load_state_dict(new_state_dict, strict=True)

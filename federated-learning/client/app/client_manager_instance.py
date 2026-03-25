@@ -10,7 +10,9 @@ import requests
 from PIL import Image
 import time
 import socket
+
 from .utils.face_pipeline import face_pipeline
+from .utils.security import encryptor
 
 class FLClientManager:
     def __init__(self):
@@ -108,10 +110,9 @@ class FLClientManager:
         print(f"[CLIENT] Heartbeat service started for {self.client_id}")
         while True:
             try:
-                # 1. Report Status
                 self.report_status()
                 
-                # 2. Get Phase from Server
+                # Get Phase from Server
                 resp = requests.get(f"{self.server_api_url}/api/training/status", timeout=2)
                 if resp.status_code == 200:
                     data = resp.json()
@@ -136,7 +137,6 @@ class FLClientManager:
         elif phase == "idle" or phase == "completed":
             self.fl_status = "Online (Selesai)"
             
-        # POST-TRAINING REFRESH: If we just finished training (transition away from training)
         if self.last_phase == "training" and phase != "training":
             print("[CLIENT] Training finished. Downloading latest model and refreshing local embeddings...")
             def update_task():
@@ -186,7 +186,7 @@ class FLClientManager:
         db = SessionLocal()
         
         try:
-            # 1. Download Global Users & Embeddings
+            # Download Global Users & Embeddings
             res = requests.get(f"{self.server_api_url}/api/users/global", timeout=10)
             if res.status_code == 200:
                 global_users = res.json()
@@ -202,7 +202,6 @@ class FLClientManager:
                     
                     # Sync Global Embedding (Memory)
                     if u['embedding']:
-                        # ALWAYS OVERWRITE: Backbone evolves, so global embeddings must be refreshed
                         import base64
                         import numpy as np
                         emb_bytes = base64.b64decode(u['embedding'])
@@ -219,20 +218,15 @@ class FLClientManager:
                             )
                             db.add(new_global_emb)
                         db.commit()
+                print(f"[SYNC] Sinkronisasi selesai. Total {len(global_users)} mahasiswa global di DB.")
+            else:
+                print(f"[SYNC] Server returned {res.status_code} during sync.")
             
-            # 2. Pastikan folder lokal sudah siap
+            # Pastikan folder lokal sudah siap
             students_dir = os.path.join(self.data_path, "students")
             os.makedirs(students_dir, exist_ok=True)
             
-            # 3. Label Mapping (Consistency check for folders)
-            folders = [f for f in os.listdir(students_dir) if os.path.isdir(os.path.join(students_dir, f))]
-            for folder in folders:
-                nrp = folder.split('_')[0] if "_" in folder else folder
-                name = folder.split('_')[1] if "_" in folder else folder
-                requests.post(f"{self.server_api_url}/api/training/get_label", json={
-                    "nrp": nrp, "name": name, "client_id": self.client_id
-                }, timeout=5)
-
+            # Label Mapping is now done during registration in preprocessing
             self.report_status("Siap Preprocess")
         except Exception as e:
             print(f"[SYNC ERROR] {e}")
@@ -282,7 +276,6 @@ class FLClientManager:
                     embedding_np = embedding_tensor.cpu().numpy()[0]
                     
                 # Update DB
-                from .utils.encryptor import encryptor
                 encrypted_data, iv = encryptor.encrypt_embedding(embedding_np)
                 
                 emb_record = db.query(EmbeddingLocal).filter_by(user_id=user.user_id, is_global=False).first()
@@ -299,8 +292,23 @@ class FLClientManager:
                     db.add(new_emb)
                 print(f"[REFRESH] Re-computed embedding for {user.user_id}")
             
-            db.commit()
-            print("[REFRESH] Local embeddings refresh complete.")
+                db.commit()
+                print(f"[REFRESH] Re-computed embedding for {user.user_id}")
+                
+                # Register to Server (Knowledge Sharing)
+                try:
+                    import base64
+                    payload = {
+                        "nrp": user.user_id,
+                        "name": user.name,
+                        "client_id": self.client_id,
+                        "embedding": base64.b64encode(embedding_np.tobytes()).decode('utf-8')
+                    }
+                    requests.post(f"{self.server_api_url}/api/training/get_label", json=payload, timeout=5)
+                except Exception as e:
+                    print(f"[REFRESH] Server registration failed for {user.user_id}: {e}")
+            
+            print("[REFRESH] Local embeddings refresh and server registration complete.")
         except Exception as e:
             print(f"[REFRESH ERROR] {e}")
             db.rollback()
@@ -346,6 +354,22 @@ class FLClientManager:
                     if count >= 100: break
                 except Exception as e:
                     print(f"Error processing {img_name}: {e}")
+            
+            # Register discovered user to local DB
+            if count > 0:
+                from .db.db import SessionLocal
+                from .db.models import UserLocal
+                db = SessionLocal()
+                try:
+                    user = db.query(UserLocal).filter_by(user_id=nrp).first()
+                    if not user:
+                        name = folder.split('_')[1] if "_" in folder else nrp
+                        user = UserLocal(user_id=nrp, name=name)
+                        db.add(user)
+                        db.commit()
+                        print(f"[PREPROCESS] Added {nrp} to local database.")
+                finally:
+                    db.close()
         
         # Check if we actually have data now
         has_data = False
@@ -359,7 +383,10 @@ class FLClientManager:
         
         if has_data:
             self.report_status("Siap Training")
-            # Update client head to match processed data (Only non-empty folders)
+            # Refresh embeddings to ensure they are registered to server
+            self.refresh_local_embeddings()
+            
+            # Update client head
             print(f"[CLIENT] Updating training head for {num_classes} folders with data.")
             self.head = ArcMarginProduct(128, num_classes).to(self.device)
             self.client.head = self.head

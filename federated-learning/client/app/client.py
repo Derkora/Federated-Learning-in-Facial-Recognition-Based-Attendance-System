@@ -5,6 +5,9 @@ from .utils.trainer import LocalTrainer, ArcMarginProduct
 from .utils.mobilefacenet import MobileFaceNet
 import os
 
+from .db.db import SessionLocal
+from .db.models import EmbeddingLocal, UserLocal
+
 class FaceRecognitionClient(fl.client.NumPyClient):
     def __init__(self, model, head, artifacts_path="/app/artifacts", device="cpu"):
         self.model = model
@@ -12,51 +15,48 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         self.artifacts_path = artifacts_path
         self.device = device if isinstance(device, torch.device) else torch.device(device)
         
-        # Use the processed directory for training
         processed_path = os.path.join(self.artifacts_path, "processed")
         self.trainer = LocalTrainer(self.model, self.head, device=self.device, data_path=processed_path)
         
-        # Load local head if exists
         head_path = os.path.join(self.artifacts_path, "models", "local_head.pth")
         if os.path.exists(head_path):
             print(f"Loading local classifier head from {head_path}...")
             self.head.load_state_dict(torch.load(head_path, map_location=self.device))
 
     def get_parameters(self, config):
-        """Returns the parameters of the local model (Backbone only)."""
-        return self.trainer.get_backbone_parameters()
+        rnd = config.get("round", 1)
+        return self.trainer.get_backbone_parameters(round_num=rnd)
 
     def fit(self, parameters, config):
-        """Sets parameters, trains the model locally, and returns the updated parameters."""
         rnd = config.get("round", 0)
-        print(f"FL Fit [Round {rnd}]: Receiving {len(parameters)} parameter arrays...")
+        print(f"FL Fit [Round {rnd}]: Receiving {len(parameters)} parameters...")
         
         try:
             if len(parameters) > 0:
-                print(f"DEBUG: First param shape: {parameters[0].shape}")
-                self.trainer.set_backbone_parameters(parameters)
+                self.trainer.set_backbone_parameters(parameters, round_num=rnd)
             else:
-                print("WARNING: Received empty parameters from server!")
+                print("WARNING: Received empty parameters!")
         except Exception as e:
-            print(f"DEBUG ERROR in set_backbone_parameters: {e}")
+            print(f"ERROR in set_backbone_parameters: {e}")
             raise e
         
         epochs = config.get("local_epochs", 1)
         lr = config.get("lr", 0.0001)
         
-        print(f"FL Fit [Round {rnd}]: Starting local training for {epochs} epochs...")
-        
-        # Pull Global Embeddings from DB for hybrid training
-        from .db.db import SessionLocal
-        from .db.models import EmbeddingLocal
         db = SessionLocal()
         global_embs = []
         try:
             items = db.query(EmbeddingLocal).filter_by(is_global=True).all()
+            if not items:
+                print("[WARNING] No global embeddings found! Forgetting prevention might be disabled.")
+            
             for item in items:
-                emb_np = np.frombuffer(item.embedding_data, dtype=np.float32)
+                # Use .copy() on numpy array from buffer to ensure it is writable
+                emb_np = np.frombuffer(item.embedding_data, dtype=np.float32).copy()
                 global_embs.append({"nrp": item.user_id, "embedding": torch.from_numpy(emb_np)})
-            print(f"[CLIENT] Hybrid Training: Using {len(global_embs)} global memories.")
+            
+            local_user_count = db.query(UserLocal).count()
+            print(f"[CLIENT] Dataset: {local_user_count} local users, {len(global_embs)} global memories.")
         finally:
             db.close()
             
@@ -65,22 +65,33 @@ class FaceRecognitionClient(fl.client.NumPyClient):
             global_embeddings=global_embs
         )
         
-        # PERSISTENCE: Save aggregated backbone weights and updated head
         model_dir = os.path.join(self.artifacts_path, "models")
+        os.makedirs(model_dir, exist_ok=True)
         torch.save(self.model.state_dict(), os.path.join(model_dir, "backbone.pth"))
         torch.save(self.head.state_dict(), os.path.join(model_dir, "local_head.pth"))
         
         with open(os.path.join(model_dir, "model_version.txt"), "w") as f:
             f.write(str(rnd))
             
-        print(f"FL Fit: Models saved to {model_dir} (Round: {rnd}, Samples: {num_samples})")
-        
-        return self.trainer.get_backbone_parameters(), num_samples, {"loss": loss, "accuracy": accuracy}
+        return self.trainer.get_backbone_parameters(round_num=rnd), num_samples, {"loss": loss, "accuracy": accuracy}
 
     def evaluate(self, parameters, config):
-        """Sets parameters and evaluates the model locally (optional)."""
-        self.trainer.set_backbone_parameters(parameters)
-        return 0.0, 1, {"accuracy": 1.0}
+        rnd = config.get("round", 0)
+        self.trainer.set_backbone_parameters(parameters, round_num=rnd)
+        
+        db = SessionLocal()
+        global_embs = []
+        try:
+            items = db.query(EmbeddingLocal).filter_by(is_global=True).all()
+            for item in items:
+                # Use .copy() on numpy array from buffer to ensure it is writable
+                emb_np = np.frombuffer(item.embedding_data, dtype=np.float32).copy()
+                global_embs.append({"nrp": item.user_id, "embedding": torch.from_numpy(emb_np)})
+        finally:
+            db.close()
+            
+        loss, accuracy, num_samples = self.trainer.evaluate(global_embeddings=global_embs)
+        return float(loss), num_samples, {"accuracy": float(accuracy)}
 
 def start_fl_client(server_address, model, head, artifacts_path="/app/artifacts", device="cpu"):
     client = FaceRecognitionClient(model, head, artifacts_path, device)
