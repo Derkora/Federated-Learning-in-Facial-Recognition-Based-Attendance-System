@@ -19,6 +19,7 @@ client2_data/
 datasets_processed/
 datasets_balanced/
 backups/
+referensi/
 eggs/
 .eggs/
 lib/

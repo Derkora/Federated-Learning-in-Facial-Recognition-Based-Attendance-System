@@ -1,7 +1,6 @@
 from torch import nn
 import torch
 import torch.nn.functional as F
-from torch.nn import Parameter
 import math
 
 class Bottleneck(nn.Module):
@@ -39,6 +38,7 @@ class ConvBlock(nn.Module):
         self.bn = nn.BatchNorm2d(oup)
         if not linear:
             self.prelu = nn.PReLU(oup)
+            
     def forward(self, x):
         x = self.conv(x)
         x = self.bn(x)
@@ -48,7 +48,7 @@ class ConvBlock(nn.Module):
             return self.prelu(x)
 
 Mobilefacenet_bottleneck_setting = [
-    # t, c , n ,s
+    # t, c , n ,s (t: expansion, c: output channels, n: repeat, s: stride)
     [2, 64, 5, 2],
     [4, 128, 1, 2],
     [2, 128, 6, 1],
@@ -90,7 +90,6 @@ class MobileFaceNet(nn.Module):
                 else:
                     layers.append(block(self.inplanes, c, 1, t))
                 self.inplanes = c
-
         return nn.Sequential(*layers)
 
     def forward(self, x):

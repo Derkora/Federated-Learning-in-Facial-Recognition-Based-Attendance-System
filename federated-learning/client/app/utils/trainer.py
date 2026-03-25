@@ -137,8 +137,8 @@ class LocalTrainer:
             plt.ylabel('Actual')
             plt.xlabel('Predicted')
             
-            os.makedirs('app/static/metrics', exist_ok=True)
-            plt.savefig(f'app/static/metrics/cm_round_{round_num}.png')
+            os.makedirs('/app/artifacts/metrics', exist_ok=True)
+            plt.savefig(f'/app/artifacts/metrics/cm_round_{round_num}.png')
             plt.close()
             print(f"[METRICS] Saved confusion matrix for round {round_num}")
         except Exception as e:
@@ -221,19 +221,26 @@ class LocalTrainer:
         return avg_loss, accuracy, total
 
     def get_backbone_parameters(self):
-        """Returns only backbone parameters for FL sync."""
-        return [val.cpu().numpy() for _, val in self.backbone.state_dict().items()]
+        """Returns only backbone parameters for FL sync, EXCLUDING BatchNorm layers (pFedFace)."""
+        shared_params = []
+        for name, param in self.backbone.state_dict().items():
+            # Filter out BN layers: weight, bias, running_mean, running_var, num_batches_tracked
+            if 'bn' not in name.lower() and 'running_' not in name.lower() and 'num_batches_tracked' not in name.lower():
+                shared_params.append(param.cpu().numpy())
+        return shared_params
 
     def set_backbone_parameters(self, parameters):
-        """Sets backbone parameters from global model."""
+        """Sets backbone parameters from global model, leaving local BN layers untouched (Adaptive BN)."""
         state_dict = self.backbone.state_dict()
-        keys = list(state_dict.keys())
         
-        if len(keys) != len(parameters):
-            print(f"WARNING: Parameter mismatch! Model has {len(keys)} layers, but received {len(parameters)}.")
+        # Identify keys that were shared (same logic as get_backbone_parameters)
+        shared_keys = [k for k in state_dict.keys() if 'bn' not in k.lower() and 'running_' not in k.lower() and 'num_batches_tracked' not in k.lower()]
+        
+        if len(shared_keys) != len(parameters):
+            print(f"WARNING: Parameter mismatch! Model has {len(shared_keys)} shared layers, but received {len(parameters)}.")
             
-        new_state_dict = OrderedDict()
-        for i, (k, v) in enumerate(zip(keys, parameters)):
+        new_state_dict = OrderedDict(state_dict) # Start with current local state
+        for i, (k, v) in enumerate(zip(shared_keys, parameters)):
             try:
                 # Use from_numpy for efficiency and better type handling
                 tensor_v = torch.from_numpy(np.array(v))

@@ -15,14 +15,20 @@ from .utils.face_pipeline import face_pipeline
 class FLClientManager:
     def __init__(self):
         self.data_path = os.getenv("DATA_PATH", "/app/data")
+        self.artifacts_path = os.getenv("ARTIFACTS_PATH", "/app/artifacts")
+        # Ensure directories exist
+        os.makedirs(self.artifacts_path, exist_ok=True)
+        os.makedirs(os.path.join(self.artifacts_path, "models"), exist_ok=True)
+        os.makedirs(os.path.join(self.artifacts_path, "processed"), exist_ok=True)
+
         self.device = torch.device("cpu")
         print(f"[HARDWARE] Forced device: {self.device}")
         
         self.backbone = MobileFaceNet().to(self.device).eval()
         
         # PERSISTENCE: Determine dynamic head size
-        save_path = os.path.join(self.data_path, "backbone.pth")
-        head_path = os.path.join(self.data_path, "local_head.pth")
+        save_path = os.path.join(self.artifacts_path, "models", "backbone.pth")
+        head_path = os.path.join(self.artifacts_path, "models", "local_head.pth")
         
         self.num_classes = 1000 # Default
         if os.path.exists(head_path):
@@ -43,7 +49,7 @@ class FLClientManager:
                 self.backbone.load_state_dict(torch.load(save_path, map_location=self.device))
                 
                 # Try loading persistent version first
-                v_path = os.path.join(self.data_path, "model_version.txt")
+                v_path = os.path.join(self.artifacts_path, "models", "model_version.txt")
                 if os.path.exists(v_path):
                     with open(v_path, "r") as f:
                         self.model_version = int(f.read().strip())
@@ -57,7 +63,7 @@ class FLClientManager:
         
         self.client = FaceRecognitionClient(
             self.backbone, self.head, 
-            data_path=self.data_path, 
+            artifacts_path=self.artifacts_path, 
             device=self.device
         )
         
@@ -146,8 +152,9 @@ class FLClientManager:
             res = requests.get(url, timeout=30)
             if res.status_code == 200:
                 # Save as ndarrays bytes
-                tmp_path = os.path.join(self.data_path, "backbone_tmp.pth")
-                save_path = os.path.join(self.data_path, "backbone.pth")
+                model_dir = os.path.join(self.artifacts_path, "models")
+                tmp_path = os.path.join(model_dir, "backbone_tmp.pth")
+                save_path = os.path.join(model_dir, "backbone.pth")
                 
                 with open(tmp_path, "wb") as f:
                     f.write(res.content)
@@ -243,7 +250,7 @@ class FLClientManager:
         db = SessionLocal()
         try:
             users = db.query(UserLocal).all()
-            processed_dir = os.path.join(self.data_path, "processed_faces")
+            processed_dir = os.path.join(self.artifacts_path, "processed")
             
             for user in users:
                 user_folder = os.path.join(processed_dir, user.user_id)
@@ -303,7 +310,7 @@ class FLClientManager:
     def run_preprocess_phase(self):
         self.report_status("Processing: Ekstraksi Wajah (MTCNN)...")
         students_dir = os.path.join(self.data_path, "students")
-        processed_dir = os.path.join(self.data_path, "processed_faces")
+        processed_dir = os.path.join(self.artifacts_path, "processed")
         os.makedirs(processed_dir, exist_ok=True)
         
         if not os.path.exists(students_dir):

@@ -145,7 +145,7 @@ async def register_user(user_id: str, name: str, image_base64: str, db: Session 
             with torch.no_grad():
                 fl_manager.backbone.eval()
                 embedding = fl_manager.backbone(input_tensor)
-                # L2 NORMALIZATION (Expert requirement)
+                # L2 NORMALIZATION (Expert & Similarity requirement)
                 embedding = torch.nn.functional.normalize(embedding, p=2, dim=1)
                 embedding_np = embedding.cpu().numpy()[0]
                 
@@ -157,6 +157,7 @@ async def register_user(user_id: str, name: str, image_base64: str, db: Session 
             
             server_url = os.getenv("SERVER_API_URL", "http://server-fl:8080")
             try:
+                # Send L2-normalized embedding to server
                 embedding_b64 = base64.b64encode(embedding_np.tobytes()).decode('utf-8')
                 requests.post(f"{server_url}/api/training/get_label", json={
                     "nrp": user_id,
@@ -166,15 +167,6 @@ async def register_user(user_id: str, name: str, image_base64: str, db: Session 
                 }, timeout=5)
             except Exception as e:
                 print(f"[REGISTRATION] Gagal kirim embedding ke server: {e}")
-
-            new_emb = EmbeddingLocal(
-                user_id=user_id, 
-                embedding_data=encrypted_data,
-                iv=iv,
-                is_global=False
-            )
-            db.add(new_emb)
-            db.commit()
             
         return {"status": "success", "user_id": user_id}
     except Exception as e:

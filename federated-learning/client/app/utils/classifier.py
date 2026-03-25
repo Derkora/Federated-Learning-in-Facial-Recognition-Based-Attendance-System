@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-def identify_user_globally(query_embedding, local_embeddings_dict, threshold=0.70):
+def identify_user_globally(query_embedding, local_embeddings_dict, threshold=0.65):
     """
     Identify user based on Cosine Similarity.
     

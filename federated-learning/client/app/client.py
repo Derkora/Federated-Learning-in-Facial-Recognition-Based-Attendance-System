@@ -6,15 +6,18 @@ from .utils.mobilefacenet import MobileFaceNet
 import os
 
 class FaceRecognitionClient(fl.client.NumPyClient):
-    def __init__(self, model, head, data_path="/app/data", device="cpu"):
+    def __init__(self, model, head, artifacts_path="/app/artifacts", device="cpu"):
         self.model = model
         self.head = head
+        self.artifacts_path = artifacts_path
         self.device = device if isinstance(device, torch.device) else torch.device(device)
-        # Use the processed faces directory for training
-        self.trainer = LocalTrainer(self.model, self.head, device=self.device, data_path=os.path.join(data_path, "processed_faces"))
+        
+        # Use the processed directory for training
+        processed_path = os.path.join(self.artifacts_path, "processed")
+        self.trainer = LocalTrainer(self.model, self.head, device=self.device, data_path=processed_path)
         
         # Load local head if exists
-        head_path = os.path.join(data_path, "local_head.pth")
+        head_path = os.path.join(self.artifacts_path, "models", "local_head.pth")
         if os.path.exists(head_path):
             print(f"Loading local classifier head from {head_path}...")
             self.head.load_state_dict(torch.load(head_path, map_location=self.device))
@@ -63,14 +66,14 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         )
         
         # PERSISTENCE: Save aggregated backbone weights and updated head
-        base_path = os.path.dirname(self.trainer.data_path)
-        torch.save(self.model.state_dict(), os.path.join(base_path, "backbone.pth"))
-        torch.save(self.head.state_dict(), os.path.join(base_path, "local_head.pth"))
+        model_dir = os.path.join(self.artifacts_path, "models")
+        torch.save(self.model.state_dict(), os.path.join(model_dir, "backbone.pth"))
+        torch.save(self.head.state_dict(), os.path.join(model_dir, "local_head.pth"))
         
-        with open(os.path.join(base_path, "model_version.txt"), "w") as f:
+        with open(os.path.join(model_dir, "model_version.txt"), "w") as f:
             f.write(str(rnd))
             
-        print(f"FL Fit: Models saved to {base_path} (Round: {rnd}, Samples: {num_samples})")
+        print(f"FL Fit: Models saved to {model_dir} (Round: {rnd}, Samples: {num_samples})")
         
         return self.trainer.get_backbone_parameters(), num_samples, {"loss": loss, "accuracy": accuracy}
 
@@ -79,6 +82,6 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         self.trainer.set_backbone_parameters(parameters)
         return 0.0, 1, {"accuracy": 1.0}
 
-def start_fl_client(server_address, model, head, data_path="/app/data", device="cpu"):
-    client = FaceRecognitionClient(model, head, data_path, device)
+def start_fl_client(server_address, model, head, artifacts_path="/app/artifacts", device="cpu"):
+    client = FaceRecognitionClient(model, head, artifacts_path, device)
     fl.client.start_numpy_client(server_address=server_address, client=client)

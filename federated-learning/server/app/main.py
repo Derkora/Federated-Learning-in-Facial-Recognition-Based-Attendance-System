@@ -11,6 +11,8 @@ import uvicorn
 from uuid import uuid4
 from threading import Thread
 from datetime import datetime
+import numpy as np
+import torch
 
 from .db.db import engine, get_db, Base, SessionLocal
 from .db.models import FLSession, FLRound, GlobalModel, Client, UserGlobal, AttendanceRecap
@@ -199,8 +201,7 @@ async def get_label(data: dict, db: Session = Depends(get_db)):
     if embedding_b64:
         import base64
         embedding_bytes = base64.b64decode(embedding_b64)
-    
-    # 1. Register User Global
+
     user = db.query(UserGlobal).filter_by(nrp=nrp).first()
     if not user:
         user = UserGlobal(nrp=nrp, name=name, registered_edge_id=edge_id, embedding=embedding_bytes)
@@ -212,8 +213,9 @@ async def get_label(data: dict, db: Session = Depends(get_db)):
         if embedding_bytes:
             user.embedding = embedding_bytes
         db.commit()
+        
+    export_reference_embeddings()
 
-    # 2. Return consistent label (using user_id)
     return {"nrp": nrp, "label": user.user_id}
 
 @app.get("/api/users/global")
@@ -308,10 +310,30 @@ def export_latest_model_to_disk():
     finally:
         db.close()
 
+def export_reference_embeddings():
+    """Exports all UserGlobal embeddings to data/reference_embeddings.pth."""
+    db = SessionLocal()
+    try:
+        users = db.query(UserGlobal).filter(UserGlobal.embedding.isnot(None)).all()
+        ref_dict = {}
+        for u in users:
+            # Convert LargeBinary to numpy then to torch
+            emb_np = np.frombuffer(u.embedding, dtype=np.float32)
+            ref_dict[u.nrp] = torch.from_numpy(emb_np)
+        
+        os.makedirs("data", exist_ok=True)
+        torch.save(ref_dict, "data/reference_embeddings.pth")
+        print(f"[EXPORT] Saved {len(users)} embeddings to data/reference_embeddings.pth")
+    except Exception as e:
+        print(f"[EXPORT ERROR] {e}")
+    finally:
+        db.close()
+
 @app.on_event("startup")
 def startup_event():
     print(f"[STARTUP] FL Server Dashboard Initialized", flush=True)
     export_latest_model_to_disk()
+    export_reference_embeddings()
 
 if __name__ == "__main__":
     
