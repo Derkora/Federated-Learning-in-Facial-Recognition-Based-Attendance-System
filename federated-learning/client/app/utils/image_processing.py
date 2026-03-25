@@ -22,13 +22,21 @@ class ImageProcessor:
         self.normalize = T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
 
     def detect_face(self, img):
-        """Detect and crop face from image (PIL)."""
+        """
+        Detect face and return (face_tensor, box, probability).
+        Box format: [x, y, x2, y2]
+        """
         try:
+            boxes, probs = self.mtcnn.detect(img)
+            if boxes is None or len(boxes) == 0:
+                return None, None, 0.0
+            
+            # Use MTCNN call to get the face tensor (already cropped/resized by MTCNN)
             face = self.mtcnn(img)
-            return face
+            return face, boxes[0], probs[0]
         except Exception as e:
             print(f"Face detection error: {e}")
-            return None
+            return None, None, 0.0
 
     def resize_and_pad(self, img_pil, target_size=(112, 112)):
         """

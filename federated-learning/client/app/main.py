@@ -55,11 +55,18 @@ async def api_inference(data: dict, background_tasks: BackgroundTasks, db: Sessi
         img_bytes = base64.b64decode(data['image'])
         img_pil = Image.open(io.BytesIO(img_bytes)).convert('RGB')
         
-        face_tensor = image_processor.detect_face(img_pil)
+        face_tensor, box, prob = image_processor.detect_face(img_pil)
         if face_tensor is None:
+            print("[INFERENCE] No face detected.")
             return JSONResponse({"matched": "Unknown", "confidence": 0, "message": "No face detected"})
         
+        print(f"[INFERENCE] Face Detected (Prob: {prob:.2f})")
+        
+        # Convert box to list for JSON serialization
+        face_box = box.tolist() if box is not None else None
+        
         input_tensor = image_processor.prepare_for_model(face_tensor).to(fl_manager.device)
+        print("[INFERENCE] Preprocessing Done.")
         
         with torch.no_grad():
             fl_manager.backbone.eval()
@@ -82,12 +89,15 @@ async def api_inference(data: dict, background_tasks: BackgroundTasks, db: Sessi
         # Identify
         user_id, confidence = identify_user_globally(query_embedding, local_refs)
         
-        if user_id != "Unknown":
-            user = db.query(UserLocal).filter_by(user_id=user_id).first()
+        # Temporal Voting
+        is_confirmed, voted_id = fl_manager.voter.vote(user_id)
+        
+        if is_confirmed and voted_id != "Unknown":
+            user = db.query(UserLocal).filter_by(user_id=voted_id).first()
             user_name = user.name if user else "Unknown"
             
             new_attendance = AttendanceLocal(
-                user_id=user_id,
+                user_id=voted_id,
                 confidence=confidence,
                 device_id=os.getenv("HOSTNAME", "terminal-1")
             )
@@ -96,12 +106,18 @@ async def api_inference(data: dict, background_tasks: BackgroundTasks, db: Sessi
             
             background_tasks.add_task(
                 sync_record_to_server, 
-                user_id, user_name, float(confidence), os.getenv("HOSTNAME", "terminal-1")
+                voted_id, user_name, float(confidence), os.getenv("HOSTNAME", "terminal-1")
             )
+            print(f"[ATTENDANCE] Confirmed: {voted_id} ({confidence:.2f})")
             
         latency = int((time.time() - start_time) * 1000)
-        print(f"[INFERENCE] Matched: {user_id} ({confidence:.2f}) in {latency}ms")
-        return {"matched": user_id, "confidence": float(confidence), "latency_ms": latency}
+        return {
+            "matched": user_id, 
+            "is_confirmed": is_confirmed,
+            "confidence": float(confidence), 
+            "box": face_box,
+            "latency_ms": latency
+        }
         
     except Exception as e:
         import traceback
@@ -139,7 +155,7 @@ async def register_user(user_id: str, name: str, image_base64: str, db: Session 
         target_path = os.path.join(user_dir, f"{int(time.time())}.jpg")
         img_pil.save(target_path)
         
-        face_tensor = image_processor.detect_face(img_pil)
+        face_tensor, box, prob = image_processor.detect_face(img_pil)
         if face_tensor is not None:
             input_tensor = image_processor.prepare_for_model(face_tensor)
             with torch.no_grad():

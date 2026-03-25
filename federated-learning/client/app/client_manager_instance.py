@@ -13,6 +13,7 @@ import socket
 
 from .utils.face_pipeline import face_pipeline
 from .utils.security import encryptor
+from .utils.voting import TemporalVoter
 
 class FLClientManager:
     def __init__(self):
@@ -80,6 +81,9 @@ class FLClientManager:
         self.is_registered = False
         self.last_register_attempt = 0
         self.register_retry_delay = 30 # seconds
+
+        # Inference state
+        self.voter = TemporalVoter(window_size=10, majority_threshold=7)
 
         # Start heartbeat thread
         threading.Thread(target=self.heartbeat_loop, daemon=True).start()

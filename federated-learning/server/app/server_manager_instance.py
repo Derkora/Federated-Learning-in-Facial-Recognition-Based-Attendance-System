@@ -143,7 +143,11 @@ class FLServerManager:
             min_fit_clients=min_clients,
             min_available_clients=min_clients,
             fit_metrics_aggregation_fn=weighted_average,
-            on_fit_config_fn=lambda server_round: {"round": server_round},
+            on_fit_config_fn=lambda server_round: {
+                "round": server_round,
+                "local_epochs": 5,
+                "lr": 0.0001,
+            },
         )
 
         print(f"FL Server: Starting on 0.0.0.0:8085 (Backbone-only Aggregation Mode)...")

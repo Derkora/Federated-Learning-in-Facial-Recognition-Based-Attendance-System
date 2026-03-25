@@ -39,7 +39,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
             print(f"ERROR in set_backbone_parameters: {e}")
             raise e
         
-        epochs = config.get("local_epochs", 1)
+        epochs = config.get("local_epochs", 5)
         lr = config.get("lr", 0.0001)
         
         db = SessionLocal()

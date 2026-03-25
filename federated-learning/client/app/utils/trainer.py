@@ -156,7 +156,7 @@ class LocalTrainer:
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ])
 
-    def train(self, epochs=1, lr=0.0001, round_num=0, global_embeddings=None):
+    def train(self, epochs=5, lr=0.0001, round_num=0, global_embeddings=None):
         dataset = FaceDataset(self.data_path, global_embeddings=global_embeddings, transform=self.transform, mode="train")
         if len(dataset) < 2:
             print(f"[TRAINER] Data too small ({len(dataset)}) for training. Skipping round.")
@@ -176,12 +176,17 @@ class LocalTrainer:
         trainable_params += list(self.head.parameters())
         
         optimizer = torch.optim.SGD(trainable_params, lr=lr, momentum=0.9, weight_decay=1e-3)
+        # Learning Rate Scheduler: Decay LR by 0.95 every epoch to prevent oscillations
+        scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
         
         self.backbone.train()
         self.head.train()
         
         total_loss, correct, total = 0.0, 0, 0
+        print(f"[TRAINER] Round {round_num}: Training {len(dataset)} samples for {epochs} epochs (LR: {lr})")
+        
         for epoch in range(epochs):
+            epoch_loss = 0.0
             for imgs, embs, labels, is_embedding in dataloader:
                 imgs, embs, labels = imgs.to(self.device), embs.to(self.device), labels.to(self.device)
                 optimizer.zero_grad()
@@ -207,9 +212,13 @@ class LocalTrainer:
                 optimizer.step()
                 
                 total_loss += loss.item()
+                epoch_loss += loss.item()
                 _, predicted = torch.max(outputs.data, 1)
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
+            
+            scheduler.step()
+            print(f"  > Epoch {epoch+1}/{epochs} | Loss: {epoch_loss/len(dataloader):.4f} | LR: {scheduler.get_last_lr()[0]:.6f}")
                 
         avg_loss = total_loss / (len(dataloader) * epochs) if len(dataloader) > 0 else 0.0
         accuracy = correct / total if total > 0 else 0.0

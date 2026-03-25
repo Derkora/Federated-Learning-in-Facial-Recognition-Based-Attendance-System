@@ -14,11 +14,17 @@
     </div>
 </div>
 
-<video id="webcam" autoplay muted playsinline style="display: none;"></video>
-<div id="camera-placeholder"
-    style="width: 100%; max-width: 640px; aspect-ratio: 4/3; margin: 0 auto 1.5rem; background: rgba(255,255,255,0.05); border: 1px dashed rgba(255,255,255,0.2); border-radius: 20px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 1rem;">
-    <div style="font-size: 3rem;">📷</div>
-    <div style="color: var(--text-muted);">Camera is currently OFF</div>
+<div id="camera-container"
+    style="position: relative; width: 100%; max-width: 640px; margin: 0 auto 1.5rem; aspect-ratio: 4/3;">
+    <video id="webcam" autoplay muted playsinline
+        style="width: 100%; height: 100%; object-fit: cover; border-radius: 20px; display: none;"></video>
+    <div id="camera-placeholder"
+        style="width: 100%; height: 100%; background: rgba(255,255,255,0.05); border: 1px dashed rgba(255,255,255,0.2); border-radius: 20px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 1rem;">
+        <div style="font-size: 3rem;">📷</div>
+        <div style="color: var(--text-muted);">Camera is currently OFF</div>
+    </div>
+    <canvas id="overlay"
+        style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10;"></canvas>
 </div>
 <canvas id="canvas" style="display:none;"></canvas>
 
@@ -40,13 +46,42 @@
     const cameraToggle = document.getElementById('camera-toggle');
     const placeholder = document.getElementById('camera-placeholder');
 
+    const overlay = document.getElementById('overlay');
+    const ctx = overlay.getContext('2d');
+
     let isCameraOn = false;
     let stream = null;
+
+    function drawFaceBox(box, color, label, similarity) {
+        ctx.clearRect(0, 0, overlay.width, overlay.height);
+        if (!box) return;
+
+        // Map box from video resolution to overlay resolution
+        const scaleX = overlay.width / video.videoWidth;
+        const scaleY = overlay.height / video.videoHeight;
+
+        const x = box[0] * scaleX;
+        const y = box[1] * scaleY;
+        const w = (box[2] - box[0]) * scaleX;
+        const h = (box[3] - box[1]) * scaleY;
+
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.strokeRect(x, y, w, h);
+
+        // Label bg
+        ctx.fillStyle = color;
+        ctx.fillRect(x, y - 25, w, 25);
+
+        ctx.fillStyle = "white";
+        ctx.font = "bold 14px sans-serif";
+        ctx.fillText(`${label} (${(similarity * 100).toFixed(0)}%)`, x + 5, y - 7);
+    }
 
     async function toggleCamera() {
         if (!isCameraOn) {
             try {
-                stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
                 video.srcObject = stream;
                 video.style.display = "block";
                 placeholder.style.display = "none";
@@ -54,6 +89,12 @@
                 cameraToggle.style.background = "rgba(239, 68, 68, 0.2)";
                 isCameraOn = true;
                 statusCard.innerText = "Scanning faces...";
+
+                // Set overlay size to match video after it loads
+                video.onloadedmetadata = () => {
+                    overlay.width = video.videoWidth;
+                    overlay.height = video.videoHeight;
+                };
             } catch (err) {
                 console.error("Gagal nyalakan kamera: ", err);
                 statusCard.innerText = "Error: Kamera tidak terdeteksi!";
@@ -69,6 +110,7 @@
             cameraToggle.style.background = "rgba(255, 255, 255, 0.05)";
             isCameraOn = false;
             statusCard.innerText = "Camera is stopped.";
+            ctx.clearRect(0, 0, overlay.width, overlay.height);
         }
     }
 
@@ -88,7 +130,7 @@
         canvas.height = video.videoHeight;
         canvas.getContext('2d').drawImage(video, 0, 0);
 
-        const dataUrl = canvas.toDataURL('image/jpeg');
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
         const base64Data = dataUrl.split(',')[1];
 
         try {
@@ -99,14 +141,40 @@
             });
             const result = await response.json();
 
+            // Clear previous box if no face
+            if (!result.box) {
+                ctx.clearRect(0, 0, overlay.width, overlay.height);
+            }
+
             if (result.matched !== "Unknown" && result.matched !== "Error") {
-                statusCard.innerHTML = `<span style="color: #10b981;">Accepted: ${result.matched}</span> <br><small style="color: var(--text-muted); font-size: 0.8rem;">Confidence: ${(result.confidence * 100).toFixed(1)}% | ${result.latency_ms}ms</small>`;
+                const color = result.is_confirmed ? "#10b981" : "#f59e0b";
+                const label = result.is_confirmed ? "ACCEPTED" : "PROCESSING";
+                drawFaceBox(result.box, color, result.matched, result.confidence);
+
+                if (result.is_confirmed) {
+                    statusCard.innerHTML = `<span style="color: #10b981; font-weight: bold; font-size: 1.2rem;">✅ ACCEPTED: ${result.matched}</span> <br><small style="color: var(--text-muted); font-size: 0.8rem;">Confidence: ${(result.confidence * 100).toFixed(1)}% | ${result.latency_ms}ms</small>`;
+                    statusCard.style.background = "rgba(16, 185, 129, 0.1)";
+                    statusCard.style.border = "1px solid #10b981";
+                    setTimeout(() => {
+                        statusCard.style.border = "1px solid rgba(255,255,255,0.05)";
+                    }, 2000);
+                } else {
+                    let message = `🔍 Detecting: ${result.matched}...`;
+                    // Proximity instructions
+                    if (result.confidence < 0.45) {
+                        message = `📏 Move closer to the camera`;
+                    }
+                    statusCard.innerHTML = `<span style="color: #f59e0b;">${message}</span> <br><small style="color: var(--text-muted); font-size: 0.8rem;">Confidence: ${(result.confidence * 100).toFixed(1)}% | Majority Polling...</small>`;
+                    statusCard.style.background = "rgba(245, 158, 11, 0.05)";
+                }
+            } else if (result.matched === "Unknown") {
+                drawFaceBox(result.box, "#94a3b8", "UNKNOWN", result.confidence);
+                statusCard.innerHTML = `<span style="color: #94a3b8;">❓ UNKNOWN FACE</span> <br><small style="color: var(--text-muted); font-size: 0.8rem;">Confidence: ${(result.confidence * 100).toFixed(1)}% | Not registered</small>`;
+                statusCard.style.background = "rgba(255, 255, 255, 0.02)";
             } else if (result.matched === "Error") {
+                ctx.clearRect(0, 0, overlay.width, overlay.height);
                 statusCard.innerText = "Processing Error";
                 statusCard.style.color = "#ef4444";
-            } else {
-                statusCard.innerText = "Scanning faces...";
-                statusCard.style.color = "#f8fafc";
             }
         } catch (e) {
             console.error("Inference Error:", e);
