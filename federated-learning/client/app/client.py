@@ -24,8 +24,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
             self.head.load_state_dict(torch.load(head_path, map_location=self.device))
 
     def get_parameters(self, config):
-        rnd = config.get("round", 1)
-        return self.trainer.get_backbone_parameters(round_num=rnd)
+        return self.trainer.get_backbone_parameters(personalized=True)
 
     def fit(self, parameters, config):
         rnd = config.get("round", 0)
@@ -33,7 +32,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         
         try:
             if len(parameters) > 0:
-                self.trainer.set_backbone_parameters(parameters, round_num=rnd)
+                self.trainer.set_backbone_parameters(parameters, personalized=True)
             else:
                 print("WARNING: Received empty parameters!")
         except Exception as e:
@@ -73,11 +72,10 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         with open(os.path.join(model_dir, "model_version.txt"), "w") as f:
             f.write(str(rnd))
             
-        return self.trainer.get_backbone_parameters(round_num=rnd), num_samples, {"loss": loss, "accuracy": accuracy}
+        return self.trainer.get_backbone_parameters(personalized=True), num_samples, {"loss": loss, "accuracy": accuracy}
 
     def evaluate(self, parameters, config):
-        rnd = config.get("round", 0)
-        self.trainer.set_backbone_parameters(parameters, round_num=rnd)
+        self.trainer.set_backbone_parameters(parameters, personalized=True)
         
         db = SessionLocal()
         global_embs = []

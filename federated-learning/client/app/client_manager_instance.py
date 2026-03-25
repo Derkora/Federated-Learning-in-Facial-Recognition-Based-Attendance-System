@@ -1,5 +1,5 @@
 from .client import FaceRecognitionClient
-from .utils.mobilefacenet import MobileFaceNet
+from .utils.mobilefacenet import get_model, verify_architecture_match
 from .utils.trainer import ArcMarginProduct
 import os
 import torch
@@ -26,7 +26,9 @@ class FLClientManager:
         self.device = torch.device("cpu")
         print(f"[HARDWARE] Forced device: {self.device}")
         
-        self.backbone = MobileFaceNet().to(self.device).eval()
+        self.backbone = get_model().to(self.device)
+        verify_architecture_match(self.backbone) # Fail-fast local check
+        self.backbone.eval()
         
         # PERSISTENCE: Determine dynamic head size
         save_path = os.path.join(self.artifacts_path, "models", "backbone.pth")
@@ -162,14 +164,12 @@ class FLClientManager:
                 # Atomic swap
                 os.replace(tmp_path, save_path)
                 
-                # Load ndarrays
+                # Load list of ndarrays from the .pth file (saved by server)
                 parameters = torch.load(save_path, map_location=self.device)
                 
-                # Apply to model
-                from collections import OrderedDict
-                params_dict = zip(self.backbone.state_dict().keys(), parameters)
-                state_dict = OrderedDict({k: torch.tensor(v) for k, v in params_dict})
-                self.backbone.load_state_dict(state_dict, strict=True)
+                # Apply using the trainer's robust mapping logic (pFedFace compliant)
+                print(f"[RELOAD] Applying {len(parameters)} parameters via refined trainer logic...")
+                self.client.trainer.set_backbone_parameters(parameters, personalized=True)
                 
                 print(f"[RELOAD] Backbone updated atomically on {self.device}")
                 return True
@@ -397,7 +397,9 @@ class FLClientManager:
         print("[CLIENT] Preprocessing phase complete.")
 
     def start_fl(self):
-        if self.is_training: return
+        if self.is_training:
+            print("[CLIENT] Flower client is already running. Skipping duplicate call.")
+            return
         self.is_training = True
         
         def run_client():
@@ -408,11 +410,17 @@ class FLClientManager:
                     server_address=self.fl_server_address, 
                     client=self.client.to_client()
                 )
+                print("[CLIENT] Flower session completed normally.")
             except Exception as e:
-                print(f"FL Client Error: {e}")
+                error_msg = f"FL Client Connection Error: {e}"
+                print(f"[ERROR] {error_msg}")
+                self.report_status(f"Error: {str(e)[:30]}...")
             finally:
                 self.is_training = False
-                self.report_status("Online (Selesai Training)")
+                if self.last_phase == "training":
+                    self.report_status("Online (Gagal/Diskonek)")
+                else:
+                    self.report_status("Online (Selesai)")
                 print("FL Client session ended.")
             
         threading.Thread(target=run_client, daemon=True).start()

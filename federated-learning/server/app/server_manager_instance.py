@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 from .db.db import SessionLocal
 from .db.models import FLRound, GlobalModel
+from .utils.mobilefacenet import get_model, verify_architecture_match
 
 def weighted_average(metrics: list) -> dict:
     accuracies = [m[1]["accuracy"] * m[0] for m in metrics]
@@ -28,50 +29,68 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
         results: list,
         failures: list,
     ):
-        aggregated_parameters, aggregated_metrics = super().aggregate_fit(server_round, results, failures)
+        if failures:
+            print(f"Round {server_round} had {len(failures)} failures.")
+            for failure in failures:
+                # Log the failure details if available
+                print(f"  Failure from client: {failure[1] if len(failure) > 1 else 'Unknown error'}")
+
+        # If no results, we can't aggregate
+        if not results:
+            print(f"Round {server_round} has no results to aggregate. Skipping...")
+            return None, {}
+
+        try:
+            aggregated_parameters, aggregated_metrics = super().aggregate_fit(server_round, results, failures)
+        except Exception as e:
+            print(f"CRITICAL ERROR during aggregation in round {server_round}: {e}")
+            return None, {}
 
         if aggregated_parameters is not None:
-            print(f"Round {server_round} aggregated. Saving to database...")
-            params_np = fl.common.parameters_to_ndarrays(aggregated_parameters)
-            
-            final_loss = aggregated_metrics.get("loss", 0.0)
-            
-            # Save to DB
-            db = SessionLocal()
+            print(f"Round {server_round} aggregated successfully. Saving to database...")
             try:
-                new_round = FLRound(
-                    session_id=self.session_id,
-                    round_number=server_round,
-                    loss=final_loss,
-                    metrics=json.dumps(aggregated_metrics)
-                )
-                db.add(new_round)
+                params_np = fl.common.parameters_to_ndarrays(aggregated_parameters)
                 
-                buf = io.BytesIO()
-                torch.save(params_np, buf)
+                final_loss = aggregated_metrics.get("loss", 0.0)
                 
-                global_model = db.query(GlobalModel).first()
-                if not global_model:
-                    global_model = GlobalModel(version=server_round, weights=buf.getvalue())
-                    db.add(global_model)
-                else:
-                    global_model.version = server_round
-                    global_model.weights = buf.getvalue()
-                    global_model.last_updated = datetime.utcnow()
-                
-                db.commit()
-                
+                # Save to DB
+                db = SessionLocal()
                 try:
-                    os.makedirs("data", exist_ok=True)
-                    torch.save(params_np, "data/backbone.pth")
-                except Exception as e:
-                    print(f"Warning: Could not save backbone.pth to disk: {e}")
+                    new_round = FLRound(
+                        session_id=self.session_id,
+                        round_number=server_round,
+                        loss=final_loss,
+                        metrics=json.dumps(aggregated_metrics)
+                    )
+                    db.add(new_round)
                     
+                    buf = io.BytesIO()
+                    torch.save(params_np, buf)
+                    
+                    global_model = db.query(GlobalModel).first()
+                    if not global_model:
+                        global_model = GlobalModel(version=server_round, weights=buf.getvalue())
+                        db.add(global_model)
+                    else:
+                        global_model.version = server_round
+                        global_model.weights = buf.getvalue()
+                        global_model.last_updated = datetime.utcnow()
+                    
+                    db.commit()
+                    
+                    try:
+                        os.makedirs("data", exist_ok=True)
+                        torch.save(params_np, "data/backbone.pth")
+                    except Exception as e:
+                        print(f"Warning: Could not save backbone.pth to disk: {e}")
+                        
+                except Exception as e:
+                    print(f"Error saving round {server_round} to DB: {e}")
+                    db.rollback()
+                finally:
+                    db.close()
             except Exception as e:
-                print(f"Error saving round {server_round}: {e}")
-                db.rollback()
-            finally:
-                db.close()
+                print(f"Error processing aggregated parameters: {e}")
 
         return aggregated_parameters, aggregated_metrics
 
@@ -84,6 +103,10 @@ class FLServerManager:
         self.session_id = session_id
         self.is_running = True
         
+        # Fail-fast Architecture Check
+        model = get_model()
+        verify_architecture_match(model)
+
         initial_parameters = None
         db = SessionLocal()
         try:
@@ -91,7 +114,23 @@ class FLServerManager:
             if latest_model and latest_model.weights:
                 print("FL Server: Loading initial parameters from database...")
                 weights_np = torch.load(io.BytesIO(latest_model.weights))
-                initial_parameters = fl.common.ndarrays_to_parameters(weights_np)
+                
+                # Verify loaded weights match current architecture
+                try:
+                    # Temporary state_dict for shape validation
+                    from collections import OrderedDict
+                    state_dict = model.state_dict()
+                    params_dict = zip(state_dict.keys(), weights_np)
+                    test_sd = OrderedDict({k: torch.tensor(v) for k, v in params_dict})
+                    model.load_state_dict(test_sd, strict=True)
+                    print("[ARCH] Initial parameters match current architecture.")
+                except Exception as ex:
+                    print(f"[ARCH ERROR] Initial parameters mismatch! {ex}")
+                    print("[ARCH] Training will start from random initialization to align with new architecture.")
+                    weights_np = None # Reset to random
+                
+                if weights_np:
+                    initial_parameters = fl.common.ndarrays_to_parameters(weights_np)
         except Exception as e:
             print(f"Error loading initial parameters: {e}")
         finally:

@@ -117,21 +117,19 @@ async def start_fl_training(rounds: int = 10, min_clients: int = 2):
             current_phase = "preprocessing"
             add_phase_log("Phase 1: Instructing clients to perform face extraction and registration...")
             if not wait_for_clients("Siap Training", timeout=600):
-                 add_phase_log("⚠️ Phase 1 Timeout: Preprocessing taking too long.")
-            else:
-                add_phase_log(f"Phase 1 Complete: Face extraction and registration finished.")
+                 add_phase_log("❌ Phase 1 Failed: Not all clients finished preprocessing. Aborting.")
+                 return 
 
             # SYNCING 
             current_phase = "syncing"
             add_phase_log("Phase 2: Instructing clients to synchronize collective student data...")
-            if not wait_for_clients("Siap Preprocess"):
-                add_phase_log("⚠️ Phase 2 Timeout: Not all clients synced in time.")
-            else:
-                add_phase_log(f"Phase 2 Complete: Collective knowledge synchronized.")
+            if not wait_for_clients("Siap Preprocess", timeout=300):
+                add_phase_log("❌ Phase 2 Failed: Not all clients synced in time. Aborting.")
+                return 
 
             # TRAINING
             current_phase = "training"
-            add_phase_log(f"Phase 3: Starting Flower Server Training (Rounds: {rounds})...")
+            add_phase_log(f"Phase 3: Starting Flower Server Training (Rounds: {rounds}, Min Clients: {min_clients})...")
             start_flower_server(session_id, rounds=rounds, min_clients=min_clients)
             
             current_phase = "completed"

@@ -273,55 +273,87 @@ class LocalTrainer:
         self.head = new_head
         self.nrp_to_idx = new_nrp_to_idx
 
-    def _is_bn_param(self, name):
+    def _is_shared_param(self, name):
+        """
+        Strict filter for pFedFace:
+        - Include: conv.weight, conv.bias, linear.weight, linear.bias
+        - Exclude: everything related to BatchNorm (bn, running, tracked)
+        """
         name = name.lower()
-        return 'bn' in name or 'running_' in name or 'num_batches_tracked' in name
+        if any(x in name for x in ['bn', 'running_', 'num_batches_tracked']):
+            return False
+        return any(x in name for x in ['weight', 'bias'])
 
-    def get_backbone_parameters(self, round_num=1):
-        # Round-based filtering for pFedFace: Sync BN only for first 3 rounds
-        include_bn = (round_num <= 3)
+    def get_backbone_parameters(self, personalized=True):
+        """
+        Extracts backbone parameters with strict naming-based filtering.
+        """
         state_dict = self.backbone.state_dict()
-        shared_keys = [k for k in state_dict.keys() if include_bn or not self._is_bn_param(k)]
+        if personalized:
+            # pFedFace: Only share Conv2d and Linear weights/biases
+            shared_keys = [k for k in state_dict.keys() if self._is_shared_param(k)]
+            mode_str = "pFedFace (Conv/Linear Only)"
+        else:
+            shared_keys = list(state_dict.keys())
+            mode_str = "Standard (Full Sync)"
+            
+        print(f"[TRAINER] Extracting {len(shared_keys)} parameters ({mode_str}).")
         
-        shared_params = []
-        for k in shared_keys:
-            shared_params.append(state_dict[k].cpu().numpy().copy())
-        return shared_params
+        return [state_dict[k].cpu().numpy().copy() for k in shared_keys]
 
-    def set_backbone_parameters(self, parameters, round_num=1):
-        include_bn = (round_num <= 3)
+    def set_backbone_parameters(self, parameters, personalized=True):
+        """
+        Injects parameters into the backbone using Named Mapping.
+        Protects against shape mismatches and logs missing/unexpected keys.
+        """
         state_dict = self.backbone.state_dict()
-        shared_keys = [k for k in state_dict.keys() if include_bn or not self._is_bn_param(k)]
         
-        if len(shared_keys) != len(parameters):
-            print(f"[WARNING] Parameter count mismatch! Local filter expects {len(shared_keys)}, but server sent {len(parameters)} (Round: {round_num})")
+        if personalized:
+            shared_keys = [k for k in state_dict.keys() if self._is_shared_param(k)]
+            mode_str = "pFedFace Named Mapping"
+        else:
+            shared_keys = list(state_dict.keys())
+            mode_str = "Standard Mapping"
+
+        # Robustness: Check if count matches shared_keys
+        if len(parameters) != len(shared_keys):
+            print(f"[WARNING] Parameter count mismatch! Model expects {len(shared_keys)}, but received {len(parameters)}.")
+            # Fallback check: if received is full model
             if len(parameters) == len(state_dict):
-                print("[INFO] Correcting to FULL state_dict keys.")
+                print("[INFO] Fallback: Received FULL parameters. Updating all shared keys.")
                 shared_keys = list(state_dict.keys())
             else:
-                non_bn_keys = [k for k in state_dict.keys() if not self._is_bn_param(k)]
-                if len(parameters) == len(non_bn_keys):
-                    print("[INFO] Correcting to NON-BN keys only.")
-                    shared_keys = non_bn_keys
-                else:
-                    print("[ERROR] Fatal Mismatch: Cannot map parameters to model layers. Skipping sync.")
-                    return
+                print("[ERROR] Fatal Mismatch: Cannot map received parameters to expected layers. Sync aborted.")
+                return
 
+        print(f"[TRAINER] Injecting {len(parameters)} parameters ({mode_str}).")
+        
         new_state_dict = OrderedDict(state_dict)
         for k, v in zip(shared_keys, parameters):
             try:
-                # v is a numpy array from Flower
                 tensor_v = torch.from_numpy(v.copy())
                 
+                # SHAPE VALIDATION: Protect against 4D-to-1D leaks (e.g. Bias receiving Weights)
                 if tensor_v.shape != state_dict[k].shape:
-                    # Provide informative error as requested
-                    print(f"[ERROR] Size mismatch for layer '{k}': Model expects {state_dict[k].shape}, Server sent {tensor_v.shape}")
-                    continue # Do not update this specific layer
+                    print(f"[WARNING] Size mismatch for layer '{k}': Model expects {state_dict[k].shape}, received {tensor_v.shape}. Skipping.")
+                    continue
                 
                 new_state_dict[k] = tensor_v
             except Exception as e:
                 print(f"[DEBUG] Error processing layer '{k}': {e}")
-                raise e
+                continue
         
-        # Load with strict=True to ensure all buffers and params are accounted for
-        self.backbone.load_state_dict(new_state_dict, strict=True)
+        # Load with strict=False to allow local personal layers (BN) to persist
+        load_result = self.backbone.load_state_dict(new_state_dict, strict=False)
+        
+        if load_result.missing_keys:
+            # Expected: BN layers will be missing from the update (intended)
+            bn_missing = [k for k in load_result.missing_keys if any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked'])]
+            other_missing = [k for k in load_result.missing_keys if not any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked'])]
+            if other_missing:
+                print(f"[DEBUG] Unexpected Missing Keys: {other_missing}")
+            else:
+                print(f"[INFO] {len(bn_missing)} local BN layers preserved.")
+        
+        if load_result.unexpected_keys:
+            print(f"[WARNING] Unexpected keys in update: {load_result.unexpected_keys}")

@@ -65,12 +65,18 @@ class MobileFaceNet(nn.Module):
 
         self.inplanes = 64
         block = Bottleneck
-        self.blocks = self._make_layer(block, bottleneck_setting)
+        
+        # Explicit block list to ensure consistent naming across layers
+        layers = []
+        for t, c, n, s in bottleneck_setting:
+            for i in range(n):
+                stride = s if i == 0 else 1
+                layers.append(block(self.inplanes, c, stride, t))
+                self.inplanes = c
+        self.blocks = nn.Sequential(*layers)
 
         self.conv2 = ConvBlock(128, 512, 1, 1, 0)
-
         self.linear7 = ConvBlock(512, 512, 7, 1, 0, dw=True, linear=True)
-
         self.linear1 = ConvBlock(512, embedding_size, 1, 1, 0, linear=True)
 
         for m in self.modules():
@@ -81,17 +87,6 @@ class MobileFaceNet(nn.Module):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
 
-    def _make_layer(self, block, setting):
-        layers = []
-        for t, c, n, s in setting:
-            for i in range(n):
-                if i == 0:
-                    layers.append(block(self.inplanes, c, s, t))
-                else:
-                    layers.append(block(self.inplanes, c, 1, t))
-                self.inplanes = c
-        return nn.Sequential(*layers)
-
     def forward(self, x):
         x = self.conv1(x)
         x = self.dw_conv1(x)
@@ -101,3 +96,13 @@ class MobileFaceNet(nn.Module):
         x = self.linear1(x)
         x = x.view(x.size(0), -1)
         return x
+
+def get_model(embedding_size=128):
+    """Standard entry point for both sides to get the identical architecture."""
+    return MobileFaceNet(embedding_size=embedding_size)
+
+def verify_architecture_match(model):
+    """Fail-fast check: counts parameters to identify version mismatch early."""
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"[ARCH] Total parameters in backbone: {total_params}")
+    return total_params
