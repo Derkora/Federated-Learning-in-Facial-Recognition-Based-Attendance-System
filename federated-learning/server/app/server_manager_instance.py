@@ -3,6 +3,7 @@ import os
 import io
 import torch
 import json
+from collections import OrderedDict
 from datetime import datetime
 from .db.db import SessionLocal
 from .db.models import FLRound, GlobalModel
@@ -33,7 +34,10 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
             print(f"Round {server_round} had {len(failures)} failures.")
             for failure in failures:
                 # Log the failure details if available
-                print(f"  Failure from client: {failure[1] if len(failure) > 1 else 'Unknown error'}")
+                if isinstance(failure, tuple) and len(failure) > 1:
+                    print(f"  Failure from client: {failure[1]}")
+                else:
+                    print(f"  Failure detail: {failure}")
 
         # If no results, we can't aggregate
         if not results:
@@ -118,7 +122,6 @@ class FLServerManager:
                 # Verify loaded weights match current architecture
                 try:
                     # Temporary state_dict for shape validation
-                    from collections import OrderedDict
                     state_dict = model.state_dict()
                     params_dict = zip(state_dict.keys(), weights_np)
                     test_sd = OrderedDict({k: torch.tensor(v) for k, v in params_dict})
@@ -147,6 +150,8 @@ class FLServerManager:
                 "round": server_round,
                 "local_epochs": 5,
                 "lr": 0.0001,
+                "mu": 0.01,
+                "lambda": 0.1,
             },
         )
 

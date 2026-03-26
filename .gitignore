@@ -14,8 +14,11 @@ dist/
 downloads/
 videos/
 datasets/
+datasets_equal/
 client1_data/
 client2_data/
+processed_client1/
+processed_client2/
 datasets_processed/
 datasets_balanced/
 backups/

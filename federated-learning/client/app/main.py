@@ -10,6 +10,7 @@ import base64
 import io
 from PIL import Image
 import uvicorn
+import traceback
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -21,6 +22,7 @@ from .db.models import UserLocal, EmbeddingLocal, AttendanceLocal
 from .utils.image_processing import image_processor
 from .utils.classifier import identify_user_globally
 from .utils.security import encryptor
+from .utils.trainer import estimate_blur
 from .client_manager_instance import fl_manager
 
 # Initialize Database
@@ -59,6 +61,17 @@ async def api_inference(data: dict, background_tasks: BackgroundTasks, db: Sessi
         if face_tensor is None:
             print("[INFERENCE] No face detected.")
             return JSONResponse({"matched": "Unknown", "confidence": 0, "message": "No face detected"})
+        
+        # Point 7: Quality-Aware Filtering (Inference)
+        
+        blur_score = estimate_blur(img_pil)
+        if blur_score < 50.0:
+            print(f"[INFERENCE] REJECTED: Image too blurry (Score: {blur_score:.1f})")
+            return JSONResponse({
+                "matched": "REJECTED", 
+                "confidence": 0, 
+                "message": f"Image too blurry ({blur_score:.1f}). Please try again."
+            })
         
         print(f"[INFERENCE] Face Detected (Prob: {prob:.2f})")
         
@@ -120,7 +133,6 @@ async def api_inference(data: dict, background_tasks: BackgroundTasks, db: Sessi
         }
         
     except Exception as e:
-        import traceback
         print(f"[INFERENCE ERROR] {e}")
         traceback.print_exc()
         return JSONResponse({"matched": "Error", "error": str(e)}, status_code=400)
@@ -186,7 +198,6 @@ async def register_user(user_id: str, name: str, image_base64: str, db: Session 
             
         return {"status": "success", "user_id": user_id}
     except Exception as e:
-        import traceback
         print(f"[INFERENCE ERROR] {e}")
         traceback.print_exc()
         db.rollback()

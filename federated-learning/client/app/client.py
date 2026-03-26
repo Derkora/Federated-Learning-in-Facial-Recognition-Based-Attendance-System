@@ -1,8 +1,8 @@
 import flwr as fl
 import torch
 import numpy as np
-from .utils.trainer import LocalTrainer, ArcMarginProduct
-from .utils.mobilefacenet import MobileFaceNet
+from .utils.trainer import LocalTrainer, TrainingNaNError
+from .utils.mobilefacenet import MobileFaceNet, ArcMarginProduct
 import os
 
 from .db.db import SessionLocal
@@ -59,10 +59,20 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         finally:
             db.close()
             
-        loss, accuracy, num_samples = self.trainer.train(
-            epochs=epochs, lr=lr, round_num=rnd, 
-            global_embeddings=global_embs
-        )
+        mu = config.get("mu", 0.01)
+        lam = config.get("lambda", 0.1)
+        
+        try:
+            loss, accuracy, num_samples = self.trainer.train(
+                epochs=epochs, lr=lr, round_num=rnd, 
+                global_embeddings=global_embs,
+                mu=mu, lam=lam
+            )
+            status = "Success"
+        except TrainingNaNError as e:
+            print(f"[CLIENT] {e}. Reporting error to server and rolling back.")
+            loss, accuracy, num_samples = 0.0, 0.0, 0
+            status = "Training Error"
         
         model_dir = os.path.join(self.artifacts_path, "models")
         os.makedirs(model_dir, exist_ok=True)
@@ -72,7 +82,11 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         with open(os.path.join(model_dir, "model_version.txt"), "w") as f:
             f.write(str(rnd))
             
-        return self.trainer.get_backbone_parameters(personalized=True), num_samples, {"loss": loss, "accuracy": accuracy}
+        return self.trainer.get_backbone_parameters(personalized=True), num_samples, {
+            "loss": loss, 
+            "accuracy": accuracy,
+            "status": status
+        }
 
     def evaluate(self, parameters, config):
         self.trainer.set_backbone_parameters(parameters, personalized=True)

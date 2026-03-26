@@ -106,3 +106,55 @@ def verify_architecture_match(model):
     total_params = sum(p.numel() for p in model.parameters())
     print(f"[ARCH] Total parameters in backbone: {total_params}")
     return total_params
+
+class ArcMarginProduct(nn.Module):
+    def __init__(self, in_features, out_features, s=30.0, m=0.50, easy_margin=False):
+        super(ArcMarginProduct, self).__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.s = s
+        self.m_base = m # Rename to m_base for clarity
+        self.weight = Parameter(torch.FloatTensor(out_features, in_features))
+        nn.init.xavier_uniform_(self.weight)
+
+        self.easy_margin = easy_margin
+        # Precomputed values for default m
+        self.update_margin(torch.full((out_features,), m))
+
+    def update_margin(self, margins_tensor):
+        """Dynamic update for adaptive margin."""
+        self.m = margins_tensor.to(self.weight.device)
+        self.cos_m = torch.cos(self.m)
+        self.sin_m = torch.sin(self.m)
+        self.th = torch.cos(math.pi - self.m)
+        self.mm = torch.sin(math.pi - self.m) * self.m
+
+    def forward(self, input, label):
+        cosine = F.linear(F.normalize(input), F.normalize(self.weight))
+        eps = 1e-6
+        cosine = cosine.clamp(-1.0 + eps, 1.0 - eps)
+        sine = torch.sqrt((1.0 - torch.pow(cosine, 2)).clamp(0, 1))
+        
+        # Select margins for the current batch
+        batch_cos_m = self.cos_m[label].view(-1, 1) if label.size(0) > 0 else self.cos_m[0]
+        batch_sin_m = self.sin_m[label].view(-1, 1) if label.size(0) > 0 else self.sin_m[0]
+        batch_th = self.th[label].view(-1, 1) if label.size(0) > 0 else self.th[0]
+        batch_mm = self.mm[label].view(-1, 1) if label.size(0) > 0 else self.mm[0]
+        batch_m = self.m[label].view(-1, 1) if label.size(0) > 0 else self.m[0]
+
+        phi = cosine * batch_cos_m - sine * batch_sin_m
+        
+        if self.easy_margin:
+            phi = torch.where(cosine > 0, phi, cosine)
+        else:
+            phi = torch.where(cosine > batch_th, phi, cosine - batch_mm)
+            
+        if label.size(0) == 0:
+            return torch.zeros(cosine.size(), device=input.device)
+            
+        one_hot = torch.zeros(cosine.size(), device=input.device)
+        one_hot.scatter_(1, label.view(-1, 1).long(), 1)
+        output = (one_hot * phi) + ((1.0 - one_hot) * cosine)
+        output *= self.s
+
+        return output

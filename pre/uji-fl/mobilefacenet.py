@@ -77,7 +77,7 @@ class MobileFaceNet(nn.Module):
         self.blocks = nn.Sequential(*layers)
 
         self.conv2 = ConvBlock(128, 512, 1, 1, 0)
-        self.linear7 = ConvBlock(512, 512, 7, 1, 0, dw=True, linear=True)
+        self.linear7 = ConvBlock(512, 512, (7, 6), 1, 0, dw=True, linear=True)
         self.linear1 = ConvBlock(512, embedding_size, 1, 1, 0, linear=True)
 
         for m in self.modules():
@@ -124,11 +124,11 @@ class ArcMarginProduct(nn.Module):
 
     def update_margin(self, margins_tensor):
         """Dynamic update for adaptive margin."""
-        self.m = margins_tensor.to(self.weight.device)
-        self.cos_m = torch.cos(self.m)
-        self.sin_m = torch.sin(self.m)
-        self.th = torch.cos(math.pi - self.m)
-        self.mm = torch.sin(math.pi - self.m) * self.m
+        self.register_buffer('m', margins_tensor)
+        self.register_buffer('cos_m', torch.cos(margins_tensor))
+        self.register_buffer('sin_m', torch.sin(margins_tensor))
+        self.register_buffer('th', torch.cos(math.pi - margins_tensor))
+        self.register_buffer('mm', torch.sin(math.pi - margins_tensor) * margins_tensor)
 
     def forward(self, input, label):
         cosine = F.linear(F.normalize(input), F.normalize(self.weight))

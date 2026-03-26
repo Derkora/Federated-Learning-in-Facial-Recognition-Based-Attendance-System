@@ -13,6 +13,7 @@ from threading import Thread
 from datetime import datetime
 import numpy as np
 import torch
+import math
 
 from .db.db import engine, get_db, Base, SessionLocal
 from .db.models import FLSession, FLRound, GlobalModel, Client, UserGlobal, AttendanceRecap
@@ -279,10 +280,20 @@ async def get_fl_status(session_id: str, db: Session = Depends(get_db)):
         except:
             pass
             
+    # Sanitize history for JSON (NaN is not JSON compliant)
+    sanitized_history = []
+    for h in history:
+        sanitized_h = h.copy()
+        if isinstance(h["loss"], float) and (math.isnan(h["loss"]) or math.isinf(h["loss"])):
+            sanitized_h["loss"] = 0.0
+        if isinstance(h["accuracy"], float) and (math.isnan(h["accuracy"]) or math.isinf(h["accuracy"])):
+            sanitized_h["accuracy"] = 0.0
+        sanitized_history.append(sanitized_h)
+            
     return {
         "session_id": session_id,
         "rounds_completed": len(rounds),
-        "history": history,
+        "history": sanitized_history,
         "received_data": list(set(received_data)),
         "phase": current_phase,
         "phase_logs": phase_logs

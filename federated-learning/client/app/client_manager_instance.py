@@ -1,6 +1,5 @@
 from .client import FaceRecognitionClient
-from .utils.mobilefacenet import get_model, verify_architecture_match
-from .utils.trainer import ArcMarginProduct
+from .utils.mobilefacenet import get_model, verify_architecture_match, ArcMarginProduct
 import os
 import torch
 import threading
