@@ -17,6 +17,8 @@ datasets/
 datasets_equal/
 client1_data/
 client2_data/
+data_client1/
+data_client2/
 processed_client1/
 processed_client2/
 datasets_processed/
