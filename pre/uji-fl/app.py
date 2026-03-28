@@ -1,93 +1,128 @@
 import streamlit as st
-import cv2, torch, os
+import torch
+import torch.nn as nn
+import cv2
 import numpy as np
+import os
 from PIL import Image
-from mobilefacenet import MobileFaceNet, ArcMarginProduct
 from facenet_pytorch import MTCNN
-import torchvision.transforms as T
 
+# Import model unik xiaoccer (112x96)
+from mobilefacenet import MobileFaceNet, ArcMarginProduct
+
+# --- KONFIGURASI ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+MODEL_GLOBAL_PATH = "global_model_final_fl.pth"
+BN_COMBINED_PATH = "global_bn_combined.pth"
+REGISTRY_PATH = "global_embedding_registry.pth"
 
-# --- Kalibrasi Inferensi Final ---
-# Kita gunakan Temperature 1.1 agar distribusi probabilitas lebih tajam
-TEMPERATURE = 1.1 
-# Threshold dinaikkan sedikit ke 0.55 karena model sudah lebih akurat
-THRESHOLD = 0.55  
+# Detektor Wajah Presisi
+mtcnn = MTCNN(keep_all=False, device=DEVICE)
 
-st.set_page_config(page_title="FL Face Attendance", page_icon="📸", layout="centered")
-st.title("📸 Sistem Absensi Federated Learning")
-st.info(f"Device: {DEVICE} | Mode: Global Consensus (Backbone + Head)")
-
-# Path model hasil training terbaru
-backbone_path = "global_model_final.pth"
-head_path = "global_head_final.pth"
-labels_path = "global_labels.pth"
-
-if not os.path.exists(backbone_path) or not os.path.exists(head_path) or not os.path.exists(labels_path):
-    st.error("Model Global atau Labels tidak ditemukan, Ndan!")
-    st.stop()
-
-# 1. LOAD GLOBAL LABELS
-GLOBAL_LABELS = torch.load(labels_path)
-NUM_CLASSES = len(GLOBAL_LABELS)
-
-# 2. LOAD MODELS
 @st.cache_resource
-def load_models():
-    mtcnn = MTCNN(keep_all=True, device=DEVICE)
-    model = MobileFaceNet().to(DEVICE)
-    model.load_state_dict(torch.load(backbone_path, map_location=DEVICE))
-    model.eval()
+def load_global_embedding_system():
+    # 1. Load Backbone Global (Hasil Kolaborasi FL)
+    backbone = MobileFaceNet().to(DEVICE)
+    if os.path.exists(MODEL_GLOBAL_PATH):
+        backbone.load_state_dict(torch.load(MODEL_GLOBAL_PATH, map_location=DEVICE), strict=False)
     
-    head = ArcMarginProduct(128, NUM_CLASSES).to(DEVICE)
-    head.load_state_dict(torch.load(head_path, map_location=DEVICE))
-    head.eval()
-    return mtcnn, model, head
-
-mtcnn, model, head = load_models()
-
-img_file = st.camera_input("Ambil Foto Absen")
-
-if img_file:
-    img = Image.open(img_file).convert('RGB')
-    boxes, _ = mtcnn.detect(img)
+    # 2. Load Combined BN (Statistik Rata-rata Lingkungan Client)
+    if os.path.exists(BN_COMBINED_PATH):
+        # Mengisi lapisan BN di backbone dengan statistik gabungan agar adaptif
+        backbone.load_state_dict(torch.load(BN_COMBINED_PATH, map_location=DEVICE), strict=False)
     
-    if boxes is not None:
-        img_draw = np.array(img)
-        for box in boxes:
-            x1, y1, x2, y2 = box.astype(int)
-            # Preprocessing 96x112 sesuai standar training
-            face = img.crop((x1, y1, x2, y2)).resize((96, 112))
-            face_tensor = T.Compose([
-                T.ToTensor(), 
-                T.Normalize([0.5]*3, [0.5]*3)
-            ])(face).unsqueeze(0).to(DEVICE)
-            
-            with torch.no_grad():
-                emb = model(face_tensor)
-                # Prediksi menggunakan Global Head
-                logits = head(emb, torch.tensor([0]).to(DEVICE))
-                
-                # Softmax dengan Temperature Scaling
-                prob = torch.softmax(logits / TEMPERATURE, dim=1)
-                score, idx = torch.max(prob, 1)
-                
-                score_val = score.item()
-                predicted_name = GLOBAL_LABELS[idx.item()]
-                
-                # Penentuan Hasil
-                if score_val > THRESHOLD:
-                    display_text = f"{predicted_name} ({score_val:.1%})"
-                    color = (0, 255, 0) # Hijau
-                else:
-                    display_text = f"Unknown ({score_val:.1%})"
-                    color = (255, 0, 0) # Merah
-                
-                # Drawing
-                cv2.rectangle(img_draw, (x1, y1), (x2, y2), color, 3)
-                cv2.putText(img_draw, display_text, (x1, y1-15), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-        
-        st.image(img_draw, caption="Hasil Analisis Wajah")
+    # 3. Load Global Embedding Registry (Database Semua Mahasiswa)
+    if os.path.exists(REGISTRY_PATH):
+        # Bobot identitas dari semua client yang sudah digabung
+        global_embeddings = torch.load(REGISTRY_PATH, map_location=DEVICE)
+        # Normalisasi agar siap dihitung jarak Cosine-nya
+        global_embeddings = nn.functional.normalize(global_embeddings, p=2, dim=1)
     else:
-        st.warning("Wajah tidak terdeteksi")
+        st.error("File Registry Global tidak ditemukan!")
+        return None, None
+
+    backbone.eval()
+    return backbone, global_embeddings
+
+def recognize_snapshot_universal(img_pil, backbone, global_embeddings, label_map, threshold):
+    img_cv2 = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+    
+    # 1. Deteksi Wajah
+    faces_coords, _ = mtcnn.detect(img_pil)
+    
+    if faces_coords is not None:
+        for (x1, y1, x2, y2) in faces_coords:
+            x, y, w, h = int(x1), int(y1), int(x2-x1), int(y2-y1)
+            face_roi = img_cv2[y:y+h, x:x+w]
+            if face_roi.size == 0: continue
+            
+            # 2. Preprocess 112x96 (xiaoccer format)
+            face_resize = cv2.resize(face_roi, (96, 112))
+            face_tensor = (face_resize.astype(np.float32) - 127.5) / 128.0
+            face_tensor = torch.from_numpy(face_tensor).permute(2, 0, 1).unsqueeze(0).to(DEVICE)
+            
+            # 3. Extract Global Feature Embedding
+            with torch.no_grad():
+                current_embedding = backbone(face_tensor)
+                current_embedding = nn.functional.normalize(current_embedding, p=2, dim=1)
+                
+                # 4. Universal Matching (Cosine Similarity)
+                # Membandingkan dengan SEMUA identitas dari Client 1 & Client 2 sekaligus
+                similarities = torch.matmul(current_embedding, global_embeddings.t())
+                max_similarity, predicted_idx = torch.max(similarities, 1)
+                
+            score = max_similarity.item()
+            
+            # 5. Keputusan Absensi
+            if score > threshold:
+                name = label_map.get(predicted_idx.item(), "ID Not Mapped")
+                color = (0, 255, 0) # Hijau jika dikenal
+            else:
+                name = "Unknown"
+                color = (0, 0, 255) # Merah jika asing
+            
+            cv2.rectangle(img_cv2, (x, y), (x+w, y+h), color, 3)
+            cv2.putText(img_cv2, f"{name} Sim:{score:.2f}", (x, y-10), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+            
+    return cv2.cvtColor(img_cv2, cv2.COLOR_BGR2RGB)
+
+def main():
+    st.set_page_config(page_title="Universal Absensi FL", page_icon="🌎")
+    st.title("🌎 Sistem Absensi Universal (Global Embedding)")
+    st.write("Menggunakan gabungan statistik BN dan database identitas dari seluruh node Client.")
+
+    st.sidebar.header("⚙️ Konfigurasi Global")
+    threshold = st.sidebar.slider("Similarity Threshold", 0.0, 1.0, 0.50, 0.05)
+    
+    # --- GABUNGKAN LABEL MAP ---
+    # Karena kita pakai Registry Global, kita harus gabung daftar nama dari semua client
+    full_nrp_list = []
+    for cid in ["client1", "client2"]:
+        path = f"datasets_processed/{cid}/train"
+        if os.path.exists(path):
+            names = sorted([f for f in os.listdir(path) if os.path.isdir(os.path.join(path, f))])
+            full_nrp_list.extend(names)
+    
+    label_map = {i: nrp for i, nrp in enumerate(full_nrp_list)}
+    
+    # Load Sistem Global
+    backbone, global_embeddings = load_global_embedding_system()
+    
+    if backbone is not None:
+        st.sidebar.success(f"✅ Sistem Global Aktif")
+        st.sidebar.info(f"👥 Total Terdaftar: {len(full_nrp_list)} Mahasiswa")
+        
+        img_file = st.camera_input("Ambil foto untuk verifikasi universal")
+
+        if img_file:
+            img_pil = Image.open(img_file)
+            with st.spinner('Mencocokkan dengan database global...'):
+                result_img = recognize_snapshot_universal(img_pil, backbone, global_embeddings, label_map, threshold)
+                # Gunakan parameter lebar terbaru Streamlit agar tidak ada warning
+                st.image(result_img, caption="Hasil Verifikasi Global", use_container_width=True)
+                
+                st.info("💡 Mahasiswa dari Client 1 maupun Client 2 kini bisa absen di sini.")
+
+if __name__ == "__main__":
+    main()

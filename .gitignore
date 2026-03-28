@@ -21,8 +21,9 @@ data_client1/
 data_client2/
 processed_client1/
 processed_client2/
+weights_local/
 datasets_processed/
-datasets_balanced/
+datasets_equalized/
 backups/
 referensi/
 eggs/
