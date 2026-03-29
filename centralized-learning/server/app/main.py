@@ -39,7 +39,7 @@ templates = Jinja2Templates(directory="app/templates")
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     status = cl_manager.get_status()
-    return templates.TemplateResponse("index.html", {"request": request, "title": "Dashboard", "status": status})
+    tetemplates.TemplateResponse("index.html", {"request": request, "title": "Dashboard", "status": status})
 
 @app.get("/records", response_class=HTMLResponse)
 async def view_records(request: Request):

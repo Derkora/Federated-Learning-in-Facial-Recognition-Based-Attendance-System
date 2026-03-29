@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 import os
 import time
+import requests
 import base64
 import io
 from PIL import Image
@@ -19,10 +20,9 @@ import torchvision.transforms.functional as TF
 
 from .db.db import engine, get_db, Base
 from .db.models import UserLocal, EmbeddingLocal, AttendanceLocal
-from .utils.image_processing import image_processor
+from .utils.preprocessing import image_processor
 from .utils.classifier import identify_user_globally
 from .utils.security import encryptor
-from .utils.trainer import estimate_blur
 from .client_manager_instance import fl_manager
 
 # Initialize Database
@@ -34,21 +34,13 @@ templates = Jinja2Templates(directory="app/templates")
 templates.env.globals.update(os=os)
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request, db: Session = Depends(get_db)):
-    users_count = db.query(UserLocal).count()
-    attendance_count = db.query(AttendanceLocal).count()
+async def index(request: Request):
     return templates.TemplateResponse("attendance.html", {
         "request": request,
-        "users_count": users_count,
-        "attendance_count": attendance_count,
-        "is_training": fl_manager.is_training,
         "client_id": fl_manager.client_id,
-        "model_version": fl_manager.model_version
+        "model_version": fl_manager.model_version,
+        "title": "Edge Terminal"
     })
-
-@app.get("/settings", response_class=HTMLResponse)
-async def settings(request: Request):
-    return templates.TemplateResponse("settings.html", {"request": request})
 
 @app.post("/api/inference")
 async def api_inference(data: dict, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -61,17 +53,6 @@ async def api_inference(data: dict, background_tasks: BackgroundTasks, db: Sessi
         if face_tensor is None:
             print("[INFERENCE] No face detected.")
             return JSONResponse({"matched": "Unknown", "confidence": 0, "message": "No face detected"})
-        
-        # Point 7: Quality-Aware Filtering (Inference)
-        
-        blur_score = estimate_blur(img_pil)
-        if blur_score < 50.0:
-            print(f"[INFERENCE] REJECTED: Image too blurry (Score: {blur_score:.1f})")
-            return JSONResponse({
-                "matched": "REJECTED", 
-                "confidence": 0, 
-                "message": f"Image too blurry ({blur_score:.1f}). Please try again."
-            })
         
         print(f"[INFERENCE] Face Detected (Prob: {prob:.2f})")
         
@@ -88,29 +69,61 @@ async def api_inference(data: dict, background_tasks: BackgroundTasks, db: Sessi
             query_embedding_tensor = torch.nn.functional.normalize(query_embedding_tensor, p=2, dim=1)
             query_embedding = query_embedding_tensor.cpu().numpy()[0]
         
-        embeddings = db.query(EmbeddingLocal).all()
-        local_refs = {}
-        for emb in embeddings:
-            try:
-                if emb.is_global:
-                    dec_emb = np.frombuffer(emb.embedding_data, dtype=np.float32)
-                else:
-                    dec_emb = encryptor.decrypt_embedding(emb.embedding_data, emb.iv)
-                local_refs[emb.user_id] = torch.from_numpy(dec_emb).to(fl_manager.device)
-            except: continue
+        if not hasattr(fl_manager, 'cached_refs') or time.time() - getattr(fl_manager, 'last_cache_update', 0) > 30:
+            embeddings = db.query(EmbeddingLocal).all()
+            local_refs = {}
+            for emb in embeddings:
+                try:
+                    if emb.is_global:
+                        dec_emb = np.frombuffer(emb.embedding_data, dtype=np.float32).copy()
+                    else:
+                        dec_emb = encryptor.decrypt_embedding(emb.embedding_data, emb.iv).copy()
+                    local_refs[emb.user_id] = torch.from_numpy(dec_emb).to(fl_manager.device)
+                except: continue
+
+            registry_path = os.path.join(fl_manager.artifacts_path, "models", "global_embedding_registry.pth")
+            if os.path.exists(registry_path):
+                try:
+                    registry = torch.load(registry_path, map_location="cpu")
+                    if isinstance(registry, dict):
+                        for nrp, vec in registry.items():
+                            if isinstance(vec, torch.Tensor):
+                                local_refs[nrp] = vec.to(fl_manager.device)
+                            else:
+                                local_refs[nrp] = torch.from_numpy(np.array(vec).copy()).to(fl_manager.device)
+                    print(f"[CACHE] Loaded {len(registry)} universal identities.")
+                except Exception as e:
+                    pass
+            
+            fl_manager.cached_refs = local_refs
+            fl_manager.last_cache_update = time.time()
         
-        # Identify
-        user_id, confidence = identify_user_globally(query_embedding, local_refs)
+        local_refs = fl_manager.cached_refs
+
+        # --- TEMPORAL VOTING  ---
+        now = time.time()
+        # If face is lost for > 1.0 second, flush buffer
+        if now - fl_manager.last_face_time > 1.0:
+            fl_manager.prediction_buffer.clear()
         
-        # Temporal Voting
-        is_confirmed, voted_id = fl_manager.voter.vote(user_id)
+        fl_manager.prediction_buffer.append(query_embedding_tensor)
+        fl_manager.last_face_time = now
         
-        if is_confirmed and voted_id != "Unknown":
-            user = db.query(UserLocal).filter_by(user_id=voted_id).first()
+        # Calculate mean embedding from buffer
+        mean_embedding_tensor = torch.stack(list(fl_manager.prediction_buffer)).mean(0)
+        mean_embedding_tensor = torch.nn.functional.normalize(mean_embedding_tensor, p=2, dim=1)
+        mean_embedding = mean_embedding_tensor.cpu().numpy()[0]
+        
+        # Identify using Centroid Matcher with Production Threshold (0.50)
+        user_id, confidence = identify_user_globally(mean_embedding, local_refs, threshold=0.50)
+        
+        # Immediate Attendance (Voting Removed)
+        if user_id != "Unknown":
+            user = db.query(UserLocal).filter_by(user_id=user_id).first()
             user_name = user.name if user else "Unknown"
             
             new_attendance = AttendanceLocal(
-                user_id=voted_id,
+                user_id=user_id,
                 confidence=confidence,
                 device_id=os.getenv("HOSTNAME", "terminal-1")
             )
@@ -119,14 +132,14 @@ async def api_inference(data: dict, background_tasks: BackgroundTasks, db: Sessi
             
             background_tasks.add_task(
                 sync_record_to_server, 
-                voted_id, user_name, float(confidence), os.getenv("HOSTNAME", "terminal-1")
+                user_id, user_name, float(confidence), os.getenv("HOSTNAME", "terminal-1")
             )
-            print(f"[ATTENDANCE] Confirmed: {voted_id} ({confidence:.2f})")
+            print(f"[ATTENDANCE] Confirmed: {user_id} ({confidence:.2f})")
             
         latency = int((time.time() - start_time) * 1000)
         return {
             "matched": user_id, 
-            "is_confirmed": is_confirmed,
+            "is_confirmed": True if user_id != "Unknown" else False,
             "confidence": float(confidence), 
             "box": face_box,
             "latency_ms": latency
@@ -203,15 +216,28 @@ async def register_user(user_id: str, name: str, image_base64: str, db: Session 
         db.rollback()
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.get("/api/users")
-async def get_users(db: Session = Depends(get_db)):
-    users = db.query(UserLocal).all()
-    return [u.name for u in users]
+@app.post("/api/request-data")
+async def request_data(background_tasks: BackgroundTasks):
+    def do_preparation():
+        print("[ORCHESTRATOR] Server requested data prep. Running Sync + Preprocess...")
+        fl_manager.run_sync_phase()
+        fl_manager.run_preprocess_phase()
+        print("[ORCHESTRATOR] Remote Data Prep Complete.")
+        
+        # Signal READY to server
+        try:
+            import requests # Ensure it's available in this scope if needed, though usually global
+            requests.post(f"{fl_manager.server_api_url}/api/clients/ready", json={"client_id": fl_manager.client_id}, timeout=5)
+            print(f"[ORCHESTRATOR] Reported READY ({fl_manager.client_id}) to server.")
+        except Exception as e:
+            print(f"[ORCHESTRATOR WARNING] Could not report READY to server: {e}")
+    
+    background_tasks.add_task(do_preparation)
+    return {"status": "success", "message": "Data preparation started"}
 
 @app.on_event("startup")
 def startup_event():
-    print(f"[STARTUP] Personalized FL Client Initialized", flush=True)
+    fl_manager.start_background_tasks()
 
 if __name__ == "__main__":
-    
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8080)

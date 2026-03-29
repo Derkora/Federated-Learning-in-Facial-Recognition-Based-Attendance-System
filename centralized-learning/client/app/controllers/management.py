@@ -4,7 +4,7 @@ import zipfile
 import requests
 import torch
 import traceback
-from app.utils.image_processing import DEVICE
+from app.utils.processing import DEVICE
 
 MODEL_DIR = "app/model"
 DATA_DIR = "data/students"

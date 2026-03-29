@@ -4,22 +4,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Federated Terminal</title>
+    <title>Edge Terminal - Centralized Attendance</title>
     <link rel="stylesheet" href="/static/style.css">
-    <link
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono&display=swap"
-        rel="stylesheet">
 </head>
 
 <body>
     <div class="container">
         <header>
             <h1>Edge Attendance Project</h1>
-            <div class="nav-links">
-                <a href="/">Scanner</a>
-                <a href="/settings">Registration</a>
-            </div>
-            <div class="terminal-badge">FEDERATED CLIENT: {{ os.getenv("HOSTNAME", "T1") }}</div>
+            <div class="terminal-badge">CLIENT: {{ client_id }}</div>
         </header>
 
         <main>

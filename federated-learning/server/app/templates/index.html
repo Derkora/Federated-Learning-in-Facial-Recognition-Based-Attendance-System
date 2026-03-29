@@ -1,0 +1,218 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="stats-grid">
+    <div class="stat-card glass">
+        <div class="stat-label">System Phase</div>
+        <div class="stat-value" id="phase-display"
+            style="font-size: 1.2rem; color: var(--accent); text-transform: capitalize;">
+            {{ status.phase if status.phase else 'Idle' }}
+        </div>
+    </div>
+    <div class="stat-card glass">
+        <div class="stat-label">System Status</div>
+        <div class="stat-value {% if status.is_running %}status-running{% else %}status-standby{% endif %}"
+            id="status-phase" style="font-size: 1.2rem;">
+            {{ "Training Active" if status.is_running else "Standby" }}
+        </div>
+    </div>
+    <div class="stat-card glass">
+        <div class="stat-label">Model Accuracy</div>
+        <div class="stat-value" id="model-acc" style="font-size: 1.2rem; color: var(--accent);">-- %</div>
+    </div>
+    <div class="stat-card glass">
+        <div class="stat-label">TAR / FAR (0.70)</div>
+        <div class="stat-value" id="metric-biometric" style="font-size: 1.2rem;">-- / --</div>
+    </div>
+    <div class="stat-card glass">
+        <div class="stat-label">Estimated Cost (IDR)</div>
+        <div class="stat-value" id="cost-idr" style="font-size: 1.2rem; color: var(--danger);">Rp 0</div>
+    </div>
+</div>
+
+<div class="chart-section" style="grid-template-columns: 1fr 350px;">
+    <div class="glass" style="padding: 1.5rem;">
+        <div style="margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <h2 style="margin: 0;">Federated Learning Rounds</h2>
+                <p style="color: var(--text-muted); font-size: 0.9rem;">Trigger and monitor the global backbone
+                    aggregation.</p>
+            </div>
+            <div style="display: flex; gap: 0.5rem;">
+                <input type="number" id="rounds" value="{{ status.default_rounds }}" min="1"
+                    style="width: 50px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); color: white; border-radius: 4px; padding: 5px;">
+                <button id="start-btn" class="btn btn-primary" onclick="startTraining()" {{ 'disabled' if
+                    status.is_running }}>
+                    {{ "RUNNING..." if status.is_running else "🚀 START TRAINING" }}
+                </button>
+            </div>
+        </div>
+
+        <div id="training-terminal">
+            [READY] Federated coordinator initialized.<br>
+            [WAITING] Clients connected: 2. Waiting for start signal...
+        </div>
+    </div>
+
+    <div class="glass" style="padding: 1.5rem;">
+        <h2 style="margin-top: 0;">Student Presence</h2>
+        <div id="student-list" style="margin-top: 1.2rem; max-height: 400px; overflow-y: auto;">
+            {% if status.attendance_count == 0 %}
+            <p style="color: var(--text-muted);">No logs received yet.</p>
+            {% endif %}
+        </div>
+        <hr style="margin: 1.5rem 0; border: none; border-top: 1px solid rgba(255,255,255,0.05);">
+        <h2 style="margin-top: 0;">Learning Health</h2>
+        <div style="margin-top: 1.2rem;">
+            <div class="metric-row">
+                <span>Shared Model:</span>
+                <b style="color: var(--accent);">MobileFaceNet</b>
+            </div>
+            <div class="metric-row">
+                <span>Participation:</span>
+                <b>{{ status.default_min_clients }}/{{ status.default_min_clients }} Clients</b>
+            </div>
+            <div class="metric-row">
+                <span>Total Rounds:</span>
+                <b>{{ status.default_rounds }}</b>
+            </div>
+            <div class="metric-row">
+                <span>Payload Transfer:</span>
+                <b id="metric-transfer">-- MB</b>
+            </div>
+            <div class="metric-row">
+                <span>EER (Equal Error Rate):</span>
+                <b id="metric-eer">-- %</b>
+            </div>
+            <div class="metric-row" style="border: none;">
+                <span>Latest Loss:</span>
+                <b id="latest-loss">--</b>
+            </div>
+            <div style="height: 100px; margin-top: 0.5rem;">
+                <canvas id="lossChartMini"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .metric-row {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 0.8rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        font-size: 0.9rem;
+    }
+
+    .metric-row span {
+        color: var(--text-muted);
+    }
+</style>
+
+<script>
+    let lossChart;
+    let pollInterval = null;
+
+    function initChart() {
+        const ctx = document.getElementById('lossChartMini').getContext('2d');
+        lossChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    data: [],
+                    borderColor: '#4f46e5',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.4,
+                    fill: false
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: { display: false },
+                    x: { display: false }
+                },
+                plugins: { legend: { display: false } }
+            }
+        });
+    }
+
+    async function startTraining() {
+        const rounds = document.getElementById('rounds').value;
+        const res = await fetch(`/api/fl/start?rounds=${rounds}&min_clients={{ status.default_min_clients }}`, { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'started') {
+            alert("🚀 Full Lifecycle Started: Sync -> Preprocess -> Train");
+            startPolling();
+        } else if (data.status === 'already_running') {
+            alert("⚠️ Training is already in progress.");
+        }
+    }
+
+    function startPolling() {
+        if (pollInterval) clearInterval(pollInterval);
+        pollInterval = setInterval(updateUIState, 2000);
+    }
+
+    function stopPolling() {
+        if (pollInterval) clearInterval(pollInterval);
+        pollInterval = null;
+    }
+
+    async function updateUIState() {
+        try {
+            const res = await fetch('/api/status');
+            const data = await res.json();
+
+            // 1. Update Phase & Running Status
+            const phaseEl = document.getElementById('phase-display');
+            phaseEl.innerText = data.phase || 'Idle';
+            phaseEl.style.color = (data.is_busy) ? 'var(--accent)' : 'var(--text-muted)';
+
+            const statusEl = document.getElementById('status-phase');
+            statusEl.innerText = data.is_running ? "Training Active" : "Standby";
+            statusEl.className = `stat-value ${data.is_running ? 'status-running' : 'status-standby'}`;
+
+            // 2. Update Logs (Terminal)
+            const terminal = document.getElementById('training-terminal');
+            if (data.phase_logs && data.phase_logs.length > 0) {
+                terminal.innerHTML = data.phase_logs.join('<br>');
+                terminal.scrollTop = terminal.scrollHeight;
+            }
+
+            // 3. Update Metrics
+            if (data.metrics) {
+                const m = data.metrics;
+                document.getElementById('latest-loss').innerText = (m.loss || 0).toFixed(4);
+                document.getElementById('model-acc').innerText = `${((m.accuracy || 0) * 100).toFixed(1)} %`;
+                document.getElementById('cost-idr').innerText = `Rp ${(m.cost_idr || 0).toLocaleString()}`;
+                document.getElementById('metric-transfer').innerText = `${(m.payload_size_mb || 0).toFixed(1)} MB`;
+
+                // Biometric metrics from data.metrics
+                document.getElementById('metric-biometric').innerText = `${((m.tar || 0) * 100).toFixed(1)}% / ${((m.far || 0) * 100).toFixed(1)}%`;
+                document.getElementById('metric-eer').innerText = `${((m.eer || 0) * 100).toFixed(1)} %`;
+            }
+
+            // 4. Update Student List (Training Participation)
+            const list = document.getElementById('student-list');
+            if (data.received_data && data.received_data.length > 0) {
+                list.innerHTML = data.received_data.map(s => `<div class="student-item">✅ ${s}</div>`).join('');
+            }
+
+            // 5. Polling Management
+            if (data.is_busy && !pollInterval) startPolling();
+            if (!data.is_busy && pollInterval) stopPolling();
+
+        } catch (e) { console.error("Poll error:", e); }
+    }
+
+    initChart();
+    updateUIState();
+    // Initial poll for live updates
+    startPolling();
+</script>
+{% endblock %}

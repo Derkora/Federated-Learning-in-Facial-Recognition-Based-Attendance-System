@@ -4,7 +4,6 @@ from PIL import Image
 from facenet_pytorch import MTCNN
 from .mobilefacenet import MobileFaceNet
 
-# DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DEVICE = torch.device('cpu')
 
 class ImageProcessor:

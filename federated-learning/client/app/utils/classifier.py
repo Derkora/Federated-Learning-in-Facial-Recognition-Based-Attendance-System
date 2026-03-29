@@ -2,23 +2,11 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-def identify_user_globally(query_embedding, local_embeddings_dict, threshold=0.65, metric="cosine"):
-    """
-    Identify user based on chosen metric (default: Cosine Similarity).
-    
-    Args:
-        query_embedding (np.ndarray or torch.Tensor): The embedding of the face to identify.
-        local_embeddings_dict (dict): Dictionary mapping user_id to their reference embedding.
-        threshold (float): Similarity threshold for 'Unknown'.
-        metric (str): Similarity metric ('cosine' or 'euclidean').
-        
-    Returns:
-        tuple: (matched_user_id, confidence)
-    """
+def identify_user_globally(query_embedding, local_embeddings_dict, threshold=0.35, metric="cosine"):
     if not local_embeddings_dict:
         return "Unknown", 0.0
     
-    # 1. Prepare Query Tensor
+    # Prepare Query Tensor
     query_tensor = torch.from_numpy(query_embedding).float() if isinstance(query_embedding, np.ndarray) else query_embedding.float()
     if query_tensor.dim() == 1:
         query_tensor = query_tensor.unsqueeze(0)
@@ -35,10 +23,9 @@ def identify_user_globally(query_embedding, local_embeddings_dict, threshold=0.6
         if ref_tensor.dim() == 1:
             ref_tensor = ref_tensor.unsqueeze(0)
         
-        # Ensure identical device and normalization
-        ref_tensor = ref_tensor.to(query_tensor.device)
-        ref_tensor = F.normalize(ref_tensor, p=2, dim=1)
-        
+        if query_tensor.shape[1] != ref_tensor.shape[1]:
+            continue
+
         if metric == "cosine":
             similarity = F.linear(query_tensor, ref_tensor).item()
             if similarity > max_sim:

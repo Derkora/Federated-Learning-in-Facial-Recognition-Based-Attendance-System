@@ -1,7 +1,7 @@
 import requests
 import torch
 import torch.nn.functional as F
-from app.utils.image_processing import image_processor, DEVICE
+from app.utils.preprocessing import image_processor, DEVICE
 
 class AttendanceController:
     def __init__(self, server_url, client_id):

@@ -6,6 +6,7 @@ services:
       - "8081:8080"
     environment:
       DATABASE_URL: postgresql://admin:admin123@server-cl-db:5432/cl_server
+      PYTHONUNBUFFERED: 1
     depends_on:
       server-cl-db:
         condition: service_healthy
@@ -18,6 +19,7 @@ services:
     environment:
       DATABASE_URL: postgresql://client:client123@client1-cl-db:5432/cl_client
       CL_SERVER_ADDRESS: http://server-cl:8080
+      PYTHONUNBUFFERED: 1
     depends_on:
       client1-cl-db:
         condition: service_healthy
@@ -34,6 +36,7 @@ services:
     environment:
       DATABASE_URL: postgresql://client:client123@client2-cl-db:5432/cl_client
       CL_SERVER_ADDRESS: http://server-cl:8080
+      PYTHONUNBUFFERED: 1
     depends_on:
       client2-cl-db:
         condition: service_healthy

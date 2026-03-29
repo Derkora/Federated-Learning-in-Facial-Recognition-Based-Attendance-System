@@ -49,4 +49,4 @@ if __name__ == "__main__":
     SOURCE_DATA = "datasets"
     DEST_DATA = "datasets_equalized"
 
-    process_equalization(SOURCE_DATA, DEST_DATA, limit=60)
+    process_equalization(SOURCE_DATA, DEST_DATA, limit=50)

@@ -1,8 +1,9 @@
 from fastapi import FastAPI, Request, Depends, HTTPException, BackgroundTasks
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
+
 import os
 import time
 import json
@@ -14,10 +15,14 @@ from datetime import datetime
 import numpy as np
 import torch
 import math
+import base64
+import io
 
 from .db.db import engine, get_db, Base, SessionLocal
 from .db.models import FLSession, FLRound, GlobalModel, Client, UserGlobal, AttendanceRecap
 from .server import start_flower_server
+from .server_manager_instance import fl_manager
+from collections import defaultdict
 
 # Initialize Database
 Base.metadata.create_all(bind=engine)
@@ -26,31 +31,18 @@ app = FastAPI(title="Federated Learning Server Dashboard")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 
-# Global state
-active_session_id = None
-is_server_running = False
-current_phase = "idle"
-phase_logs = []
-registered_clients = {}
-
+# Helper to bridge to fl_manager
 def add_phase_log(msg):
-    ts = datetime.now().strftime("%H:%M:%S")
-    phase_logs.append(f"[{ts}] {msg}")
-    print(f"PHASE LOG: {msg}")
+    fl_manager.update_logs(msg)
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request, db: Session = Depends(get_db)):
-    sessions = db.query(FLSession).order_by(FLSession.start_time.desc()).all()
-    attendance_count = db.query(AttendanceRecap).count()
-    
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
-        "sessions": sessions,
-        "is_running": is_server_running,
-        "active_session_id": active_session_id,
-        "attendance_count": attendance_count
-    })
+    status = fl_manager.get_status(db=db)
+    return templates.TemplateResponse("index.html", {"request": request, "title": "Dashboard", "status": status})
 
+@app.get("/api/status")
+async def get_system_status():
+    return fl_manager.get_status()
 @app.get("/records", response_class=HTMLResponse)
 async def records(request: Request, db: Session = Depends(get_db)):
     # Get all students (UserGlobal)
@@ -81,16 +73,19 @@ async def records(request: Request, db: Session = Depends(get_db)):
     })
 
 @app.post("/api/fl/start")
-async def start_fl_training(rounds: int = 10, min_clients: int = 2):
-    global active_session_id, is_server_running, current_phase
+async def start_fl_training(rounds: int = None, min_clients: int = None, epochs: int = None):
+    # Use centralized defaults from manager if not provided
+    rounds = rounds or fl_manager.default_rounds
+    min_clients = min_clients or fl_manager.default_min_clients
+    if epochs: fl_manager.default_epochs = epochs # Temporary override for this session
     
-    if is_server_running:
+    if fl_manager.is_busy or fl_manager.is_running:
         return {"status": "already_running"}
     
-    session_id = str(uuid4())[:8]
-    active_session_id = session_id
-    is_server_running = True
-    phase_logs.clear()
+    session_id = f"session_{int(time.time())}"
+    fl_manager.session_id = session_id
+    fl_manager.current_logs = [] # Clear logs for new session
+    fl_manager.received_data = [] # Clear student list for new session
     
     # Save session to DB
     db = SessionLocal()
@@ -98,49 +93,43 @@ async def start_fl_training(rounds: int = 10, min_clients: int = 2):
     db.add(new_session)
     db.commit()
     db.close()
-    
-    def run_lifecycle():
-        global is_server_running, current_phase
+
+    def orchestrate():
         try:
-            add_phase_log("🚀 Starting Unified FL Lifecycle...")
+            db = SessionLocal()
+            fl_manager.start_phase("Data Preparation")
+            fl_manager.ensure_model_seeded(db)
+            db.close()
             
-            # Helper to check client readiness
-            def wait_for_clients(target_status, timeout=300):
-                start_w = time.time()
-                while time.time() - start_w < timeout:
-                    ready = [c for c in registered_clients.values() if target_status.lower() in (c.get('fl_status', '')).lower()]
-                    if len(ready) >= min_clients:
-                        return True
-                    time.sleep(2)
-                return False
-
-            # PREPROCESSING 
-            current_phase = "preprocessing"
-            add_phase_log("Phase 1: Instructing clients to perform face extraction and registration...")
-            if not wait_for_clients("Siap Training", timeout=600):
-                 add_phase_log("❌ Phase 1 Failed: Not all clients finished preprocessing. Aborting.")
-                 return 
-
-            # SYNCING 
-            current_phase = "syncing"
-            add_phase_log("Phase 2: Instructing clients to synchronize collective student data...")
-            if not wait_for_clients("Siap Preprocess", timeout=300):
-                add_phase_log("❌ Phase 2 Failed: Not all clients synced in time. Aborting.")
-                return 
-
-            # TRAINING
-            current_phase = "training"
-            add_phase_log(f"Phase 3: Starting Flower Server Training (Rounds: {rounds}, Min Clients: {min_clients})...")
-            start_flower_server(session_id, rounds=rounds, min_clients=min_clients)
+            fl_manager.registry_submissions.clear()
             
-            current_phase = "completed"
-            add_phase_log("✅ Federated Training Cycle Finished Successfully.")
+            add_phase_log("🚀 Starting One-Button Full Lifecycle [Federated]...")
+            add_phase_log("📡 Triggering Remote Data Prep (Sync & Preprocess)...")
+            fl_manager.ready_clients.clear()
+            trigger_all_clients_command("/api/request-data")
+            
+            # Wait for clients to signal READY (with 10-min timeout)
+            add_phase_log("⏳ Waiting for Clients to complete Sync + MTCNN Preprocessing...")
+            start_wait = time.time()
+            max_wait = 600 
+            
+            while len(fl_manager.ready_clients) < min_clients:
+                if time.time() - start_wait > max_wait:
+                    add_phase_log("⚠️ Preparation Timeout (10m). Proceeding with available clients...")
+                    break
+                time.sleep(5)
+            
+            fl_manager.start_phase("Training")
+            add_phase_log(f"🎓 Starting Flower Federated Training with {len(fl_manager.ready_clients)} ready clients...")
+            fl_manager.start_training(session_id, rounds=rounds, min_clients=min_clients)
+            
+            fl_manager.start_phase("Completed")
+            add_phase_log("✅ Full Lifecycle Finished.")
 
         except Exception as e:
             add_phase_log(f"❌ Lifecycle Error: {e}")
         finally:
-            is_server_running = False
-            current_phase = "idle"
+            fl_manager.end_phase()
             db = SessionLocal()
             session = db.query(FLSession).filter_by(session_id=session_id).first()
             if session:
@@ -148,8 +137,20 @@ async def start_fl_training(rounds: int = 10, min_clients: int = 2):
                 db.commit()
             db.close()
 
-    Thread(target=run_lifecycle, daemon=True).start()
+    Thread(target=orchestrate, daemon=True).start()
     return {"status": "started", "session_id": session_id}
+
+def trigger_all_clients_command(endpoint):
+    """Broadcast a command to all registered clients via their API."""
+    for cid, data in fl_manager.registered_clients.items():
+        ip = data.get("ip_address")
+        if ip:
+            url = f"http://{ip}:8080{endpoint}" 
+            try:
+                requests.post(url, timeout=2)
+                print(f"[ORCHESTRATOR] Sent {endpoint} to {cid} at {ip}")
+            except Exception as e:
+                print(f"[ORCHESTRATOR ERROR] Could not signal client {cid}: {e}")
 
 @app.post("/api/clients/register")
 async def register_client(data: dict, db: Session = Depends(get_db)):
@@ -157,7 +158,7 @@ async def register_client(data: dict, db: Session = Depends(get_db)):
     ip = data.get("ip_address", "0.0.0.0")
     
     if cid:
-        registered_clients[cid] = data
+        fl_manager.registered_clients[cid] = data
         # Sync to DB
         client = db.query(Client).filter_by(edge_id=cid).first()
         if not client:
@@ -171,7 +172,13 @@ async def register_client(data: dict, db: Session = Depends(get_db)):
         
     return {"status": "ok", "server_time": time.time()}
 
-from fastapi.responses import Response
+@app.post("/api/clients/ready")
+async def report_client_ready(data: dict):
+    cid = data.get("client_id")
+    if cid:
+        fl_manager.ready_clients.add(cid)
+        print(f"[ORCHESTRATOR] Client {cid} reported READY.")
+    return {"status": "ok"}
 
 @app.get("/api/model/backbone")
 async def get_backbone_model(db: Session = Depends(get_db)):
@@ -180,13 +187,29 @@ async def get_backbone_model(db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Global model not found")
     return Response(content=global_model.weights, media_type="application/octet-stream")
 
+@app.get("/api/model/bn")
+async def get_bn_model():
+    path = "data/global_bn_combined.pth"
+    if os.path.exists(path):
+        with open(path, "rb") as f:
+            return Response(content=f.read(), media_type="application/octet-stream")
+    return {"error": "BN Assets not found"}
+
+@app.get("/api/model/registry")
+async def get_registry():
+    path = "data/global_embedding_registry.pth"
+    if os.path.exists(path):
+        with open(path, "rb") as f:
+            return Response(content=f.read(), media_type="application/octet-stream")
+    return {"error": "Registry not found"}
+
 @app.get("/api/training/status")
 async def get_training_status():
     return {
-        "current_phase": current_phase,
-        "is_running": is_server_running,
-        "active_session_id": active_session_id,
-        "logs": phase_logs[-10:]
+        "current_phase": fl_manager.current_phase,
+        "is_running": fl_manager.is_running,
+        "active_session_id": fl_manager.session_id,
+        "logs": fl_manager.current_logs[-10:]
     }
 
 @app.post("/api/training/get_label")
@@ -198,7 +221,6 @@ async def get_label(data: dict, db: Session = Depends(get_db)):
     
     embedding_bytes = None
     if embedding_b64:
-        import base64
         embedding_bytes = base64.b64decode(embedding_b64)
 
     user = db.query(UserGlobal).filter_by(nrp=nrp).first()
@@ -212,10 +234,92 @@ async def get_label(data: dict, db: Session = Depends(get_db)):
         if embedding_bytes:
             user.embedding = embedding_bytes
         db.commit()
+    
+    # Add to Dashboard Student List
+    if nrp not in fl_manager.received_data:
+        fl_manager.received_data.append(nrp)
         
-    export_reference_embeddings()
-
     return {"nrp": nrp, "label": user.user_id}
+
+@app.post("/api/training/registry_assets")
+async def receive_registry_assets(data: dict, db: Session = Depends(get_db)):
+    """
+    Registry Updates: Automated Asset Collection
+    Receives BN parameters and Centroids from clients at Final Round.
+    """
+    client_id = data.get("client_id")
+    rnd = data.get("round")
+    serialized_bn = data.get("bn_params")
+    centroids = data.get("centroids")
+    
+    # Decode BN
+    bn_bytes = base64.b64decode(serialized_bn)
+    bn_params = torch.load(io.BytesIO(bn_bytes), map_location="cpu")
+    
+    # Decode Centroids
+    decoded_centroids = {}
+    for nrp, b64_vec in centroids.items():
+        vec_bytes = base64.b64decode(b64_vec)
+        decoded_centroids[nrp] = np.frombuffer(vec_bytes, dtype=np.float32)
+        
+    # Store in global state for aggregation
+    fl_manager.registry_submissions[client_id] = {
+        "bn": bn_params,
+        "centroids": decoded_centroids
+    }
+    
+    add_phase_log(f"Received Registry assets from {client_id} (Round {rnd}, {len(decoded_centroids)} centroids)")
+    
+    # 3. Aggregation Trigger (when we have enough clients)
+    # In a real scenario, we'd wait for all min_clients. For now, let's trigger it.
+    if len(fl_manager.registry_submissions) >= 2: # Assuming 2 clients as per compose
+        aggregate_and_save_registry_assets()
+        
+    return {"status": "received"}
+
+def aggregate_and_save_registry_assets():
+    """
+    Registry Generation: Combined BN & Centroid Registry
+    Averages BN stats and merges centroids into final global assets.
+    """
+    try:
+        add_phase_log("⚙️ Starting Registry Generation: Asset Aggregation...")
+        
+        # Combine BN (Averaging)
+        clients_bn = [sub['bn'] for sub in fl_manager.registry_submissions.values()]
+        global_bn = {}
+        bn_keys = list(clients_bn[0].keys())
+        
+        for key in bn_keys:
+            # Stats like num_batches_tracked are long/int
+            # We just take the value from the first client or average them
+            if clients_bn[0][key].dtype == np.int64 or 'num_batches_tracked' in key:
+                global_bn[key] = torch.from_numpy(clients_bn[0][key])
+            else:
+                # Stack and mean (CPU Only)
+                tensors = [torch.from_numpy(bn[key]) for bn in clients_bn]
+                global_bn[key] = torch.stack(tensors).mean(0)
+        
+        os.makedirs("data", exist_ok=True)
+        torch.save(global_bn, "data/global_bn_combined.pth")
+        add_phase_log("✅ Generated data/global_bn_combined.pth")
+        
+        # Centroid Registry (Merge all)
+        all_centroids = {}
+        for client_id, sub in fl_manager.registry_submissions.items():
+            for nrp, vec in sub['centroids'].items():
+                all_centroids[nrp] = torch.from_numpy(vec)
+                
+        torch.save(all_centroids, "data/global_embedding_registry.pth")
+        add_phase_log(f"✅ Generated data/global_embedding_registry.pth ({len(all_centroids)} identities)")
+        
+        if len(all_centroids) == 0:
+            add_phase_log("⚠️ WARNING: Generated registry is EMPTY. Check if clients have training data.")
+        
+    except Exception as e:
+        add_phase_log(f"Aggregation Error: {e}")
+        import traceback
+        traceback.print_exc()
 
 @app.get("/api/users/global")
 async def get_global_users(db: Session = Depends(get_db)):
@@ -232,11 +336,13 @@ async def get_global_users(db: Session = Depends(get_db)):
 async def sync_attendance(records: list, db: Session = Depends(get_db)):
     new_records = 0
     for rec in records:
-        # Resolve user_id from nrp (if needed, but usually rec['user_id'] is the NRP or Global ID)
-        # Assuming rec['user_id'] on the client side now matches UserGlobal.user_id or nrp
         nrp = rec['user_id']
         user = db.query(UserGlobal).filter_by(nrp=nrp).first()
         if not user: continue
+        
+        # Add to Dashboard Student List if not already there
+        if nrp not in fl_manager.received_data:
+            fl_manager.received_data.append(nrp)
         
         ts = datetime.fromisoformat(rec['timestamp'])
         exists = db.query(AttendanceRecap).filter_by(
@@ -295,55 +401,13 @@ async def get_fl_status(session_id: str, db: Session = Depends(get_db)):
         "rounds_completed": len(rounds),
         "history": sanitized_history,
         "received_data": list(set(received_data)),
-        "phase": current_phase,
-        "phase_logs": phase_logs
+        "phase": fl_manager.current_phase,
+        "phase_logs": fl_manager.current_logs
     }
-
-def export_latest_model_to_disk():
-    """Exports the latest global model from DB to disk for visibility/backup."""
-    db = SessionLocal()
-    try:
-        global_model = db.query(GlobalModel).order_by(GlobalModel.last_updated.desc()).first()
-        if global_model and global_model.weights:
-            import io
-            import torch
-            import numpy as np
-            
-            os.makedirs("data", exist_ok=True)
-            # weights are saved as ndarrays in the buffer
-            weights_np = torch.load(io.BytesIO(global_model.weights))
-            torch.save(weights_np, "data/backbone.pth")
-            print(f"[STARTUP] Exported global model (v{global_model.version}) to data/backbone.pth")
-    except Exception as e:
-        print(f"[STARTUP] Failed to export model to disk: {e}")
-    finally:
-        db.close()
-
-def export_reference_embeddings():
-    """Exports all UserGlobal embeddings to data/reference_embeddings.pth."""
-    db = SessionLocal()
-    try:
-        users = db.query(UserGlobal).filter(UserGlobal.embedding.isnot(None)).all()
-        ref_dict = {}
-        for u in users:
-            # Convert LargeBinary to numpy then to torch
-            emb_np = np.frombuffer(u.embedding, dtype=np.float32)
-            ref_dict[u.nrp] = torch.from_numpy(emb_np.copy())
-        
-        os.makedirs("data", exist_ok=True)
-        torch.save(ref_dict, "data/reference_embeddings.pth")
-        print(f"[EXPORT] Saved {len(users)} embeddings to data/reference_embeddings.pth")
-    except Exception as e:
-        print(f"[EXPORT ERROR] {e}")
-    finally:
-        db.close()
 
 @app.on_event("startup")
 def startup_event():
     print(f"[STARTUP] FL Server Dashboard Initialized", flush=True)
-    export_latest_model_to_disk()
-    export_reference_embeddings()
 
 if __name__ == "__main__":
-    
     uvicorn.run(app, host="0.0.0.0", port=8080)

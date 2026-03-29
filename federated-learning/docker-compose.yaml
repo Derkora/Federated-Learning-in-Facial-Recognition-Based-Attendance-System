@@ -7,6 +7,7 @@ services:
       - "8085:8085"
     environment:
       DATABASE_URL: postgresql://admin:admin123@server-fl-db:5432/fl_server
+      PYTHONUNBUFFERED: 1
     depends_on:
       server-fl-db:
         condition: service_healthy
@@ -22,6 +23,7 @@ services:
       DATABASE_URL: postgresql://client:client123@client1-fl-db:5432/fl_client
       SERVER_API_URL: http://server-fl:8080
       FL_SERVER_ADDRESS: server-fl:8085
+      PYTHONUNBUFFERED: 1
     depends_on:
       client1-fl-db:
         condition: service_healthy
@@ -39,6 +41,7 @@ services:
       DATABASE_URL: postgresql://client:client123@client2-fl-db:5432/fl_client
       SERVER_API_URL: http://server-fl:8080
       FL_SERVER_ADDRESS: server-fl:8085
+      PYTHONUNBUFFERED: 1
     depends_on:
       client2-fl-db:
         condition: service_healthy
@@ -59,12 +62,12 @@ services:
       - server_fl_data:/var/lib/postgresql/data
     networks:
       - flnet
-    healthcheck:  
-      test: ["CMD-SHELL", "pg_isready -U admin -d fl_server"]
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U admin -d fl_server" ]
       interval: 5s
       timeout: 5s
       retries: 5
-    
+
   client1-fl-db:
     image: postgres:15
     environment:
@@ -75,12 +78,12 @@ services:
       - client1_fl_data:/var/lib/postgresql/data
     networks:
       - flnet
-    healthcheck: 
-      test: ["CMD-SHELL", "pg_isready -U client -d fl_client"]
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U client -d fl_client" ]
       interval: 5s
       timeout: 5s
       retries: 5
-    
+
   client2-fl-db:
     image: postgres:15
     environment:
@@ -91,8 +94,8 @@ services:
       - client2_fl_data:/var/lib/postgresql/data
     networks:
       - flnet
-    healthcheck: 
-      test: ["CMD-SHELL", "pg_isready -U client -d fl_client"]
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U client -d fl_client" ]
       interval: 5s
       timeout: 5s
       retries: 5

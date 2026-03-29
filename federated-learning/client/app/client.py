@@ -4,6 +4,9 @@ import numpy as np
 from .utils.trainer import LocalTrainer, TrainingNaNError
 from .utils.mobilefacenet import MobileFaceNet, ArcMarginProduct
 import os
+import requests
+import base64
+import io
 
 from .db.db import SessionLocal
 from .db.models import EmbeddingLocal, UserLocal
@@ -39,7 +42,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
             print(f"ERROR in set_backbone_parameters: {e}")
             raise e
         
-        epochs = config.get("local_epochs", 5)
+        epochs = config.get("local_epochs", 3)
         lr = config.get("lr", 0.0001)
         
         db = SessionLocal()
@@ -61,6 +64,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
             
         mu = config.get("mu", 0.01)
         lam = config.get("lambda", 0.1)
+        total_rounds = config.get("total_rounds", 20)
         
         try:
             loss, accuracy, num_samples = self.trainer.train(
@@ -77,14 +81,55 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         model_dir = os.path.join(self.artifacts_path, "models")
         os.makedirs(model_dir, exist_ok=True)
         torch.save(self.model.state_dict(), os.path.join(model_dir, "backbone.pth"))
-        torch.save(self.head.state_dict(), os.path.join(model_dir, "local_head.pth"))
+        torch.save(self.trainer.head.state_dict(), os.path.join(model_dir, "local_head.pth"))
         
         with open(os.path.join(model_dir, "model_version.txt"), "w") as f:
             f.write(str(rnd))
             
+        # Phase 4 Automation: Final Round
+        if rnd == total_rounds:
+            print(f"[CLIENT] Phase 4: Final Round ({total_rounds}) reached. Generating universal assets...")
+            try:
+                # Extract BN Parameters
+                bn_params = self.trainer.get_bn_parameters()
+                
+                # Calculate Centroids (48 train images)
+                centroids = self.trainer.calculate_centroids()
+
+                # We need to serialize numpy arrays for JSON
+                serialized_centroids = {nrp: base64.b64encode(vec.tobytes()).decode('utf-8') for nrp, vec in centroids.items()}
+                
+                # BN params are more complex, let's pickle them into a buffer then b64
+                bn_buf = io.BytesIO()
+                torch.save(bn_params, bn_buf)
+                serialized_bn = base64.b64encode(bn_buf.getvalue()).decode('utf-8')
+                
+                server_url = os.getenv("SERVER_API_URL", "http://server-fl:8080")
+                payload = {
+                    "client_id": os.getenv("HOSTNAME", "terminal-1"),
+                    "round": rnd,
+                    "bn_params": serialized_bn,
+                    "centroids": serialized_centroids
+                }
+                
+                res = requests.post(f"{server_url}/api/training/registry_assets", json=payload, timeout=60)
+                if res.status_code == 200:
+                    print(f"[CLIENT] Registry: {len(centroids)} Centroids successfully submitted to server.")
+                else:
+                    print(f"[CLIENT] Phase 4 Error: Server returned {res.status_code}")
+            except Exception as e:
+                print(f"[CLIENT] Phase 4 Error: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # Evaluate on validation set for metrics reporting
+        val_loss, val_accuracy, _ = self.trainer.evaluate(global_embeddings=global_embs)
+        
         return self.trainer.get_backbone_parameters(personalized=True), num_samples, {
             "loss": loss, 
             "accuracy": accuracy,
+            "val_loss": val_loss,
+            "val_accuracy": val_accuracy,
             "status": status
         }
 

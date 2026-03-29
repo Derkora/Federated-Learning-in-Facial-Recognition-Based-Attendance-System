@@ -1,18 +1,27 @@
-from .client import FaceRecognitionClient
-from .utils.mobilefacenet import get_model, verify_architecture_match, ArcMarginProduct
 import os
 import torch
 import threading
+import collections
 import flwr as fl
-
 import requests
 from PIL import Image
+from facenet_pytorch import MTCNN
 import time
 import socket
+import io
+import base64
+import numpy as np
+import cv2
 
-from .utils.face_pipeline import face_pipeline
+from torchvision import transforms
+from torchvision.transforms import InterpolationMode
+
 from .utils.security import encryptor
-from .utils.voting import TemporalVoter
+from .utils.classifier import identify_user_globally
+from .utils.mobilefacenet import MobileFaceNet, ArcMarginProduct
+from .db.db import SessionLocal
+from .db.models import UserLocal, EmbeddingLocal
+from .client import FaceRecognitionClient
 
 class FLClientManager:
     def __init__(self):
@@ -24,11 +33,9 @@ class FLClientManager:
         os.makedirs(os.path.join(self.artifacts_path, "processed"), exist_ok=True)
 
         self.device = torch.device("cpu")
-        print(f"[HARDWARE] Forced device: {self.device}")
-        
-        self.backbone = get_model().to(self.device)
-        verify_architecture_match(self.backbone) # Fail-fast local check
+        self.backbone = MobileFaceNet().to(self.device)
         self.backbone.eval()
+        self.detector = MTCNN(image_size=112, margin=20, keep_all=False, device=self.device, post_process=False)
         
         # PERSISTENCE: Determine dynamic head size
         save_path = os.path.join(self.artifacts_path, "models", "backbone.pth")
@@ -52,6 +59,12 @@ class FLClientManager:
                 print(f"Loading existing backbone weights from {save_path}...")
                 self.backbone.load_state_dict(torch.load(save_path, map_location=self.device))
                 
+                # Load Combined BN if exists (Universal Mode)
+                bn_combined_path = os.path.join(self.artifacts_path, "models", "global_bn_combined.pth")
+                if os.path.exists(bn_combined_path):
+                    print("Loading Combined BN statistics...")
+                    self.backbone.load_state_dict(torch.load(bn_combined_path, map_location=self.device), strict=False)
+
                 # Try loading persistent version first
                 v_path = os.path.join(self.artifacts_path, "models", "model_version.txt")
                 if os.path.exists(v_path):
@@ -80,11 +93,13 @@ class FLClientManager:
         self.is_registered = False
         self.last_register_attempt = 0
         self.register_retry_delay = 30 # seconds
+        
+        # Temporal Voting Buffer (10 frames)
+        self.prediction_buffer = collections.deque(maxlen=10)
+        self.last_face_time = 0
 
-        # Inference state
-        self.voter = TemporalVoter(window_size=10, majority_threshold=7)
-
-        # Start heartbeat thread
+    def start_background_tasks(self):
+        print(f"[STARTUP] Starting background tasks for client: {self.client_id}")
         threading.Thread(target=self.heartbeat_loop, daemon=True).start()
 
     def report_status(self, status=None):
@@ -131,6 +146,7 @@ class FLClientManager:
             time.sleep(5)
 
     def handle_phase_transition(self, phase):
+        phase = phase.lower()
         print(f"[CLIENT] Phase Transition: {self.last_phase} -> {phase}")
         
         if phase == "syncing":
@@ -143,49 +159,79 @@ class FLClientManager:
             self.fl_status = "Online (Selesai)"
             
         if self.last_phase == "training" and phase != "training":
-            print("[CLIENT] Training finished. Downloading latest model and refreshing local embeddings...")
+            print("[CLIENT] Training finished. Downloading Final Registry assets (Centroids & Combined BN)...")
             def update_task():
-                if self.download_global_model():
-                    self.refresh_local_embeddings()
+                if self.download_registry_assets():
+                    self.run_sync_phase()
+                    self.refresh_local_embeddings() 
             threading.Thread(target=update_task, daemon=True).start()
 
-    def download_global_model(self):
-        """Atomic Update: Download backbone parameters from server and reload."""
+    def download_backbone(self):
         try:
-            url = f"{self.server_api_url}/api/model/backbone"
-            print(f"[RELOAD] Fetching latest backbone from {url}...")
-            res = requests.get(url, timeout=30)
-            if res.status_code == 200:
-                # Save as ndarrays bytes
-                model_dir = os.path.join(self.artifacts_path, "models")
-                tmp_path = os.path.join(model_dir, "backbone_tmp.pth")
-                save_path = os.path.join(model_dir, "backbone.pth")
+            url_bb = f"{self.server_api_url}/api/model/backbone"
+            print(f"[SYNC] Fetching global backbone from {url_bb}...")
+            res_bb = requests.get(url_bb, timeout=30)
+            if res_bb.status_code == 200:
+                save_path = os.path.join(self.artifacts_path, "models", "backbone.pth")
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                with open(save_path, "wb") as f:
+                    f.write(res_bb.content)
                 
-                with open(tmp_path, "wb") as f:
-                    f.write(res.content)
-                
-                # Atomic swap
-                os.replace(tmp_path, save_path)
-                
-                # Load list of ndarrays from the .pth file (saved by server)
-                parameters = torch.load(save_path, map_location=self.device)
-                
-                # Apply using the trainer's robust mapping logic (pFedFace compliant)
-                print(f"[RELOAD] Applying {len(parameters)} parameters via refined trainer logic...")
-                self.client.trainer.set_backbone_parameters(parameters, personalized=True)
-                
-                print(f"[RELOAD] Backbone updated atomically on {self.device}")
+                # Update Trainer
+                try:
+                    parameters = torch.load(save_path, map_location=self.device)
+                    self.client.trainer.set_backbone_parameters(parameters, personalized=True)
+                    print("[SYNC] Global backbone applied successfully.")
+                except Exception as e:
+                    print(f"[SYNC] Failed to apply parameters: {e}")
                 return True
-            else:
-                print(f"[RELOAD] Server returned {res.status_code} during model fetch.")
+        except Exception as e:
+            print(f"[SYNC ERROR] Backbone fetch failed: {e}")
+        return False
+
+    def download_registry_assets(self):
+        """Phase 4: Registry - Download combined BN and identification centroids."""
+        try:
+            # Download Combined BN (Global Accuracy Boost)
+            try:
+                url_bn = f"{self.server_api_url}/api/model/bn"
+                res_bn = requests.get(url_bn, timeout=10)
+                if res_bn.status_code == 200:
+                    bn_path = os.path.join(self.artifacts_path, "models", "global_bn_combined.pth")
+                    with open(bn_path, "wb") as f:
+                        f.write(res_bn.content)
+                    self.backbone.load_state_dict(torch.load(bn_path, map_location=self.device), strict=False)
+                    print("[RELOAD] Combined BN applied.")
+                else:
+                    print(f"[RELOAD] BN Asset not available on server (Status: {res_bn.status_code})")
+            except Exception as e:
+                print(f"[RELOAD] BN Load skipped: {e}")
+
+            # Download Centroid Registry
+            try:
+                url_reg = f"{self.server_api_url}/api/model/registry"
+                res_reg = requests.get(url_reg, timeout=10)
+                if res_reg.status_code == 200:
+                    reg_path = os.path.join(self.artifacts_path, "models", "global_embedding_registry.pth")
+                    with open(reg_path, "wb") as f:
+                        f.write(res_reg.content)
+                    print("[RELOAD] Centroid Registry updated.")
+                else:
+                    print(f"[RELOAD] Registry not available on server (Status: {res_reg.status_code})")
+            except Exception as e:
+                print(f"[RELOAD] Registry Update skipped: {e}")
+
+            self.download_backbone()
+            return True
         except Exception as e:
             print(f"[RELOAD ERROR] {e}")
         return False
 
     def run_sync_phase(self):
         self.report_status("Processing: Sinkronisasi Data...")
-        from .db.db import SessionLocal
-        from .db.models import UserLocal, EmbeddingLocal
+        
+        self.download_backbone()
+        
         db = SessionLocal()
         
         try:
@@ -205,8 +251,6 @@ class FLClientManager:
                     
                     # Sync Global Embedding (Memory)
                     if u['embedding']:
-                        import base64
-                        import numpy as np
                         emb_bytes = base64.b64decode(u['embedding'])
                         
                         exists = db.query(EmbeddingLocal).filter_by(user_id=u['nrp'], is_global=True).first()
@@ -239,10 +283,6 @@ class FLClientManager:
 
     def refresh_local_embeddings(self):
         """Re-extract embeddings for all local students using the latest backbone."""
-        from .db.db import SessionLocal
-        from .db.models import UserLocal, EmbeddingLocal
-        from PIL import Image
-        import io
         
         db = SessionLocal()
         try:
@@ -260,11 +300,8 @@ class FLClientManager:
                 img_path = os.path.join(user_folder, imgs[0])
                 img_pil = Image.open(img_path).convert('RGB')
                 
-                # We don't need detections since it's already a processed face
-                from torchvision import transforms
-                from torchvision.transforms import InterpolationMode
                 preprocess = transforms.Compose([
-                    transforms.Resize((112, 112), interpolation=InterpolationMode.BILINEAR), 
+                    transforms.Resize((112, 96), interpolation=InterpolationMode.BILINEAR), 
                     transforms.ToTensor(),
                     transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
                 ])
@@ -293,14 +330,11 @@ class FLClientManager:
                         is_global=False
                     )
                     db.add(new_emb)
-                print(f"[REFRESH] Re-computed embedding for {user.user_id}")
-            
                 db.commit()
                 print(f"[REFRESH] Re-computed embedding for {user.user_id}")
                 
                 # Register to Server (Knowledge Sharing)
                 try:
-                    import base64
                     payload = {
                         "nrp": user.user_id,
                         "name": user.name,
@@ -318,8 +352,18 @@ class FLClientManager:
         finally:
             db.close()
 
+    def get_blur_score(self, image_path):
+        """Menghitung skor ketajaman menggunakan Laplacian Variance."""
+        try:
+            img = cv2.imread(image_path)
+            if img is None: return 0
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            return cv2.Laplacian(gray, cv2.CV_64F).var()
+        except:
+            return 0
+
     def run_preprocess_phase(self):
-        self.report_status("Processing: Ekstraksi Wajah (MTCNN)...")
+        self.report_status("Processing: Ekstraksi Wajah (Laplacian Top 50)...")
         students_dir = os.path.join(self.data_path, "students")
         processed_dir = os.path.join(self.artifacts_path, "processed")
         os.makedirs(processed_dir, exist_ok=True)
@@ -333,35 +377,42 @@ class FLClientManager:
             nrp = folder.split('_')[0] if "_" in folder else folder
             target_folder = os.path.join(processed_dir, nrp)
             
-            # Skip if already processed
-            if os.path.exists(target_folder) and len(os.listdir(target_folder)) >= 5:
+            # Re-process if folder exists but doesn't meet the new quality standard
+            if os.path.exists(target_folder) and len(os.listdir(target_folder)) >= 40:
                 continue
                 
             os.makedirs(target_folder, exist_ok=True)
             source_path = os.path.join(students_dir, folder)
             
-            print(f"[PREPROCESS] Extracting faces for {nrp}...")
+            print(f"[PREPROCESS] Selecting Top 50 faces for {nrp} using Laplacian Variance...")
+            
+            # SELEKSI KUALITAS
+            all_images = [f for f in os.listdir(source_path) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+            scored_images = []
+            for img_name in all_images:
+                score = self.get_blur_score(os.path.join(source_path, img_name))
+                scored_images.append((img_name, score))
+            
+            scored_images.sort(key=lambda x: x[1], reverse=True)
+            top_images = [img[0] for img in scored_images[:50]]
+            
+            # EKSTRAKSI MTCNN
             count = 0
-            img_list = os.listdir(source_path)
-            for img_name in img_list:
-                if not img_name.lower().endswith(('.jpg', '.jpeg', '.png')): continue
+            for img_name in top_images:
                 try:
                     full_path = os.path.join(source_path, img_name)
                     img_pil = Image.open(full_path).convert('RGB')
                     
-                    face_img = face_pipeline.detect_and_crop(img_pil)
+                    target_path = os.path.join(target_folder, f"face_{count}.jpg")
+                    face_img = self.detector(img_pil, save_path=target_path)
                     if face_img is not None:
-                        target_path = os.path.join(target_folder, f"face_{count}.jpg")
-                        face_img.save(target_path)
                         count += 1
-                    if count >= 100: break
                 except Exception as e:
                     print(f"Error processing {img_name}: {e}")
             
             # Register discovered user to local DB
             if count > 0:
-                from .db.db import SessionLocal
-                from .db.models import UserLocal
+                
                 db = SessionLocal()
                 try:
                     user = db.query(UserLocal).filter_by(user_id=nrp).first()
