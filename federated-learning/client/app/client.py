@@ -17,6 +17,15 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         self.head = head
         self.artifacts_path = artifacts_path
         self.device = device if isinstance(device, torch.device) else torch.device(device)
+        self.label_map = None
+        
+        # Priority: Load from local archive (Permanent Label Mastery)
+        map_path = os.path.join(self.artifacts_path, "models", "label_map.json")
+        if os.path.exists(map_path):
+            import json
+            with open(map_path, "r") as f:
+                self.label_map = json.load(f)
+                print(f"[CLIENT] Initialized with archived Global Label Map: {len(self.label_map)} identities.")
         
         processed_path = os.path.join(self.artifacts_path, "processed")
         self.trainer = LocalTrainer(self.model, self.head, device=self.device, data_path=processed_path)
@@ -32,6 +41,11 @@ class FaceRecognitionClient(fl.client.NumPyClient):
     def fit(self, parameters, config):
         rnd = config.get("round", 0)
         print(f"FL Fit [Round {rnd}]: Receiving {len(parameters)} parameters...")
+        
+        # Redundant Sync: Ensure label map is present
+        if not self.label_map and "label_map" in config:
+            self.label_map = json.loads(config["label_map"])
+            print(f"[CLIENT] Received label_map via fit config.")
         
         try:
             if len(parameters) > 0:
@@ -70,6 +84,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
             loss, accuracy, num_samples = self.trainer.train(
                 epochs=epochs, lr=lr, round_num=rnd, 
                 global_embeddings=global_embs,
+                label_map=self.label_map,
                 mu=mu, lam=lam
             )
             status = "Success"
@@ -86,41 +101,6 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         with open(os.path.join(model_dir, "model_version.txt"), "w") as f:
             f.write(str(rnd))
             
-        # Phase 4 Automation: Final Round
-        if rnd == total_rounds:
-            print(f"[CLIENT] Phase 4: Final Round ({total_rounds}) reached. Generating universal assets...")
-            try:
-                # Extract BN Parameters
-                bn_params = self.trainer.get_bn_parameters()
-                
-                # Calculate Centroids (48 train images)
-                centroids = self.trainer.calculate_centroids()
-
-                # We need to serialize numpy arrays for JSON
-                serialized_centroids = {nrp: base64.b64encode(vec.tobytes()).decode('utf-8') for nrp, vec in centroids.items()}
-                
-                # BN params are more complex, let's pickle them into a buffer then b64
-                bn_buf = io.BytesIO()
-                torch.save(bn_params, bn_buf)
-                serialized_bn = base64.b64encode(bn_buf.getvalue()).decode('utf-8')
-                
-                server_url = os.getenv("SERVER_API_URL", "http://server-fl:8080")
-                payload = {
-                    "client_id": os.getenv("HOSTNAME", "terminal-1"),
-                    "round": rnd,
-                    "bn_params": serialized_bn,
-                    "centroids": serialized_centroids
-                }
-                
-                res = requests.post(f"{server_url}/api/training/registry_assets", json=payload, timeout=60)
-                if res.status_code == 200:
-                    print(f"[CLIENT] Registry: {len(centroids)} Centroids successfully submitted to server.")
-                else:
-                    print(f"[CLIENT] Phase 4 Error: Server returned {res.status_code}")
-            except Exception as e:
-                print(f"[CLIENT] Phase 4 Error: {e}")
-                import traceback
-                traceback.print_exc()
 
         # Evaluate on validation set for metrics reporting
         val_loss, val_accuracy, _ = self.trainer.evaluate(global_embeddings=global_embs)
@@ -147,7 +127,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         finally:
             db.close()
             
-        loss, accuracy, num_samples = self.trainer.evaluate(global_embeddings=global_embs)
+        loss, accuracy, num_samples = self.trainer.evaluate(global_embeddings=global_embs, label_map=self.label_map)
         return float(loss), num_samples, {"accuracy": float(accuracy)}
 
 def start_fl_client(server_address, model, head, artifacts_path="/app/artifacts", device="cpu"):

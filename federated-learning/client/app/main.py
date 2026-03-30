@@ -70,17 +70,7 @@ async def api_inference(data: dict, background_tasks: BackgroundTasks, db: Sessi
             query_embedding = query_embedding_tensor.cpu().numpy()[0]
         
         if not hasattr(fl_manager, 'cached_refs') or time.time() - getattr(fl_manager, 'last_cache_update', 0) > 30:
-            embeddings = db.query(EmbeddingLocal).all()
             local_refs = {}
-            for emb in embeddings:
-                try:
-                    if emb.is_global:
-                        dec_emb = np.frombuffer(emb.embedding_data, dtype=np.float32).copy()
-                    else:
-                        dec_emb = encryptor.decrypt_embedding(emb.embedding_data, emb.iv).copy()
-                    local_refs[emb.user_id] = torch.from_numpy(dec_emb).to(fl_manager.device)
-                except: continue
-
             registry_path = os.path.join(fl_manager.artifacts_path, "models", "global_embedding_registry.pth")
             if os.path.exists(registry_path):
                 try:
@@ -91,9 +81,24 @@ async def api_inference(data: dict, background_tasks: BackgroundTasks, db: Sessi
                                 local_refs[nrp] = vec.to(fl_manager.device)
                             else:
                                 local_refs[nrp] = torch.from_numpy(np.array(vec).copy()).to(fl_manager.device)
-                    print(f"[CACHE] Loaded {len(registry)} universal identities.")
+                    print(f"[CACHE] Loaded {len(local_refs)} FL-trained identities from global registry.")
                 except Exception as e:
-                    pass
+                    print(f"[CACHE] Failed to load global registry: {e}")
+            
+            if not local_refs:
+                embeddings = db.query(EmbeddingLocal).all()
+                for emb in embeddings:
+                    if emb.user_id in local_refs:
+                        continue 
+                    try:
+                        if emb.is_global:
+                            dec_emb = np.frombuffer(emb.embedding_data, dtype=np.float32).copy()
+                        else:
+                            dec_emb = encryptor.decrypt_embedding(emb.embedding_data, emb.iv).copy()
+                        local_refs[emb.user_id] = torch.from_numpy(dec_emb).to(fl_manager.device)
+                    except: continue
+                if local_refs:
+                    print(f"[CACHE] Using {len(local_refs)} DB embeddings (pre-training fallback).")
             
             fl_manager.cached_refs = local_refs
             fl_manager.last_cache_update = time.time()
@@ -217,23 +222,29 @@ async def register_user(user_id: str, name: str, image_base64: str, db: Session 
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/request-data")
-async def request_data(background_tasks: BackgroundTasks):
-    def do_preparation():
-        print("[ORCHESTRATOR] Server requested data prep. Running Sync + Preprocess...")
-        fl_manager.run_sync_phase()
+@app.post("/api/request-discovery")
+async def request_discovery(background_tasks: BackgroundTasks):
+    background_tasks.add_task(fl_manager.run_discovery_phase)
+    return {"status": "success", "message": "Discovery started"}
+
+@app.post("/api/request-preprocess")
+async def request_preprocess(background_tasks: BackgroundTasks):
+    def do_prep():
         fl_manager.run_preprocess_phase()
-        print("[ORCHESTRATOR] Remote Data Prep Complete.")
-        
         # Signal READY to server
         try:
-            import requests # Ensure it's available in this scope if needed, though usually global
             requests.post(f"{fl_manager.server_api_url}/api/clients/ready", json={"client_id": fl_manager.client_id}, timeout=5)
             print(f"[ORCHESTRATOR] Reported READY ({fl_manager.client_id}) to server.")
         except Exception as e:
             print(f"[ORCHESTRATOR WARNING] Could not report READY to server: {e}")
-    
-    background_tasks.add_task(do_preparation)
-    return {"status": "success", "message": "Data preparation started"}
+            
+    background_tasks.add_task(do_prep)
+    return {"status": "success", "message": "Preprocessing started"}
+
+@app.post("/api/request-registry")
+async def request_registry(background_tasks: BackgroundTasks):
+    background_tasks.add_task(fl_manager.run_registry_phase)
+    return {"status": "success", "message": "Registry generation started"}
 
 @app.on_event("startup")
 def startup_event():

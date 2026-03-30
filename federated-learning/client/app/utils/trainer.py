@@ -40,7 +40,7 @@ def hybrid_collate(batch):
     return torch.stack(imgs), torch.stack(embs), torch.tensor(labels), torch.tensor(is_embedding)
 
 class FaceDataset(Dataset):
-    def __init__(self, data_root, global_embeddings=None, transform=None, mode="train", seed=42):
+    def __init__(self, data_root, global_embeddings=None, transform=None, mode="train", label_map=None, seed=42):
         self.data_root = data_root
         self.transform = transform
         self.samples = []
@@ -48,13 +48,19 @@ class FaceDataset(Dataset):
         
         local_nrps = []
         if os.path.exists(data_root):
-            local_nrps = [f for f in os.listdir(data_root) if os.path.isdir(os.path.join(data_root, f))]
+            local_nrps = sorted([f for f in os.listdir(data_root) if os.path.isdir(os.path.join(data_root, f))])
             
         global_nrps = []
         if global_embeddings:
             global_nrps = [item['nrp'] for item in global_embeddings]
             
-        all_unique_nrps = sorted(list(set(local_nrps + global_nrps)))
+        if label_map:
+            all_unique_nrps = label_map
+            print(f"[DATASET] Using Global Label Map with {len(all_unique_nrps)} identities.")
+        else:
+            all_unique_nrps = sorted(list(set(local_nrps + global_nrps)))
+            print(f"[DATASET] Building Local Label Map with {len(all_unique_nrps)} identities.")
+
         self.nrp_to_idx = {nrp: idx for idx, nrp in enumerate(all_unique_nrps)}
         self.id_map = {idx: nrp for nrp, idx in self.nrp_to_idx.items()}
         self.num_classes = len(all_unique_nrps)
@@ -62,9 +68,13 @@ class FaceDataset(Dataset):
         # Initialize counts
         self.class_counts = {idx: 0 for idx in range(self.num_classes)}
 
-        # Data Alignment with uji-fl
-        print(f"[DATASET] Loading local folders for {len(local_nrps)} users...")
+        # Data Alignment with uji-fl: Strictly follow global label_map if provided
+        print(f"[DATASET] Processing local folders for {len(local_nrps)} users...")
         for nrp in local_nrps:
+            if label_map and nrp not in self.nrp_to_idx:
+                print(f"  [SKIP] {nrp}: Not in global label map.")
+                continue
+                
             folder_path = os.path.join(data_root, nrp)
             paths = sorted(glob.glob(os.path.join(folder_path, "*.*")))
             idx = self.nrp_to_idx[nrp]
@@ -120,7 +130,8 @@ class LocalTrainer:
             transforms.RandomRotation(degrees=15),
             transforms.ColorJitter(brightness=0.2, contrast=0.2), 
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+            transforms.RandomErasing(p=0.1)
         ])
         
         self.val_transform = transforms.Compose([
@@ -129,8 +140,8 @@ class LocalTrainer:
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ])
 
-    def train(self, epochs=5, lr=0.0001, round_num=0, global_embeddings=None, mu=0.05, lam=0.1):
-        dataset = FaceDataset(self.data_path, global_embeddings=global_embeddings, transform=self.transform, mode="train")
+    def train(self, epochs=5, lr=0.0001, round_num=0, global_embeddings=None, label_map=None, mu=0.05, lam=0.1):
+        dataset = FaceDataset(self.data_path, global_embeddings=global_embeddings, transform=self.transform, mode="train", label_map=label_map)
         if len(dataset) < 2:
             print(f"[TRAINER] Data too small ({len(dataset)}) for training. Skipping round.")
             return 0.0, 0.0, len(dataset)
@@ -217,8 +228,8 @@ class LocalTrainer:
         accuracy = correct / total if total > 0 else 0.0
         return avg_loss, accuracy, total
 
-    def evaluate(self, global_embeddings=None):
-        dataset = FaceDataset(self.data_path, global_embeddings=global_embeddings, transform=self.val_transform, mode="val")
+    def evaluate(self, global_embeddings=None, label_map=None):
+        dataset = FaceDataset(self.data_path, global_embeddings=global_embeddings, transform=self.val_transform, mode="val", label_map=label_map)
         if len(dataset) < 2: return 0.0, 0.0, len(dataset)
             
         dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=hybrid_collate)
@@ -322,8 +333,8 @@ class LocalTrainer:
             except: continue
         self.backbone.load_state_dict(new_state_dict, strict=False)
 
-    def calculate_centroids(self):
-        dataset = FaceDataset(self.data_path, transform=self.val_transform, mode="train")
+    def calculate_centroids(self, label_map=None):
+        dataset = FaceDataset(self.data_path, transform=self.val_transform, mode="train", label_map=label_map)
         if len(dataset) == 0: return {}
         dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=hybrid_collate)
         self.backbone.eval()

@@ -28,7 +28,7 @@ services:
       client1-fl-db:
         condition: service_healthy
     volumes:
-      - ../datasets/client1_data:/app/data
+      - ../datasets/client1_data:/app/raw_data
     networks:
       - flnet
 
@@ -46,7 +46,7 @@ services:
       client2-fl-db:
         condition: service_healthy
     volumes:
-      - ../datasets/client2_data:/app/data
+      - ../datasets/client2_data:/app/raw_data
     networks:
       - flnet
 

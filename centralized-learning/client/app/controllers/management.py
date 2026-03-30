@@ -7,9 +7,9 @@ import traceback
 from app.utils.processing import DEVICE
 
 MODEL_DIR = "app/model"
-DATA_DIR = "data/students"
+DATA_DIR = os.getenv("RAW_DATA_PATH", "raw_data") + "/students"
 os.makedirs(MODEL_DIR, exist_ok=True)
-os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs("data", exist_ok=True)
 
 class ManagementController:
     def __init__(self, server_url, client_id):

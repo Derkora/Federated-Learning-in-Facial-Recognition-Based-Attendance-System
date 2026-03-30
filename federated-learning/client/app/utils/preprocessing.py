@@ -44,18 +44,24 @@ class ImageProcessor:
         Output Shape: (1, 3, 112, 96)
         """
         if isinstance(face_data, torch.Tensor):
-            if face_data.shape[1:] != (112, 96):
-                img_pil = TF.to_pil_image(face_data)
+            # MTCNN with post_process=False returns [0, 255] float
+            # Scale to [0, 1] before any PIL conversion or normalization
+            if face_data.max() > 1.0:
+                face_tensor = face_data.float() / 255.0
+            else:
+                face_tensor = face_data.float()
+
+            # Ensure 112x96 shape (H, W)
+            if face_tensor.shape[1:] != (112, 96):
+                img_pil = TF.to_pil_image(face_tensor)
                 img_resized = img_pil.resize((96, 112), Image.BILINEAR)
                 face_tensor = TF.to_tensor(img_resized)
-            else:
-                face_tensor = face_data.float() / 255.0 if face_data.max() > 1.0 else face_data.float()
         else:
             # Assume PIL Input
             img_resized = face_data.resize((96, 112), Image.BILINEAR)
             face_tensor = TF.to_tensor(img_resized)
 
-        # Normalize to [-1, 1] range
+        # Final Normalization to [-1, 1]
         normalized_tensor = self.normalize(face_tensor)
         
         return normalized_tensor.unsqueeze(0).to(DEVICE)

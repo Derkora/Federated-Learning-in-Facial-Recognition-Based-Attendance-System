@@ -1,4 +1,5 @@
 import os
+import json
 import torch
 import threading
 import collections
@@ -12,6 +13,7 @@ import io
 import base64
 import numpy as np
 import cv2
+import shutil
 
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
@@ -23,10 +25,16 @@ from .db.db import SessionLocal
 from .db.models import UserLocal, EmbeddingLocal
 from .client import FaceRecognitionClient
 
+# Helper to bridge to fl_manager (if called from global context)
+def add_phase_log(msg):
+    # This matches the server's helper style for consistency in logs
+    print(f"[LOG] {msg}")
+
 class FLClientManager:
     def __init__(self):
         self.data_path = os.getenv("DATA_PATH", "/app/data")
-        self.artifacts_path = os.getenv("ARTIFACTS_PATH", "/app/artifacts")
+        self.raw_data_path = os.getenv("RAW_DATA_PATH", "/app/raw_data")
+        self.artifacts_path = os.getenv("ARTIFACTS_PATH", "/app/data/artifacts")
         # Ensure directories exist
         os.makedirs(self.artifacts_path, exist_ok=True)
         os.makedirs(os.path.join(self.artifacts_path, "models"), exist_ok=True)
@@ -41,10 +49,9 @@ class FLClientManager:
         save_path = os.path.join(self.artifacts_path, "models", "backbone.pth")
         head_path = os.path.join(self.artifacts_path, "models", "local_head.pth")
         
-        self.num_classes = 1000 # Default
+        self.num_classes = 1000 # Default fallback
         if os.path.exists(head_path):
             try:
-                # Probe the head file to get the class count
                 checkpoint = torch.load(head_path, map_location="cpu")
                 if "weight" in checkpoint:
                     self.num_classes = checkpoint["weight"].shape[0]
@@ -65,7 +72,6 @@ class FLClientManager:
                     print("Loading Combined BN statistics...")
                     self.backbone.load_state_dict(torch.load(bn_combined_path, map_location=self.device), strict=False)
 
-                # Try loading persistent version first
                 v_path = os.path.join(self.artifacts_path, "models", "model_version.txt")
                 if os.path.exists(v_path):
                     with open(v_path, "r") as f:
@@ -89,7 +95,6 @@ class FLClientManager:
         self.fl_status = "Online (Menunggu Instruksi)"
         self.last_phase = "idle"
         
-        # Stability tracking
         self.is_registered = False
         self.last_register_attempt = 0
         self.register_retry_delay = 30 # seconds
@@ -104,14 +109,8 @@ class FLClientManager:
 
     def report_status(self, status=None):
         if status: self.fl_status = status
-        
-        # Rate limit registration attempts if not successful
         now = time.time()
-        if self.is_registered and not status: # Routine heartbeat is fine
-            pass # We still want to send heartbeat, let's keep it simple
-        elif not self.is_registered and (now - self.last_register_attempt < self.register_retry_delay):
-            return
-
+        
         try:
             self.last_register_attempt = now
             payload = {
@@ -149,131 +148,118 @@ class FLClientManager:
         phase = phase.lower()
         print(f"[CLIENT] Phase Transition: {self.last_phase} -> {phase}")
         
-        if phase == "syncing":
+        if phase == "discovery":
+            threading.Thread(target=self.run_discovery_phase).start()
+        elif phase == "syncing":
             threading.Thread(target=self.run_sync_phase).start()
-        elif phase == "preprocessing":
-            threading.Thread(target=self.run_preprocess_phase).start()
-        elif phase == "training":
+        elif phase in ["training", "training phase"]:
             self.start_fl()
+        elif phase in ["registry generation", "registry_generation"]:
+             threading.Thread(target=self.run_registry_phase).start()
         elif phase == "idle" or phase == "completed":
             self.fl_status = "Online (Selesai)"
             
-        if self.last_phase == "training" and phase != "training":
-            print("[CLIENT] Training finished. Downloading Final Registry assets (Centroids & Combined BN)...")
+        if (self.last_phase == "training" or self.last_phase == "registry generation") and phase == "completed":
+            print("[CLIENT] Training finished. Downloading Final Registry assets...")
             def update_task():
                 if self.download_registry_assets():
-                    self.run_sync_phase()
+                    self.sync_label_map()
                     self.refresh_local_embeddings() 
             threading.Thread(target=update_task, daemon=True).start()
 
     def download_backbone(self):
+        """Fetches the aggregated Backbone StateDict from server."""
         try:
             url_bb = f"{self.server_api_url}/api/model/backbone"
             print(f"[SYNC] Fetching global backbone from {url_bb}...")
             res_bb = requests.get(url_bb, timeout=30)
             if res_bb.status_code == 200:
                 save_path = os.path.join(self.artifacts_path, "models", "backbone.pth")
-                os.makedirs(os.path.dirname(save_path), exist_ok=True)
                 with open(save_path, "wb") as f:
                     f.write(res_bb.content)
                 
-                # Update Trainer
                 try:
-                    parameters = torch.load(save_path, map_location=self.device)
-                    self.client.trainer.set_backbone_parameters(parameters, personalized=True)
+                    loaded = torch.load(save_path, map_location=self.device)
+                    if isinstance(loaded, list):
+                        new_sd = self.backbone.state_dict()
+                        all_keys = list(new_sd.keys())
+                        
+                        shared_keys = [k for k in all_keys if 
+                                       not any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked'])
+                                       and any(x in k.lower() for x in ['weight', 'bias'])]
+                        
+                        if len(shared_keys) == len(loaded):
+                            for k, v in zip(shared_keys, loaded):
+                                new_sd[k] = torch.from_numpy(v).to(self.device)
+                            print(f"[SYNC] Applied {len(loaded)} pFedFace conv weights.")
+                        elif len(all_keys) == len(loaded):
+                            for k, v in zip(all_keys, loaded):
+                                new_sd[k] = torch.from_numpy(v).to(self.device)
+                            print(f"[SYNC] Applied {len(loaded)} full state_dict weights (incl. BN).")
+                        else:
+                            print(f"[SYNC ERROR] Unexpected param count: {len(loaded)} (conv={len(shared_keys)}, full={len(all_keys)})")
+                        
+                        self.backbone.load_state_dict(new_sd, strict=False)
+                    else:
+                        self.backbone.load_state_dict(loaded, strict=False)
+                    
                     print("[SYNC] Global backbone applied successfully.")
+                    return True
                 except Exception as e:
-                    print(f"[SYNC] Failed to apply parameters: {e}")
-                return True
+                    print(f"[SYNC] Failed to apply backbone: {e}")
         except Exception as e:
             print(f"[SYNC ERROR] Backbone fetch failed: {e}")
         return False
 
-    def download_registry_assets(self):
-        """Phase 4: Registry - Download combined BN and identification centroids."""
+    def download_bn(self):
+        """Fetches the aggregated BN stats (Running Mean/Var) for global consistency."""
+        path = os.path.join(self.artifacts_path, "models", "global_bn_combined.pth")
         try:
-            # Download Combined BN (Global Accuracy Boost)
-            try:
-                url_bn = f"{self.server_api_url}/api/model/bn"
-                res_bn = requests.get(url_bn, timeout=10)
-                if res_bn.status_code == 200:
-                    bn_path = os.path.join(self.artifacts_path, "models", "global_bn_combined.pth")
-                    with open(bn_path, "wb") as f:
-                        f.write(res_bn.content)
-                    self.backbone.load_state_dict(torch.load(bn_path, map_location=self.device), strict=False)
-                    print("[RELOAD] Combined BN applied.")
-                else:
-                    print(f"[RELOAD] BN Asset not available on server (Status: {res_bn.status_code})")
-            except Exception as e:
-                print(f"[RELOAD] BN Load skipped: {e}")
-
-            # Download Centroid Registry
-            try:
-                url_reg = f"{self.server_api_url}/api/model/registry"
-                res_reg = requests.get(url_reg, timeout=10)
-                if res_reg.status_code == 200:
-                    reg_path = os.path.join(self.artifacts_path, "models", "global_embedding_registry.pth")
-                    with open(reg_path, "wb") as f:
-                        f.write(res_reg.content)
-                    print("[RELOAD] Centroid Registry updated.")
-                else:
-                    print(f"[RELOAD] Registry not available on server (Status: {res_reg.status_code})")
-            except Exception as e:
-                print(f"[RELOAD] Registry Update skipped: {e}")
-
-            self.download_backbone()
-            return True
+            res = requests.get(f"{self.server_api_url}/api/model/bn", timeout=10)
+            if res.status_code == 200:
+                with open(path, "wb") as f:
+                    f.write(res.content)
+                
+                # LOAD BN stats into backbone in memory
+                bn_params = torch.load(path, map_location=self.device)
+                self.backbone.load_state_dict(bn_params, strict=False)
+                print(f"[CLIENT] Applied Global Combined BN to backbone.")
+                return True
         except Exception as e:
-            print(f"[RELOAD ERROR] {e}")
+            print(f"[CLIENT ERROR] BN download failed: {e}")
+        return False
+
+    def download_registry_assets(self):
+        """Download combined identification centroids for offline inference."""
+        try:
+            url_reg = f"{self.server_api_url}/api/model/registry"
+            res_reg = requests.get(url_reg, timeout=10)
+            if res_reg.status_code == 200:
+                reg_path = os.path.join(self.artifacts_path, "models", "global_embedding_registry.pth")
+                with open(reg_path, "wb") as f:
+                    f.write(res_reg.content)
+                print("[RELOAD] Centroid Registry updated.")
+                return True
+        except Exception as e:
+            print(f"[RELOAD ERROR] Registry Update skipped: {e}")
         return False
 
     def run_sync_phase(self):
         self.report_status("Processing: Sinkronisasi Data...")
-        
         self.download_backbone()
-        
+        self.sync_label_map()
+
         db = SessionLocal()
-        
         try:
-            # Download Global Users & Embeddings
             res = requests.get(f"{self.server_api_url}/api/users/global", timeout=10)
             if res.status_code == 200:
                 global_users = res.json()
-                print(f"[SYNC] Memperoleh {len(global_users)} mahasiswa global.")
-                
                 for u in global_users:
-                    # Sync UserLocal (Gunakan NRP sebagai user_id lokal agar konsisten)
                     user = db.query(UserLocal).filter_by(user_id=u['nrp']).first()
                     if not user:
                         user = UserLocal(user_id=u['nrp'], name=u['name'])
                         db.add(user)
                         db.commit()
-                    
-                    # Sync Global Embedding (Memory)
-                    if u['embedding']:
-                        emb_bytes = base64.b64decode(u['embedding'])
-                        
-                        exists = db.query(EmbeddingLocal).filter_by(user_id=u['nrp'], is_global=True).first()
-                        if exists:
-                            exists.embedding_data = emb_bytes
-                        else:
-                            new_global_emb = EmbeddingLocal(
-                                user_id=u['nrp'],
-                                embedding_data=emb_bytes,
-                                is_global=True,
-                                iv=None
-                            )
-                            db.add(new_global_emb)
-                        db.commit()
-                print(f"[SYNC] Sinkronisasi selesai. Total {len(global_users)} mahasiswa global di DB.")
-            else:
-                print(f"[SYNC] Server returned {res.status_code} during sync.")
-            
-            # Pastikan folder lokal sudah siap
-            students_dir = os.path.join(self.data_path, "students")
-            os.makedirs(students_dir, exist_ok=True)
-            
-            # Label Mapping is now done during registration in preprocessing
             self.report_status("Siap Preprocess")
         except Exception as e:
             print(f"[SYNC ERROR] {e}")
@@ -282,8 +268,7 @@ class FLClientManager:
             db.close()
 
     def refresh_local_embeddings(self):
-        """Re-extract embeddings for all local students using the latest backbone."""
-        
+        """Re-extract local embeddings using the latest SYNCED backbone."""
         db = SessionLocal()
         try:
             users = db.query(UserLocal).all()
@@ -293,7 +278,6 @@ class FLClientManager:
                 user_folder = os.path.join(processed_dir, user.user_id)
                 if not os.path.exists(user_folder): continue
                 
-                # Take first processed image
                 imgs = [f for f in os.listdir(user_folder) if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
                 if not imgs: continue
                 
@@ -311,60 +295,94 @@ class FLClientManager:
                 with torch.no_grad():
                     self.backbone.eval()
                     embedding_tensor = self.backbone(input_tensor)
-                    # L2 NORMALIZATION (Expert requirement)
                     embedding_tensor = torch.nn.functional.normalize(embedding_tensor, p=2, dim=1)
                     embedding_np = embedding_tensor.cpu().numpy()[0]
                     
-                # Update DB
                 encrypted_data, iv = encryptor.encrypt_embedding(embedding_np)
-                
                 emb_record = db.query(EmbeddingLocal).filter_by(user_id=user.user_id, is_global=False).first()
                 if emb_record:
                     emb_record.embedding_data = encrypted_data
                     emb_record.iv = iv
                 else:
-                    new_emb = EmbeddingLocal(
-                        user_id=user.user_id,
-                        embedding_data=encrypted_data,
-                        iv=iv,
-                        is_global=False
-                    )
-                    db.add(new_emb)
+                    db.add(EmbeddingLocal(user_id=user.user_id, embedding_data=encrypted_data, iv=iv, is_global=False))
                 db.commit()
-                print(f"[REFRESH] Re-computed embedding for {user.user_id}")
                 
-                # Register to Server (Knowledge Sharing)
+                # Share with server
                 try:
                     payload = {
-                        "nrp": user.user_id,
-                        "name": user.name,
-                        "client_id": self.client_id,
+                        "nrp": user.user_id, "name": user.name, "client_id": self.client_id,
                         "embedding": base64.b64encode(embedding_np.tobytes()).decode('utf-8')
                     }
                     requests.post(f"{self.server_api_url}/api/training/get_label", json=payload, timeout=5)
-                except Exception as e:
-                    print(f"[REFRESH] Server registration failed for {user.user_id}: {e}")
+                except: pass
             
-            print("[REFRESH] Local embeddings refresh and server registration complete.")
+            print("[REFRESH] Local embeddings refresh complete.")
         except Exception as e:
             print(f"[REFRESH ERROR] {e}")
-            db.rollback()
         finally:
             db.close()
 
     def get_blur_score(self, image_path):
-        """Menghitung skor ketajaman menggunakan Laplacian Variance."""
         try:
             img = cv2.imread(image_path)
             if img is None: return 0
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             return cv2.Laplacian(gray, cv2.CV_64F).var()
-        except:
-            return 0
+        except: return 0
+
+    def run_discovery_phase(self):
+        """Scan folders and register IDs with the server."""
+        self.report_status("Processing: Discovery Identitas...")
+        try:
+            student_path = os.path.join(self.raw_data_path, "students")
+            if not os.path.exists(student_path):
+                self.report_status("Error: Folder student tidak ditemukan")
+                return
+
+            folders = [f for f in os.listdir(student_path) if os.path.isdir(os.path.join(student_path, f))]
+            for folder in sorted(folders):
+                nrp = folder.split('_')[0] if "_" in folder else folder
+                name = folder.split('_')[1] if "_" in folder else nrp
+                
+                try:
+                    requests.post(f"{self.server_api_url}/api/training/get_label", json={
+                        "nrp": nrp, "name": name, "client_id": self.client_id
+                    }, timeout=5)
+                except: pass
+                
+                db = SessionLocal()
+                try:
+                    user = db.query(UserLocal).filter_by(user_id=nrp).first()
+                    if not user:
+                        db.add(UserLocal(user_id=nrp, name=name))
+                        db.commit()
+                finally: db.close()
+            
+            requests.post(f"{self.server_api_url}/api/clients/discovery_done", json={"client_id": self.client_id}, timeout=5)
+            self.report_status("Discovery Selesai: Menunggu Global Map...")
+        except Exception as e:
+            print(f"[DISCOVERY ERROR] {e}")
+            self.report_status("Error Discovery")
+
+    def sync_label_map(self):
+        try:
+            res = requests.get(f"{self.server_api_url}/api/training/label_map", timeout=10)
+            if res.status_code == 200:
+                self.client.label_map = res.json()
+                map_path = os.path.join(self.artifacts_path, "models", "label_map.json")
+                with open(map_path, "w") as f:
+                    json.dump(self.client.label_map, f)
+                return True
+        except: pass
+        return False
 
     def run_preprocess_phase(self):
         self.report_status("Processing: Ekstraksi Wajah (Laplacian Top 50)...")
-        students_dir = os.path.join(self.data_path, "students")
+        if not self.sync_label_map():
+            self.report_status("Error: Gagal Sinkronisasi Global Map")
+            return
+
+        students_dir = os.path.join(self.raw_data_path, "students")
         processed_dir = os.path.join(self.artifacts_path, "processed")
         os.makedirs(processed_dir, exist_ok=True)
         
@@ -372,111 +390,132 @@ class FLClientManager:
             self.report_status("Siap Training (No Data)")
             return
 
-        folders = [f for f in os.listdir(students_dir) if os.path.isdir(os.path.join(students_dir, f))]
+        folders = sorted([f for f in os.listdir(students_dir) if os.path.isdir(os.path.join(students_dir, f))])
         for folder in folders:
             nrp = folder.split('_')[0] if "_" in folder else folder
-            target_folder = os.path.join(processed_dir, nrp)
-            
-            # Re-process if folder exists but doesn't meet the new quality standard
-            if os.path.exists(target_folder) and len(os.listdir(target_folder)) >= 40:
-                continue
-                
-            os.makedirs(target_folder, exist_ok=True)
-            source_path = os.path.join(students_dir, folder)
-            
             print(f"[PREPROCESS] Selecting Top 50 faces for {nrp} using Laplacian Variance...")
             
-            # SELEKSI KUALITAS
-            all_images = [f for f in os.listdir(source_path) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
-            scored_images = []
-            for img_name in all_images:
-                score = self.get_blur_score(os.path.join(source_path, img_name))
-                scored_images.append((img_name, score))
+            target_folder = os.path.join(processed_dir, nrp)
+            if os.path.exists(target_folder):
+                shutil.rmtree(target_folder, ignore_errors=True)
+            os.makedirs(target_folder, exist_ok=True)
             
-            scored_images.sort(key=lambda x: x[1], reverse=True)
+            source_path = os.path.join(students_dir, folder)
+            all_images = [f for f in os.listdir(source_path) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+            scored_images = sorted([(img, self.get_blur_score(os.path.join(source_path, img))) for img in all_images], key=lambda x: x[1], reverse=True)
             top_images = [img[0] for img in scored_images[:50]]
             
-            # EKSTRAKSI MTCNN
             count = 0
             for img_name in top_images:
                 try:
-                    full_path = os.path.join(source_path, img_name)
-                    img_pil = Image.open(full_path).convert('RGB')
-                    
+                    img_pil = Image.open(os.path.join(source_path, img_name)).convert('RGB')
                     target_path = os.path.join(target_folder, f"face_{count}.jpg")
-                    face_img = self.detector(img_pil, save_path=target_path)
-                    if face_img is not None:
-                        count += 1
-                except Exception as e:
-                    print(f"Error processing {img_name}: {e}")
-            
-            # Register discovered user to local DB
-            if count > 0:
-                
-                db = SessionLocal()
-                try:
-                    user = db.query(UserLocal).filter_by(user_id=nrp).first()
-                    if not user:
-                        name = folder.split('_')[1] if "_" in folder else nrp
-                        user = UserLocal(user_id=nrp, name=name)
-                        db.add(user)
-                        db.commit()
-                        print(f"[PREPROCESS] Added {nrp} to local database.")
-                finally:
-                    db.close()
+                    if self.detector(img_pil, save_path=target_path) is not None: count += 1
+                except: pass
         
-        # Check if we actually have data now
-        has_data = False
-        num_classes = 0
-        if os.path.exists(processed_dir):
-            for sub in os.listdir(processed_dir):
-                sub_path = os.path.join(processed_dir, sub)
-                if os.path.isdir(sub_path) and len(os.listdir(sub_path)) > 0:
-                    has_data = True
-                    num_classes += 1
-        
+        has_data = any(len(os.listdir(os.path.join(processed_dir, sub))) > 0 for sub in os.listdir(processed_dir) if os.path.isdir(os.path.join(processed_dir, sub)))
         if has_data:
             self.report_status("Siap Training")
-            # Refresh embeddings to ensure they are registered to server
             self.refresh_local_embeddings()
             
-            # Update client head
-            print(f"[CLIENT] Updating training head for {num_classes} folders with data.")
+            try:
+                requests.post(f"{self.server_api_url}/api/clients/ready", json={"client_id": self.client_id}, timeout=5)
+            except: pass
+            
+            num_classes = sum(1 for sub in os.listdir(processed_dir) if os.path.isdir(os.path.join(processed_dir, sub)) and len(os.listdir(os.path.join(processed_dir, sub))) > 0)
             self.head = ArcMarginProduct(128, num_classes).to(self.device)
             self.client.head = self.head
             self.client.trainer.head = self.head
         else:
             self.report_status("Siap Training (No Data)")
+            try:
+                requests.post(f"{self.server_api_url}/api/clients/ready", json={"client_id": self.client_id}, timeout=5)
+            except: pass
+
+    def run_registry_phase(self):
+        """FINAL Registry Extraction (Uses Unified Global Weights)."""
+        if getattr(self, "is_sending_registry", False):
+            print("[REGISTRY] Generation already in progress, skipping duplicate trigger.")
+            return
+
+        self.is_sending_registry = True
+        self.report_status("Processing: Finalisasi Registry Identitas...")
+        try:
+            # FORCE SYNC WITH GLOBAL MODEL (Critical Fix for similarity scores)
+            print("[REGISTRY] Pre-syncing with Unified Global Backbone...")
+            self.download_backbone()
+            self.download_bn() # Fetch global BN stats if available
             
-        print("[CLIENT] Preprocessing phase complete.")
+            # Extract Centroids from the perspective of the Global Model
+            bn_params = self.client.trainer.get_bn_parameters()
+            centroids = self.client.trainer.calculate_centroids(label_map=self.client.label_map)
+            
+            # ensures inference works for local students even if server aggregate is not ready
+            local_registry_path = os.path.join(self.artifacts_path, "models", "global_embedding_registry.pth")
+            torch.save(centroids, local_registry_path)
+            
+            # SUBMIT: Upload to server for global aggregation
+            serialized_centroids = {nrp: base64.b64encode(vec.tobytes()).decode('utf-8') for nrp, vec in centroids.items()}
+            bn_buf = io.BytesIO()
+            torch.save(bn_params, bn_buf)
+            serialized_bn = base64.b64encode(bn_buf.getvalue()).decode('utf-8')
+            
+            payload = {
+                "client_id": self.client_id, "bn_params": serialized_bn, "centroids": serialized_centroids
+            }
+            res = requests.post(f"{self.server_api_url}/api/training/registry_assets", json=payload, timeout=60)
+            if res.status_code == 200:
+                print(f"[REGISTRY] Submitted {len(centroids)} identities.")
+                self.report_status("Siap Selesai")
+                self._download_global_registry()
+                self.download_bn() 
+            else:
+                self.report_status(f"Error Registry: {res.status_code}")
+        except Exception as e:
+            print(f"[REGISTRY ERROR] {e}")
+            self.report_status("Error Registry")
+        finally:
+            self.is_sending_registry = False
+
+    def _download_global_registry(self, max_wait=60):
+        import time
+        registry_url = f"{self.server_api_url}/api/model/registry"
+        deadline = time.time() + max_wait
+        while time.time() < deadline:
+            try:
+                res = requests.get(registry_url, timeout=15)
+                if res.status_code == 200:
+                    save_path = os.path.join(self.artifacts_path, "models", "global_embedding_registry.pth")
+                    with open(save_path, "wb") as f:
+                        f.write(res.content)
+                    if hasattr(self, 'cached_refs'):
+                        del self.cached_refs
+                    print(f"[REGISTRY] Global registry downloaded ({len(res.content)//1024} KB).")
+                    return True
+                elif res.status_code == 202:
+                    print("[REGISTRY] Server aggregating... waiting 5s")
+                    time.sleep(5)
+                else:
+                    print(f"[REGISTRY] Download failed: {res.status_code}")
+                    return False
+            except Exception as e:
+                print(f"[REGISTRY] Download error: {e}")
+                time.sleep(5)
+        print("[REGISTRY] Download timed out.")
+        return False
 
     def start_fl(self):
-        if self.is_training:
-            print("[CLIENT] Flower client is already running. Skipping duplicate call.")
-            return
+        if self.is_training: return
         self.is_training = True
-        
         def run_client():
             self.report_status("Training: Flower FL...")
-            print(f"Starting Flower client, connecting to {self.fl_server_address}...")
             try:
-                fl.client.start_client(
-                    server_address=self.fl_server_address, 
-                    client=self.client.to_client()
-                )
-                print("[CLIENT] Flower session completed normally.")
+                fl.client.start_client(server_address=self.fl_server_address, client=self.client.to_client())
             except Exception as e:
-                error_msg = f"FL Client Connection Error: {e}"
-                print(f"[ERROR] {error_msg}")
                 self.report_status(f"Error: {str(e)[:30]}...")
             finally:
                 self.is_training = False
-                if self.last_phase == "training":
-                    self.report_status("Online (Gagal/Diskonek)")
-                else:
-                    self.report_status("Online (Selesai)")
-                print("FL Client session ended.")
-            
+                self.report_status("Online (Selesai)")
         threading.Thread(target=run_client, daemon=True).start()
 
 fl_manager = FLClientManager()

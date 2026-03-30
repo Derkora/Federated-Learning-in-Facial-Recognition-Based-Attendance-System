@@ -114,7 +114,7 @@ class FLServerManager:
         self.start_time = 0
         self.current_logs = []
         self.model_version = 0
-        self.default_rounds = 15
+        self.default_rounds = 10
         self.default_epochs = 3
         self.default_min_clients = 2
         self.default_lr = 1e-4
@@ -123,6 +123,7 @@ class FLServerManager:
         self.registered_clients = {}
         self.registry_submissions = {}
         self.ready_clients = set() 
+        self.discovery_clients = set() 
         self.received_data = [] 
         
         self.metrics = {
@@ -213,6 +214,16 @@ class FLServerManager:
             except Exception as e:
                 print(f"❌ Error seeding GlobalModel: {e}")
                 db.rollback()
+                
+    def get_label_map_from_db(self):
+        """Authoritative source for categorical indexing across all clients."""
+        db = SessionLocal()
+        try:
+            from .db.models import UserGlobal
+            users = db.query(UserGlobal).order_by(UserGlobal.nrp).all()
+            return [u.nrp for u in users]
+        finally:
+            db.close()
 
     def start_training(self, session_id: str, rounds: int = 20, min_clients: int = 2):
         self.session_id = session_id
@@ -248,6 +259,7 @@ class FLServerManager:
                 "lr": self.default_lr if server_round <= 5 else (self.default_lr/2 if server_round <= 10 else self.default_lr/10),
                 "mu": 0.05, 
                 "lambda": self.default_lambda,
+                "label_map": json.dumps(self.get_label_map_from_db())
             },
         )
 

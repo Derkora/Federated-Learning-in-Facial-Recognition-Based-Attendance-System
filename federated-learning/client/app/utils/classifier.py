@@ -23,6 +23,8 @@ def identify_user_globally(query_embedding, local_embeddings_dict, threshold=0.3
         if ref_tensor.dim() == 1:
             ref_tensor = ref_tensor.unsqueeze(0)
         
+        ref_tensor = F.normalize(ref_tensor, p=2, dim=1)
+        
         if query_tensor.shape[1] != ref_tensor.shape[1]:
             continue
 
@@ -32,7 +34,6 @@ def identify_user_globally(query_embedding, local_embeddings_dict, threshold=0.3
                 max_sim = similarity
                 best_match = user_id
         else:
-            # Euclidean Distance on normalized vectors ranges [0, 2]
             dist = torch.dist(query_tensor, ref_tensor).item()
             if dist < min_dist:
                 min_dist = dist

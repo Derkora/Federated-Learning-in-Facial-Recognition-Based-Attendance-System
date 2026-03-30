@@ -26,7 +26,7 @@ services:
     ports:
       - "8082:8080"
     volumes:
-      - ../datasets/client1_data:/app/data
+      - ../datasets/client1_data:/app/raw_data
     networks:
       - clnet
 
@@ -43,7 +43,7 @@ services:
     ports:
       - "8083:8080"
     volumes:
-      - ../datasets/client2_data:/app/data
+      - ../datasets/client2_data:/app/raw_data
     networks:
       - clnet
 

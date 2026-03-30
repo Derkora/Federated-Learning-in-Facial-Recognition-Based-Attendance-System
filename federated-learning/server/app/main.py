@@ -17,6 +17,7 @@ import torch
 import math
 import base64
 import io
+import shutil
 
 from .db.db import engine, get_db, Base, SessionLocal
 from .db.models import FLSession, FLRound, GlobalModel, Client, UserGlobal, AttendanceRecap
@@ -43,16 +44,12 @@ async def index(request: Request, db: Session = Depends(get_db)):
 @app.get("/api/status")
 async def get_system_status():
     return fl_manager.get_status()
+
 @app.get("/records", response_class=HTMLResponse)
 async def records(request: Request, db: Session = Depends(get_db)):
-    # Get all students (UserGlobal)
     all_users = db.query(UserGlobal).order_by(UserGlobal.name.asc()).all()
-    
-    # Get today's attendance records (AttendanceRecap)
     today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     today_recap = db.query(AttendanceRecap).filter(AttendanceRecap.timestamp >= today_start).all()
-    
-    # Map for easy lookup
     recap_map = {rec.user_id: rec for rec in today_recap}
     
     records_display = []
@@ -74,20 +71,18 @@ async def records(request: Request, db: Session = Depends(get_db)):
 
 @app.post("/api/fl/start")
 async def start_fl_training(rounds: int = None, min_clients: int = None, epochs: int = None):
-    # Use centralized defaults from manager if not provided
     rounds = rounds or fl_manager.default_rounds
     min_clients = min_clients or fl_manager.default_min_clients
-    if epochs: fl_manager.default_epochs = epochs # Temporary override for this session
+    if epochs: fl_manager.default_epochs = epochs
     
     if fl_manager.is_busy or fl_manager.is_running:
         return {"status": "already_running"}
     
     session_id = f"session_{int(time.time())}"
     fl_manager.session_id = session_id
-    fl_manager.current_logs = [] # Clear logs for new session
-    fl_manager.received_data = [] # Clear student list for new session
+    fl_manager.current_logs = []
+    fl_manager.received_data = []
     
-    # Save session to DB
     db = SessionLocal()
     new_session = FLSession(session_id=session_id)
     db.add(new_session)
@@ -102,26 +97,95 @@ async def start_fl_training(rounds: int = None, min_clients: int = None, epochs:
             db.close()
             
             fl_manager.registry_submissions.clear()
+            if os.path.exists("data/submissions"):
+                shutil.rmtree("data/submissions")
+            os.makedirs("data/submissions", exist_ok=True)
             
             add_phase_log("🚀 Starting One-Button Full Lifecycle [Federated]...")
-            add_phase_log("📡 Triggering Remote Data Prep (Sync & Preprocess)...")
-            fl_manager.ready_clients.clear()
-            trigger_all_clients_command("/api/request-data")
             
-            # Wait for clients to signal READY (with 10-min timeout)
-            add_phase_log("⏳ Waiting for Clients to complete Sync + MTCNN Preprocessing...")
+            # Connectivity Barrier
+            add_phase_log(f"📡 Phase 0: Connectivity (Waiting for {min_clients} clients to register)...")
+            start_wait = time.time()
+            max_p0_wait = 300 
+            while len(fl_manager.registered_clients) < min_clients:
+                if time.time() - start_wait > max_p0_wait:
+                    add_phase_log(f"❌ Aborted: Only {len(fl_manager.registered_clients)}/{min_clients} clients registered after 5m.")
+                    return
+                time.sleep(5)
+
+            # Discovery (Barrier Sync)
+            add_phase_log("📡 Phase 1a: Discovery (Registering Student IDs)...")
+            fl_manager.discovery_clients.clear()
+            
+            start_wait = time.time()
+            max_wait = 300 
+            last_trigger = 0
+            
+            while len(fl_manager.discovery_clients) < min_clients:
+                if time.time() - start_wait > max_wait:
+                    add_phase_log(f"❌ Aborted: Discovery Phase timed out. Only {len(fl_manager.discovery_clients)}/{min_clients} reported.")
+                    return
+                
+                # Re-trigger every 30s for any newly registered clients
+                if time.time() - last_trigger > 30:
+                    trigger_all_clients_command("/api/request-discovery")
+                    last_trigger = time.time()
+                    
+                time.sleep(5)
+            
+            # Preprocessing (Strict Mapping)
+            add_phase_log(f"📡 Phase 1b: Preprocessing (MTCNN & Strict Label Mapping)...")
+            fl_manager.ready_clients.clear()
+            trigger_all_clients_command("/api/request-preprocess")
+            
+            # Wait for clients to signal READY (10-min timeout)
             start_wait = time.time()
             max_wait = 600 
-            
+            last_log_check = 0
             while len(fl_manager.ready_clients) < min_clients:
                 if time.time() - start_wait > max_wait:
-                    add_phase_log("⚠️ Preparation Timeout (10m). Proceeding with available clients...")
+                    add_phase_log(f"❌ Aborted: Preprocessing Phase timed out. Only {len(fl_manager.ready_clients)}/{min_clients} ready.")
+                    return
+                
+                # FALLBACK: Check heartbeats for "Siap Training" status
+                for cid, data in list(fl_manager.registered_clients.items()):
+                    if data.get("fl_status") == "Siap Training":
+                        if cid not in fl_manager.ready_clients:
+                            fl_manager.ready_clients.add(cid)
+                            add_phase_log(f"✅ Client {cid} is READY (via Heartbeat).")
+
+                if time.time() - last_log_check > 20:
+                    add_phase_log(f"⌛ Waiting... Ready: {list(fl_manager.ready_clients)} / {min_clients}")
+                    last_log_check = time.time()
+                
+                time.sleep(5)
+            
+            add_phase_log(f"🎓 Starting Flower Federated Training with {len(fl_manager.ready_clients)} ready clients...")
+            fl_manager.is_running = True  
+            fl_manager.start_training(session_id, rounds=rounds, min_clients=min_clients)
+            fl_manager.is_busy = True
+            
+            fl_manager.start_phase("Registry Generation")
+            add_phase_log("⚙️ Triggering Universal Registry Generation (Terminals will sync via Heartbeat)...")
+            
+            # Barrier Sync
+            start_reg_wait = time.time()
+            min_reg_clients = len(fl_manager.ready_clients)
+            add_phase_log(f"⌛ Waiting for {min_reg_clients} clients to submit registry assets...")
+            
+            while True:
+                submission_dir = "data/submissions"
+                files = [f for f in os.listdir(submission_dir) if f.endswith("_assets.pth")] if os.path.exists(submission_dir) else []
+                
+                if len(files) >= min_reg_clients and min_reg_clients > 0:
+                    add_phase_log(f"✅ Received all {len(files)} registry submissions.")
+                    break
+                if time.time() - start_reg_wait > 300:
+                    add_phase_log(f"⚠️ Registry Timeout ({len(files)}/{min_reg_clients}). Processing partial registry...")
                     break
                 time.sleep(5)
             
-            fl_manager.start_phase("Training")
-            add_phase_log(f"🎓 Starting Flower Federated Training with {len(fl_manager.ready_clients)} ready clients...")
-            fl_manager.start_training(session_id, rounds=rounds, min_clients=min_clients)
+            aggregate_and_save_registry_assets()
             
             fl_manager.start_phase("Completed")
             add_phase_log("✅ Full Lifecycle Finished.")
@@ -140,26 +204,35 @@ async def start_fl_training(rounds: int = None, min_clients: int = None, epochs:
     Thread(target=orchestrate, daemon=True).start()
     return {"status": "started", "session_id": session_id}
 
+@app.post("/api/fl/reset")
+async def reset_fl_state():
+    fl_manager.is_running = False
+    fl_manager.is_busy = False
+    fl_manager.start_phase("Idle")
+    fl_manager.current_logs = []
+    fl_manager.registry_submissions.clear()
+    fl_manager.ready_clients.clear()
+    fl_manager.discovery_clients.clear()
+    add_phase_log("🔄 State forcefully reset. Ready to start a new lifecycle.")
+    return {"status": "reset_ok"}
+
 def trigger_all_clients_command(endpoint):
-    """Broadcast a command to all registered clients via their API."""
     for cid, data in fl_manager.registered_clients.items():
         ip = data.get("ip_address")
         if ip:
             url = f"http://{ip}:8080{endpoint}" 
             try:
                 requests.post(url, timeout=2)
-                print(f"[ORCHESTRATOR] Sent {endpoint} to {cid} at {ip}")
+                print(f"[ORCHESTRATOR] Sent {endpoint} to {cid}")
             except Exception as e:
-                print(f"[ORCHESTRATOR ERROR] Could not signal client {cid}: {e}")
+                print(f"[ORCHESTRATOR ERROR] Could not signal {cid}: {e}")
 
 @app.post("/api/clients/register")
 async def register_client(data: dict, db: Session = Depends(get_db)):
     cid = data.get("id")
     ip = data.get("ip_address", "0.0.0.0")
-    
     if cid:
         fl_manager.registered_clients[cid] = data
-        # Sync to DB
         client = db.query(Client).filter_by(edge_id=cid).first()
         if not client:
             client = Client(edge_id=cid, name=cid, ip_address=ip, status="online")
@@ -169,15 +242,21 @@ async def register_client(data: dict, db: Session = Depends(get_db)):
             client.status = "online"
             client.last_seen = datetime.utcnow()
         db.commit()
-        
     return {"status": "ok", "server_time": time.time()}
+
+@app.post("/api/clients/discovery_done")
+async def report_discovery_done(data: dict):
+    cid = data.get("client_id")
+    if cid:
+        fl_manager.discovery_clients.add(cid)
+        print(f"[ORCHESTRATOR] Client {cid} finished Discovery.")
+    return {"status": "ok"}
 
 @app.post("/api/clients/ready")
 async def report_client_ready(data: dict):
     cid = data.get("client_id")
     if cid:
         fl_manager.ready_clients.add(cid)
-        print(f"[ORCHESTRATOR] Client {cid} reported READY.")
     return {"status": "ok"}
 
 @app.get("/api/model/backbone")
@@ -235,7 +314,6 @@ async def get_label(data: dict, db: Session = Depends(get_db)):
             user.embedding = embedding_bytes
         db.commit()
     
-    # Add to Dashboard Student List
     if nrp not in fl_manager.received_data:
         fl_manager.received_data.append(nrp)
         
@@ -243,60 +321,53 @@ async def get_label(data: dict, db: Session = Depends(get_db)):
 
 @app.post("/api/training/registry_assets")
 async def receive_registry_assets(data: dict, db: Session = Depends(get_db)):
-    """
-    Registry Updates: Automated Asset Collection
-    Receives BN parameters and Centroids from clients at Final Round.
-    """
     client_id = data.get("client_id")
-    rnd = data.get("round")
     serialized_bn = data.get("bn_params")
     centroids = data.get("centroids")
     
-    # Decode BN
     bn_bytes = base64.b64decode(serialized_bn)
     bn_params = torch.load(io.BytesIO(bn_bytes), map_location="cpu")
     
-    # Decode Centroids
     decoded_centroids = {}
     for nrp, b64_vec in centroids.items():
         vec_bytes = base64.b64decode(b64_vec)
         decoded_centroids[nrp] = np.frombuffer(vec_bytes, dtype=np.float32)
         
-    # Store in global state for aggregation
     fl_manager.registry_submissions[client_id] = {
         "bn": bn_params,
         "centroids": decoded_centroids
     }
     
-    add_phase_log(f"Received Registry assets from {client_id} (Round {rnd}, {len(decoded_centroids)} centroids)")
+    submission_dir = "data/submissions"
+    os.makedirs(submission_dir, exist_ok=True)
+    with open(os.path.join(submission_dir, f"{client_id}_assets.pth"), "wb") as f:
+        torch.save(fl_manager.registry_submissions[client_id], f)
     
-    # 3. Aggregation Trigger (when we have enough clients)
-    # In a real scenario, we'd wait for all min_clients. For now, let's trigger it.
-    if len(fl_manager.registry_submissions) >= 2: # Assuming 2 clients as per compose
-        aggregate_and_save_registry_assets()
-        
+    add_phase_log(f"Received Registry assets from {client_id}")
     return {"status": "received"}
 
 def aggregate_and_save_registry_assets():
-    """
-    Registry Generation: Combined BN & Centroid Registry
-    Averages BN stats and merges centroids into final global assets.
-    """
     try:
         add_phase_log("⚙️ Starting Registry Generation: Asset Aggregation...")
+        submission_dir = "data/submissions"
+        if not os.path.exists(submission_dir): return
         
-        # Combine BN (Averaging)
-        clients_bn = [sub['bn'] for sub in fl_manager.registry_submissions.values()]
+        all_submissions = {}
+        for f_name in os.listdir(submission_dir):
+            if f_name.endswith("_assets.pth"):
+                cid = f_name.split("_")[0]
+                all_submissions[cid] = torch.load(os.path.join(submission_dir, f_name), map_location="cpu")
+
+        if not all_submissions: return
+
+        clients_bn = [sub['bn'] for sub in all_submissions.values()]
         global_bn = {}
         bn_keys = list(clients_bn[0].keys())
         
         for key in bn_keys:
-            # Stats like num_batches_tracked are long/int
-            # We just take the value from the first client or average them
             if clients_bn[0][key].dtype == np.int64 or 'num_batches_tracked' in key:
                 global_bn[key] = torch.from_numpy(clients_bn[0][key])
             else:
-                # Stack and mean (CPU Only)
                 tensors = [torch.from_numpy(bn[key]) for bn in clients_bn]
                 global_bn[key] = torch.stack(tensors).mean(0)
         
@@ -304,22 +375,25 @@ def aggregate_and_save_registry_assets():
         torch.save(global_bn, "data/global_bn_combined.pth")
         add_phase_log("✅ Generated data/global_bn_combined.pth")
         
-        # Centroid Registry (Merge all)
-        all_centroids = {}
-        for client_id, sub in fl_manager.registry_submissions.items():
+        nrp_centroids_list = defaultdict(list)
+        for client_id, sub in all_submissions.items():
             for nrp, vec in sub['centroids'].items():
-                all_centroids[nrp] = torch.from_numpy(vec)
+                nrp_centroids_list[nrp].append(torch.from_numpy(vec.copy()))
+        
+        all_centroids = {}
+        for nrp, vecs in nrp_centroids_list.items():
+            if len(vecs) > 1:
+                stack = torch.stack(vecs)
+                avg_vec = torch.mean(stack, dim=0)
+            else:
+                avg_vec = vecs[0]
+            all_centroids[nrp] = torch.nn.functional.normalize(avg_vec.unsqueeze(0), p=2, dim=1).squeeze(0)
                 
         torch.save(all_centroids, "data/global_embedding_registry.pth")
         add_phase_log(f"✅ Generated data/global_embedding_registry.pth ({len(all_centroids)} identities)")
         
-        if len(all_centroids) == 0:
-            add_phase_log("⚠️ WARNING: Generated registry is EMPTY. Check if clients have training data.")
-        
     except Exception as e:
         add_phase_log(f"Aggregation Error: {e}")
-        import traceback
-        traceback.print_exc()
 
 @app.get("/api/users/global")
 async def get_global_users(db: Session = Depends(get_db)):
@@ -332,6 +406,11 @@ async def get_global_users(db: Session = Depends(get_db)):
         "embedding": base64.b64encode(u.embedding).decode('utf-8') if u.embedding else None
     } for u in users]
 
+@app.get("/api/training/label_map")
+async def get_label_map(db: Session = Depends(get_db)):
+    users = db.query(UserGlobal).order_by(UserGlobal.nrp).all()
+    return [u.nrp for u in users]
+
 @app.post("/api/attendance/sync")
 async def sync_attendance(records: list, db: Session = Depends(get_db)):
     new_records = 0
@@ -339,27 +418,14 @@ async def sync_attendance(records: list, db: Session = Depends(get_db)):
         nrp = rec['user_id']
         user = db.query(UserGlobal).filter_by(nrp=nrp).first()
         if not user: continue
-        
-        # Add to Dashboard Student List if not already there
         if nrp not in fl_manager.received_data:
             fl_manager.received_data.append(nrp)
-        
         ts = datetime.fromisoformat(rec['timestamp'])
-        exists = db.query(AttendanceRecap).filter_by(
-            user_id=user.user_id, 
-            timestamp=ts
-        ).first()
-        
+        exists = db.query(AttendanceRecap).filter_by(user_id=user.user_id, timestamp=ts).first()
         if not exists:
-            new_item = AttendanceRecap(
-                user_id=user.user_id,
-                edge_id=rec['client_id'],
-                timestamp=ts,
-                confidence=rec['confidence']
-            )
+            new_item = AttendanceRecap(user_id=user.user_id, edge_id=rec['client_id'], timestamp=ts, confidence=rec['confidence'])
             db.add(new_item)
             new_records += 1
-    
     db.commit()
     return {"status": "success", "new_records": new_records}
 
@@ -369,13 +435,8 @@ async def get_fl_status(session_id: str, db: Session = Depends(get_db)):
     history = []
     for r in rounds:
         m = json.loads(r.metrics) if r.metrics else {}
-        history.append({
-            "round": r.round_number, 
-            "loss": r.loss,
-            "accuracy": m.get("accuracy", 0.0)
-        })
+        history.append({"round": r.round_number, "loss": r.loss, "accuracy": m.get("accuracy", 0.0)})
     
-    # Also fetch active students from clients for the dashboard
     clients = ["http://client1-fl:8080", "http://client2-fl:8080"]
     received_data = []
     for c_url in clients:
@@ -386,14 +447,11 @@ async def get_fl_status(session_id: str, db: Session = Depends(get_db)):
         except:
             pass
             
-    # Sanitize history for JSON (NaN is not JSON compliant)
     sanitized_history = []
     for h in history:
         sanitized_h = h.copy()
-        if isinstance(h["loss"], float) and (math.isnan(h["loss"]) or math.isinf(h["loss"])):
-            sanitized_h["loss"] = 0.0
-        if isinstance(h["accuracy"], float) and (math.isnan(h["accuracy"]) or math.isinf(h["accuracy"])):
-            sanitized_h["accuracy"] = 0.0
+        if isinstance(h["loss"], float) and (math.isnan(h["loss"]) or math.isinf(h["loss"])): sanitized_h["loss"] = 0.0
+        if isinstance(h["accuracy"], float) and (math.isnan(h["accuracy"]) or math.isinf(h["accuracy"])): sanitized_h["accuracy"] = 0.0
         sanitized_history.append(sanitized_h)
             
     return {
