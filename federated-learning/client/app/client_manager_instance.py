@@ -25,9 +25,7 @@ from .db.db import SessionLocal
 from .db.models import UserLocal, EmbeddingLocal
 from .client import FaceRecognitionClient
 
-# Helper to bridge to fl_manager (if called from global context)
 def add_phase_log(msg):
-    # This matches the server's helper style for consistency in logs
     print(f"[LOG] {msg}")
 
 class FLClientManager:
@@ -97,9 +95,8 @@ class FLClientManager:
         
         self.is_registered = False
         self.last_register_attempt = 0
-        self.register_retry_delay = 30 # seconds
+        self.register_retry_delay = 30
         
-        # Temporal Voting Buffer (10 frames)
         self.prediction_buffer = collections.deque(maxlen=10)
         self.last_face_time = 0
 
@@ -211,37 +208,52 @@ class FLClientManager:
             print(f"[SYNC ERROR] Backbone fetch failed: {e}")
         return False
 
-    def download_bn(self):
+    def download_bn(self, max_wait=60):
         """Fetches the aggregated BN stats (Running Mean/Var) for global consistency."""
         path = os.path.join(self.artifacts_path, "models", "global_bn_combined.pth")
-        try:
-            res = requests.get(f"{self.server_api_url}/api/model/bn", timeout=10)
-            if res.status_code == 200:
-                with open(path, "wb") as f:
-                    f.write(res.content)
-                
-                # LOAD BN stats into backbone in memory
-                bn_params = torch.load(path, map_location=self.device)
-                self.backbone.load_state_dict(bn_params, strict=False)
-                print(f"[CLIENT] Applied Global Combined BN to backbone.")
-                return True
-        except Exception as e:
-            print(f"[CLIENT ERROR] BN download failed: {e}")
+        url = f"{self.server_api_url}/api/model/bn"
+        
+        deadline = time.time() + max_wait
+        while time.time() < deadline:
+            try:
+                res = requests.get(url, timeout=10)
+                if res.status_code == 200:
+                    with open(path, "wb") as f:
+                        f.write(res.content)
+                    
+                    # Verify binary
+                    try:
+                        bn_params = torch.load(path, map_location=self.device)
+                        self.backbone.load_state_dict(bn_params, strict=False)
+                        print(f"[CLIENT] Applied Global Combined BN to backbone.")
+                        return True
+                    except Exception as e:
+                        print(f"[CLIENT] Downloaded BN was invalid, retrying: {e}")
+                elif res.status_code == 202 or res.status_code == 404:
+                    print(f"[CLIENT] BN not ready on server yet (Status {res.status_code}), waiting...")
+                else:
+                    print(f"[CLIENT ERROR] BN download unexpected status: {res.status_code}")
+                    return False
+            except Exception as e:
+                print(f"[CLIENT ERROR] BN download failed: {e}")
+            time.sleep(5)
         return False
 
     def download_registry_assets(self):
         """Download combined identification centroids for offline inference."""
         try:
             url_reg = f"{self.server_api_url}/api/model/registry"
-            res_reg = requests.get(url_reg, timeout=10)
+            res_reg = requests.get(url_reg, timeout=20)
             if res_reg.status_code == 200:
                 reg_path = os.path.join(self.artifacts_path, "models", "global_embedding_registry.pth")
                 with open(reg_path, "wb") as f:
                     f.write(res_reg.content)
                 print("[RELOAD] Centroid Registry updated.")
                 return True
+            else:
+                print(f"[RELOAD] Registry download skipped (Status {res_reg.status_code})")
         except Exception as e:
-            print(f"[RELOAD ERROR] Registry Update skipped: {e}")
+            print(f"[RELOAD ERROR] Registry Update failed: {e}")
         return False
 
     def run_sync_phase(self):
@@ -441,20 +453,21 @@ class FLClientManager:
         self.is_sending_registry = True
         self.report_status("Processing: Finalisasi Registry Identitas...")
         try:
-            # FORCE SYNC WITH GLOBAL MODEL (Critical Fix for similarity scores)
-            print("[REGISTRY] Pre-syncing with Unified Global Backbone...")
+            # 1. SYNC BACKBONE FIRST (Ensure we use the latest shared knowledge)
+            print("[REGISTRY] Phase 1: Syncing Backbone...")
             self.download_backbone()
-            self.download_bn() # Fetch global BN stats if available
             
-            # Extract Centroids from the perspective of the Global Model
+            # 2. CALCULATE CENTROIDS (Using current model state)
+            print("[REGISTRY] Phase 2: Calculating Local Centroids...")
             bn_params = self.client.trainer.get_bn_parameters()
             centroids = self.client.trainer.calculate_centroids(label_map=self.client.label_map)
             
-            # ensures inference works for local students even if server aggregate is not ready
+            # Save a local fallback immediately
             local_registry_path = os.path.join(self.artifacts_path, "models", "global_embedding_registry.pth")
             torch.save(centroids, local_registry_path)
             
-            # SUBMIT: Upload to server for global aggregation
+            # 3. SUBMIT TO SERVER
+            print("[REGISTRY] Phase 3: Submitting local assets to server...")
             serialized_centroids = {nrp: base64.b64encode(vec.tobytes()).decode('utf-8') for nrp, vec in centroids.items()}
             bn_buf = io.BytesIO()
             torch.save(bn_params, bn_buf)
@@ -464,18 +477,31 @@ class FLClientManager:
                 "client_id": self.client_id, "bn_params": serialized_bn, "centroids": serialized_centroids
             }
             res = requests.post(f"{self.server_api_url}/api/training/registry_assets", json=payload, timeout=60)
+            
             if res.status_code == 200:
-                print(f"[REGISTRY] Submitted {len(centroids)} identities.")
-                self.report_status("Siap Selesai")
-                self._download_global_registry()
-                self.download_bn() 
+                print(f"[REGISTRY] Submission successful. Waiting for global aggregation...")
+                self.report_status("Processing: Menunggu Agregasi Global...")
+                
+                # 4. WAIT & DOWNLOAD GLOBAL RESULTS
+                # This ensures every client ends up with the SAME BN and SAME Registry
+                if self.download_bn(max_wait=120):
+                    print("[REGISTRY] Global BN Synced.")
+                
+                if self._download_global_registry(max_wait=120):
+                    print("[REGISTRY] Global Registry Synced.")
+                    self.report_status("Siap Selesai")
+                else:
+                    print("[REGISTRY] Global Registry download failed/timed out.")
+                    self.report_status("Error: Registry Timeout")
             else:
-                self.report_status(f"Error Registry: {res.status_code}")
+                self.report_status(f"Error Submission: {res.status_code}")
+                
         except Exception as e:
             print(f"[REGISTRY ERROR] {e}")
             self.report_status("Error Registry")
         finally:
             self.is_sending_registry = False
+            self.refresh_local_embeddings() # Final refresh with global BN
 
     def _download_global_registry(self, max_wait=60):
         import time

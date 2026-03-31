@@ -3,14 +3,17 @@ import shutil
 from fastapi import HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 from datetime import datetime
-from app.db import models, schemas, crud
+from ..db import models, schemas, crud
 
 UPLOAD_DIR = "data/students"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 class StudentController:
+    # Kontroler untuk manajemen data mahasiswa dan unggah foto.
+    
     @staticmethod
     def register_student(name: str, nrp: str, dbs: Session):
+        # Mendaftarkan mahasiswa baru ke database global jika belum ada.
         existing = dbs.query(models.UserGlobal).filter(models.UserGlobal.nrp == nrp).first()
         if existing:
             return {"status": "already_exists", "user_id": existing.user_id}
@@ -23,9 +26,10 @@ class StudentController:
 
     @staticmethod
     async def upload_photo(user_id: int, file: UploadFile, dbs: Session):
+        # Menyimpan berkas foto mahasiswa ke direktori penyimpanan server.
         student = dbs.query(models.UserGlobal).filter(models.UserGlobal.user_id == user_id).first()
         if not student:
-            raise HTTPException(status_code=404, detail="Student not found")
+            raise HTTPException(status_code=404, detail="Mahasiswa tidak ditemukan")
         
         student_dir = os.path.join(UPLOAD_DIR, student.nrp)
         os.makedirs(student_dir, exist_ok=True)
@@ -36,6 +40,6 @@ class StudentController:
         
         student.photo_path = student_dir
         dbs.commit()
-        return {"status": "success", "message": f"Foto {file.filename} tersimpan di {student_dir}"}
+        return {"status": "success", "message": f"Foto {file.filename} berhasil disimpan."}
 
 student_controller = StudentController()

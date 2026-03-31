@@ -14,9 +14,10 @@ REPO_ROOT   = os.path.join(BASE_DIR, "..", "..")
 C1_DATA_DIR = os.path.join(REPO_ROOT, "datasets", "client1_data", "students")
 C2_DATA_DIR = os.path.join(REPO_ROOT, "datasets", "client2_data", "students")
 MODEL_V0    = os.path.join(REPO_ROOT, "federated-learning", "server", "app", "model", "global_model_v0.pth")
-sys.path.insert(0, os.path.join(BASE_DIR, "..", "uji-fl"))  # reuse mobilefacenet.py
+sys.path.insert(0, os.path.join(BASE_DIR, "..", "uji-cl"))  # reuse mobilefacenet.py
 
 from mobilefacenet import MobileFaceNet, ArcMarginProduct
+from facenet_pytorch import MTCNN
 
 DEVICE       = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ROUNDS       = 5       # quick validation
@@ -25,14 +26,75 @@ LR           = 1e-4
 BATCH_SIZE   = 8
 
 print(f"[VALIDATE] Device: {DEVICE}")
-print(f"[VALIDATE] Client-1 Data: {C1_DATA_DIR}")
-print(f"[VALIDATE] Client-2 Data: {C2_DATA_DIR}")
-print(f"[VALIDATE] Global Model v0: {MODEL_V0}")
+print(f"[VALIDATE] Raw Client-1: {C1_DATA_DIR}")
+print(f"[VALIDATE] Raw Client-2: {C2_DATA_DIR}")
+
+# ─── PREPROCESSOR ────────────────────────────────────────────────────────────
+PROCESSED_BASE = os.path.join(REPO_ROOT, "pre", "uji-fl-isolated", "datasets", "isolated_processed")
+P1_REGISTRY = os.path.join(PROCESSED_BASE, "client1")
+P2_REGISTRY = os.path.join(PROCESSED_BASE, "client2")
+
+def get_blur_score(image_path):
+    try:
+        img = cv2.imread(image_path)
+        if img is None: return 0
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        return cv2.Laplacian(gray, cv2.CV_64F).var()
+    except: return 0
+
+def preprocess_all_data():
+    detector = MTCNN(image_size=112, margin=20, keep_all=False, device=DEVICE, post_process=False)
+    for src, dst, label in [(C1_DATA_DIR, P1_REGISTRY, "Client-1"), (C2_DATA_DIR, P2_REGISTRY, "Client-2")]:
+        if os.path.exists(dst) and len(os.listdir(dst)) > 30: # more robust check
+            print(f"[PREPROCESS] {label} already processed. Skipping.")
+            continue
+        
+        print(f"[PREPROCESS] Selecting Top 50 faces + Cropping {label} (Laplacian + MTCNN)...")
+        os.makedirs(dst, exist_ok=True)
+        folders = [f for f in sorted(os.listdir(src)) if os.path.isdir(os.path.join(src, f))]
+        
+        for folder in folders:
+            nrp = folder.split("_")[0]
+            target_dir = os.path.join(dst, nrp)
+            if os.path.exists(target_dir): shutil.rmtree(target_dir) # Fresh start
+            os.makedirs(target_dir, exist_ok=True)
+            
+            src_dir = os.path.join(src, folder)
+            all_imgs = [i for i in os.listdir(src_dir) if i.lower().endswith(('.jpg','.jpeg','.png'))]
+            
+            # LAPLACIAN FILTER
+            scored = sorted([(i, get_blur_score(os.path.join(src_dir, i))) for i in all_imgs], key=lambda x:x[1], reverse=True)
+            top_imgs = [s[0] for s in scored[:50]]
+            
+            count = 0
+            for img_name in top_imgs:
+                try:
+                    img_path = os.path.join(src_dir, img_name)
+                    img_pil = Image.open(img_path).convert("RGB")
+                    save_path = os.path.join(target_dir, f"face_{count}.jpg")
+                    
+                    # MTCNN Crop & Save
+                    face = detector(img_pil, save_path=save_path)
+                    if face is not None:
+                        count += 1
+                except Exception as e:
+                    continue
+            print(f"   [OK] {nrp}: {count} sharpest faces cropped.")
+
+# Run Preprocess once
+preprocess_all_data()
+
+# Update Data Dirs to use Processed paths
+C1_DATA_DIR = P1_REGISTRY
+C2_DATA_DIR = P2_REGISTRY
+
+print(f"[VALIDATE] Processed Client-1: {C1_DATA_DIR}")
+print(f"[VALIDATE] Processed Client-2: {C2_DATA_DIR}")
 print("=" * 60)
 
-# ─── Transforms (sama persis dengan sistem utama) ────────────────────────────
+# ─── Transforms (Must match 112x96 architecture) ─────────────────────────────
 train_transform = transforms.Compose([
-    transforms.Resize((112, 96)),
+    transforms.Resize((112, 96)), 
     transforms.RandomHorizontalFlip(),
     transforms.ColorJitter(brightness=0.2, contrast=0.2),
     transforms.ToTensor(),
@@ -49,12 +111,12 @@ class FaceDataset(Dataset):
     def __init__(self, root, label_map, transform):
         self.transform = transform
         self.samples   = []
-        for folder in sorted(os.listdir(root)):
-            nrp = folder.split("_")[0]
+        for nrp in sorted(os.listdir(root)):
             if nrp not in label_map:
                 continue
             label = label_map[nrp]
-            fdir  = os.path.join(root, folder)
+            fdir  = os.path.join(root, nrp)
+            if not os.path.isdir(fdir): continue
             for img_name in os.listdir(fdir):
                 if img_name.lower().endswith((".jpg", ".png", ".jpeg")):
                     self.samples.append((os.path.join(fdir, img_name), label, nrp))
@@ -67,7 +129,7 @@ class FaceDataset(Dataset):
 
 # ─── Build Global Label Map from both clients ──────────────────────────────
 def list_nrps(data_dir):
-    return [f.split("_")[0] for f in sorted(os.listdir(data_dir))
+    return [f for f in sorted(os.listdir(data_dir))
             if os.path.isdir(os.path.join(data_dir, f))]
 
 client1_nrps = list_nrps(C1_DATA_DIR)

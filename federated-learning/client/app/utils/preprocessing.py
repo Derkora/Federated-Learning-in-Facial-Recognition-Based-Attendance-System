@@ -21,7 +21,7 @@ class ImageProcessor:
         # Standard MobileFaceNet Normalization: [0, 1] range shifted to [-1, 1]
         self.normalize = T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
 
-    def detect_face(self, img):
+    def detect_face(self, img, save_path=None):
         """
         Detect face and return (face_tensor, box, probability).
         Box format: [x, y, x2, y2]
@@ -31,8 +31,7 @@ class ImageProcessor:
             if boxes is None or len(boxes) == 0:
                 return None, None, 0.0
             
-            # Use MTCNN call to get the face tensor (already cropped/resized by MTCNN)
-            face = self.mtcnn(img)
+            face = self.mtcnn(img, save_path=save_path)
             return face, boxes[0], probs[0]
         except Exception as e:
             print(f"Face detection error: {e}")

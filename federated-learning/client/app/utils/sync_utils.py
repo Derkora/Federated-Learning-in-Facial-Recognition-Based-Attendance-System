@@ -1,0 +1,27 @@
+import os
+import time
+import requests
+
+# Sinkronisasi data ke server pusat
+# Fungsi ini dijalankan di background untuk mengirim data absensi yang baru dicatat
+# ke server Federated Learning agar bisa direkap secara global.
+def sync_record_to_server(user_id, name, confidence, client_id):
+    server_url = os.getenv("SERVER_API_URL", "http://server-fl:8080")
+    payload = [{
+        "user_id": user_id,
+        "name": name,
+        "client_id": client_id,
+        "timestamp": time.strftime('%Y-%m-%dT%H:%M:%S'),
+        "confidence": confidence
+    }]
+    
+    try:
+        # Mengirim data ke endpoint sync server
+        response = requests.post(f"{server_url}/api/attendance/sync", json=payload, timeout=5)
+        if response.status_code == 200:
+            print(f"[OK] Berhasil sinkronisasi absensi {user_id} ke server.")
+        else:
+            print(f"[ERROR] Gagal sinkronisasi ke server (Status: {response.status_code})")
+            
+    except Exception as e:
+        print(f"[ERROR] Gagal menghubungi server untuk sinkronisasi: {e}")

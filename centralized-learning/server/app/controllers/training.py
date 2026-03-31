@@ -10,12 +10,12 @@ from torchvision import datasets, transforms
 import torchvision.transforms as T
 from PIL import Image
 
-from app.utils.face_utils import face_handler, DEVICE
-from app.utils.mobilefacenet import MobileFaceNet, ArcMarginProduct
-from app.db import models
-from app.server_manager_instance import cl_manager
+from ..utils.face_utils import face_handler, DEVICE
+from ..utils.mobilefacenet import MobileFaceNet, ArcMarginProduct
+from ..db import models
+from ..server_manager_instance import cl_manager
 
-# Constants
+# Konfigurasi Jalur Data (Dataset Paths)
 UPLOAD_DIR = "data/students"
 PROCESSED_DATA = "data/datasets_processed"
 BALANCED_DATA = "data/datasets_balanced"
@@ -24,21 +24,24 @@ MODEL_PATH = f"{MODEL_DIR}/global_model.pth"
 PRETRAINED_PATH = "app/model/global_model_v0.pth"
 
 class TrainingController:
+    # Kontroler Utama untuk Siklus Pelatihan Terpusat (Centralized Training).
+    # Menangani penerimaan data, pra-pemrosesan, hingga evaluasi biometric.
+    
     def __init__(self):
         os.makedirs(PROCESSED_DATA, exist_ok=True)
         os.makedirs(BALANCED_DATA, exist_ok=True)
         os.makedirs(MODEL_DIR, exist_ok=True)
 
     def fetch_data(self, wait_timeout=600, expected_clients=None):
-        """Phase 1: Sync Wait for client data uploads with stabilization."""
-        print(f"[PHASE 1] Starting wait loop for data in {UPLOAD_DIR}...", flush=True)
+        # Tahap 1: Sinkronisasi dan Menunggu Unggahan Data dari Terminal
+        print(f"[FASE 1] Memulai pemantauan unggahan data di {UPLOAD_DIR}...", flush=True)
         if expected_clients:
-            print(f"[PHASE 1] Expecting data from at least {expected_clients} clients.", flush=True)
+            print(f"[FASE 1] Menunggu data dari minimal {expected_clients} terminal.", flush=True)
             
         start_time = time.time()
         last_img_count = -1
         stable_since = None
-        STABILIZATION_TIME = 15 # Seconds of no change required
+        STABILIZATION_TIME = 15 # Detekasi kestabilan data (tidak ada perubahan jumlah berkas)
         
         while (time.time() - start_time) < wait_timeout:
             try:
@@ -47,35 +50,35 @@ class TrainingController:
                 if len(subdirs) > 0:
                     img_count = sum([len(os.listdir(os.path.join(UPLOAD_DIR, d))) for d in subdirs])
                 
-                # Check for progress
+                # Cek progres unggahan
                 if img_count > 0:
                     if img_count != last_img_count:
                         last_img_count = img_count
                         stable_since = time.time()
-                        msg = f"Progress: {len(subdirs)} classes, {img_count} images detected. Waiting for stabilization..."
-                        print(f"[PHASE 1] {msg}", flush=True)
+                        msg = f"Progres: {len(subdirs)} kelas, {img_count} gambar terdeteksi. Menunggu stabil..."
+                        print(f"[FASE 1] {msg}", flush=True)
                         cl_manager.update_logs(msg)
                         cl_manager.update_received_data(UPLOAD_DIR)
                     else:
                         elapsed_stable = time.time() - stable_since
                         if elapsed_stable >= STABILIZATION_TIME:
-                            msg = f"Data stabilized! Final count: {len(subdirs)} classes, {img_count} images."
-                            print(f"[PHASE 1] {msg}", flush=True)
+                            msg = f"Data telah stabil! Total akhir: {len(subdirs)} kelas, {img_count} gambar."
+                            print(f"[FASE 1] {msg}", flush=True)
                             cl_manager.update_logs(msg)
                             break
                         else:
-                            print(f"[PHASE 1] Still waiting for stabilization... ({int(STABILIZATION_TIME - elapsed_stable)}s remaining)", flush=True)
+                            print(f"[FASE 1] Menunggu kestabilan data... ({int(STABILIZATION_TIME - elapsed_stable)} detik lagi)", flush=True)
                 else:
-                    print(f"[PHASE 1] Still waiting for first upload... (Elapsed: {int(time.time() - start_time)}s)", flush=True)
+                    print(f"[FASE 1] Menunggu unggahan pertama... (Durasi: {int(time.time() - start_time)} detik)", flush=True)
             except Exception as e:
-                print(f"[PHASE 1] Error during check: {e}", flush=True)
+                print(f"[FASE 1] Kesalahan saat pengecekan: {e}", flush=True)
             
             time.sleep(5)
         
         if last_img_count <= 0:
-            return {"status": "error", "message": "No data received within timeout."}
+            return {"status": "error", "message": "Tidak ada data yang diterima hingga batas waktu."}
             
-        # Calculate Payload Size
+        # Hitung Ukuran Payload
         total_size = 0
         for dirpath, _, filenames in os.walk(UPLOAD_DIR):
             for f in filenames: total_size += os.path.getsize(os.path.join(dirpath, f))
@@ -88,13 +91,13 @@ class TrainingController:
         }
 
     def preprocess_and_balance(self):
-        """Phase 2: MTCNN Alignment and Smart Balancing."""
+        # Tahap 2: Penyelarasan Wajah (MTCNN) dan Balancing Dataset menggunakan Augmentasi
         try:
-            print("[PHASE 2] Starting Preprocessing...", flush=True)
+            print("[FASE 2] Memulai Tahap Pra-pemrosesan...", flush=True)
             if os.path.exists(PROCESSED_DATA): shutil.rmtree(PROCESSED_DATA)
             os.makedirs(PROCESSED_DATA, exist_ok=True)
             
-            # 1. MTCNN
+            # 1. Deteksi dan Cropping Wajah (MTCNN)
             folders = [f for f in os.listdir(UPLOAD_DIR) if os.path.isdir(os.path.join(UPLOAD_DIR, f))]
             total_folders = len(folders)
             for i, nrp_folder in enumerate(folders):
@@ -102,21 +105,21 @@ class TrainingController:
                 dst = os.path.join(PROCESSED_DATA, nrp_folder)
                 os.makedirs(dst, exist_ok=True)
                 
-                msg = f"Preprocessing student {i+1}/{total_folders}: {nrp_folder}"
-                print(f"[PHASE 2] {msg}", flush=True)
+                msg = f"Memproses wajah mahasiswa {i+1}/{total_folders}: {nrp_folder}"
+                print(f"[FASE 2] {msg}", flush=True)
                 cl_manager.update_logs(msg)
                 
                 for img_name in os.listdir(src):
                     face_handler.detect_and_save(os.path.join(src, img_name), os.path.join(dst, img_name))
             
-            # 2. Balancing
-            msg = "Balancing dataset with augmentation..."
-            print(f"[PHASE 2] {msg}", flush=True)
+            # 2. Balancing (Menyeimbangkan jumlah data tiap kelas)
+            msg = "Menyeimbangkan dataset dengan augmentasi data..."
+            print(f"[FASE 2] {msg}", flush=True)
             cl_manager.update_logs(msg)
             if os.path.exists(BALANCED_DATA): shutil.rmtree(BALANCED_DATA)
             os.makedirs(BALANCED_DATA, exist_ok=True)
             
-            TARGET_COUNT = 100
+            TARGET_COUNT = 100 # Target jumlah gambar per mahasiswa
             aug_transform = T.Compose([
                 T.ColorJitter(brightness=0.3, contrast=0.3),
                 T.RandomRotation(degrees=20),
@@ -128,23 +131,23 @@ class TrainingController:
                 os.makedirs(dst, exist_ok=True)
                 files = os.listdir(src)
                 if not files: continue
-                # Copy original
+                # Salin berkas asli
                 for f in files: shutil.copy(os.path.join(src, f), os.path.join(dst, f))
-                # Augment if needed
+                # Tambahkan augmentasi jika kurang dari target
                 if len(files) < TARGET_COUNT:
                     for i in range(TARGET_COUNT - len(files)):
                         base = random.choice(files)
                         aug = aug_transform(Image.open(os.path.join(src, base)))
                         aug.save(os.path.join(dst, f"aug_{i}_{base}"))
             
-            return {"status": "success", "message": "Preprocessing and balancing complete."}
+            return {"status": "success", "message": "Pra-pemrosesan dan penyeimbangan data selesai."}
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
     def train_model(self, epochs=10):
-        """Phase 3: Deep Training Loop."""
+        # Tahap 3: Pelatihan Model MobileFaceNet
         try:
-            print(f"[PHASE 3] Training for {epochs} epochs...", flush=True)
+            print(f"[FASE 3] Memulai Pelatihan ({epochs} epoch)...", flush=True)
             transform = transforms.Compose([
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
@@ -177,12 +180,12 @@ class TrainingController:
                     total += label.size(0)
                     correct += (pred == label).sum().item()
                 final_acc = round(100 * correct / total, 2)
-                msg = f"Epoch {epoch+1}/{epochs} - Accuracy: {final_acc}%"
-                print(f"[PHASE 3] {msg}", flush=True)
+                msg = f"Epoch {epoch+1}/{epochs} - Akurasi: {final_acc}%"
+                print(f"[FASE 3] {msg}", flush=True)
                 cl_manager.update_logs(msg)
             
             torch.save(model.state_dict(), MODEL_PATH)
-            cl_manager.update_logs("Training complete. Model saved.")
+            cl_manager.update_logs("Pelatihan selesai. Model berhasil disimpan.")
             return {
                 "status": "success", 
                 "accuracy": final_acc, 
@@ -192,9 +195,9 @@ class TrainingController:
             return {"status": "error", "message": str(e)}
 
     def generate_reference_and_eval(self):
-        """Phase 4: Reference Database generation and Biometric Test."""
+        # Tahap 4: Pembuatan Basis Data Referensi Wajah dan Evaluasi Biometrik
         try:
-            print("[PHASE 4] Generating reference database and evaluating...", flush=True)
+            print("[FASE 4] Menghasilkan basis data referensi dan evaluasi...", flush=True)
             model = MobileFaceNet().to(DEVICE)
             model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
             model.eval()
@@ -208,16 +211,16 @@ class TrainingController:
                     all_files = sorted(os.listdir(p))
                     train_files, val_files = all_files[:-10], all_files[-10:]
                     
-                    # Ref from train
+                    # Membuat embedding referensi dari data latih
                     embs = [face_handler.get_embedding(model, Image.open(os.path.join(p, f)).convert('RGB')) for f in train_files[:5]]
                     if embs: ref_db[nrp] = torch.mean(torch.stack(embs), dim=0)
-                    # Samples from val
+                    # Sampel validasi dari data sisa
                     for vf in val_files:
                         val_samples.append((face_handler.get_embedding(model, Image.open(os.path.join(p, vf)).convert('RGB')), nrp))
             
             torch.save(ref_db, f"{MODEL_DIR}/reference_embeddings.pth")
             
-            # Sweeping Evaluation
+            # Pengujian Biometrik (Threshold Sweeping)
             tars, fars = [], []
             thresholds = [i/100 for i in range(0, 101, 5)]
             for th in thresholds:
