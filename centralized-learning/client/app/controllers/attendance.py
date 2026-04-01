@@ -10,7 +10,7 @@ class AttendanceController:
         self.server_url = server_url
         self.client_id = client_id
 
-    def recognize_and_submit(self, img_pil, model, reference_embeddings, threshold=0.65):
+    def recognize_and_submit(self, img_pil, model, reference_embeddings, threshold=0.50):
         # Melakukan inferensi wajah dan mengirimkan data jika ditemukan kecocokan.
         face = image_processor.detect_face(img_pil)
         if face is not None:

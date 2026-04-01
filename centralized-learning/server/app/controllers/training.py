@@ -9,6 +9,8 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 import torchvision.transforms as T
 from PIL import Image
+import cv2
+import numpy as np
 
 from ..utils.face_utils import face_handler, DEVICE
 from ..utils.mobilefacenet import MobileFaceNet, ArcMarginProduct
@@ -18,7 +20,6 @@ from ..server_manager_instance import cl_manager
 # Konfigurasi Jalur Data (Dataset Paths)
 UPLOAD_DIR = "data/students"
 PROCESSED_DATA = "data/datasets_processed"
-BALANCED_DATA = "data/datasets_balanced"
 MODEL_DIR = "app/model"
 MODEL_PATH = f"{MODEL_DIR}/global_model.pth"
 PRETRAINED_PATH = "app/model/global_model_v0.pth"
@@ -29,8 +30,16 @@ class TrainingController:
     
     def __init__(self):
         os.makedirs(PROCESSED_DATA, exist_ok=True)
-        os.makedirs(BALANCED_DATA, exist_ok=True)
         os.makedirs(MODEL_DIR, exist_ok=True)
+
+    def get_blur_score(self, image_path):
+        # Mengukur tingkat ketajaman gambar menggunakan variansi Laplacian.
+        try:
+            img = cv2.imread(image_path)
+            if img is None: return 0
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            return cv2.Laplacian(gray, cv2.CV_64F).var()
+        except: return 0
 
     def fetch_data(self, wait_timeout=600, expected_clients=None):
         # Tahap 1: Sinkronisasi dan Menunggu Unggahan Data dari Terminal
@@ -91,9 +100,9 @@ class TrainingController:
         }
 
     def preprocess_and_balance(self):
-        # Tahap 2: Penyelarasan Wajah (MTCNN) dan Balancing Dataset menggunakan Augmentasi
+        # Tahap 2: Penyelarasan Wajah (MTCNN) dan Seleksi Kualitas (Laplacian)
         try:
-            print("[FASE 2] Memulai Tahap Pra-pemrosesan...", flush=True)
+            print("[FASE 2] Memulai Tahap Pra-pemrosesan & Seleksi Kualitas...", flush=True)
             if os.path.exists(PROCESSED_DATA): shutil.rmtree(PROCESSED_DATA)
             os.makedirs(PROCESSED_DATA, exist_ok=True)
             
@@ -105,54 +114,38 @@ class TrainingController:
                 dst = os.path.join(PROCESSED_DATA, nrp_folder)
                 os.makedirs(dst, exist_ok=True)
                 
-                msg = f"Memproses wajah mahasiswa {i+1}/{total_folders}: {nrp_folder}"
+                # Seleksi berbasis Blur Detection (Laplacian) - Pilih Top 50 terbaik
+                all_images = [f for f in os.listdir(src) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+                scored_images = sorted([(img, self.get_blur_score(os.path.join(src, img))) for img in all_images], 
+                                     key=lambda x: x[1], reverse=True)
+                top_images = [img[0] for img in scored_images[:50]]
+                
+                msg = f"Memproses {len(top_images)} wajah terbaik untuk {nrp_folder} ({i+1}/{total_folders})"
                 print(f"[FASE 2] {msg}", flush=True)
                 cl_manager.update_logs(msg)
                 
-                for img_name in os.listdir(src):
+                for img_name in top_images:
                     face_handler.detect_and_save(os.path.join(src, img_name), os.path.join(dst, img_name))
             
-            # 2. Balancing (Menyeimbangkan jumlah data tiap kelas)
-            msg = "Menyeimbangkan dataset dengan augmentasi data..."
-            print(f"[FASE 2] {msg}", flush=True)
-            cl_manager.update_logs(msg)
-            if os.path.exists(BALANCED_DATA): shutil.rmtree(BALANCED_DATA)
-            os.makedirs(BALANCED_DATA, exist_ok=True)
-            
-            TARGET_COUNT = 100 # Target jumlah gambar per mahasiswa
-            aug_transform = T.Compose([
-                T.ColorJitter(brightness=0.3, contrast=0.3),
-                T.RandomRotation(degrees=20),
-                T.RandomHorizontalFlip(p=0.5)
-            ])
-            
-            for nrp_folder in os.listdir(PROCESSED_DATA):
-                src, dst = os.path.join(PROCESSED_DATA, nrp_folder), os.path.join(BALANCED_DATA, nrp_folder)
-                os.makedirs(dst, exist_ok=True)
-                files = os.listdir(src)
-                if not files: continue
-                # Salin berkas asli
-                for f in files: shutil.copy(os.path.join(src, f), os.path.join(dst, f))
-                # Tambahkan augmentasi jika kurang dari target
-                if len(files) < TARGET_COUNT:
-                    for i in range(TARGET_COUNT - len(files)):
-                        base = random.choice(files)
-                        aug = aug_transform(Image.open(os.path.join(src, base)))
-                        aug.save(os.path.join(dst, f"aug_{i}_{base}"))
-            
-            return {"status": "success", "message": "Pra-pemrosesan dan penyeimbangan data selesai."}
+            # 2. Augmentasi sekarang dilakukan secara dinamis (on-the-fly) saat training
+            return {"status": "success", "message": "Pra-pemrosesan dan seleksi kualitas (Top 50 Laplacian) selesai."}
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
     def train_model(self, epochs=10):
         # Tahap 3: Pelatihan Model MobileFaceNet
         try:
-            print(f"[FASE 3] Memulai Pelatihan ({epochs} epoch)...", flush=True)
+            print(f"[FASE 3] Memulai Pelatihan dengan Augmentasi Dinamis ({epochs} epoch)...", flush=True)
             transform = transforms.Compose([
+                transforms.Resize((112, 96)),
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomRotation(degrees=15),
+                transforms.ColorJitter(brightness=0.2, contrast=0.2),
                 transforms.ToTensor(),
-                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+                transforms.RandomErasing(p=0.1)
             ])
-            train_dataset = datasets.ImageFolder(BALANCED_DATA, transform=transform)
+            train_dataset = datasets.ImageFolder(PROCESSED_DATA, transform=transform)
             num_classes = len(train_dataset.classes)
             train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
             
@@ -205,8 +198,8 @@ class TrainingController:
             ref_db = {}
             val_samples = []
             with torch.no_grad():
-                for nrp in os.listdir(BALANCED_DATA):
-                    p = os.path.join(BALANCED_DATA, nrp)
+                for nrp in os.listdir(PROCESSED_DATA):
+                    p = os.path.join(PROCESSED_DATA, nrp)
                     if not os.path.isdir(p): continue
                     all_files = sorted(os.listdir(p))
                     train_files, val_files = all_files[:-10], all_files[-10:]
