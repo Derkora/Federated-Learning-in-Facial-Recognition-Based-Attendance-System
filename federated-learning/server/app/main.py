@@ -1,19 +1,24 @@
+import os
+import time
+import json
+import uvicorn
+import base64
+import torch
+import io
+import numpy as np
+import math
+from datetime import datetime
 from fastapi import FastAPI, Request, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
-import os
-import time
-import json
-import uvicorn
-from datetime import datetime
-
-from .db.db import engine, get_db, Base
-from .db.models import FLSession, FLRound, GlobalModel, Client, UserGlobal, AttendanceRecap
-from .server_manager_instance import fl_manager
-from .controllers.fl_controller import FLController
+from app.db.db import engine, get_db, Base
+from app.db.models import FLSession, FLRound, GlobalModel, Client, UserGlobal, AttendanceRecap
+from app.server_manager_instance import fl_manager
+from app.controllers.fl_controller import FLController
+from app.config import REGISTRY_PATH, BN_PATH
 
 # Inisialisasi Database Server
 Base.metadata.create_all(bind=engine)
@@ -36,6 +41,12 @@ async def index(request: Request, db: Session = Depends(get_db)):
 @app.get("/api/status")
 async def get_system_status():
     return fl_manager.get_status()
+
+# API Hasil Pelatihan Global (Metrik)
+@app.get("/api/results")
+async def get_results_api(db: Session = Depends(get_db)):
+    status = fl_manager.get_status(db=db)
+    return status.get("metrics", {})
 
 # Rekapitulasi Presensi Mahasiswa
 @app.get("/records", response_class=HTMLResponse)
@@ -61,6 +72,12 @@ async def records(request: Request, db: Session = Depends(get_db)):
         "request": request,
         "records": records_display
     })
+
+# Halaman Hasil Evaluasi (Copy-Paste friendly)
+@app.get("/results", response_class=HTMLResponse)
+async def view_results(request: Request, db: Session = Depends(get_db)):
+    status = fl_manager.get_status(db=db)
+    return templates.TemplateResponse("results.html", {"request": request, "title": "Evaluation Results", "status": status})
 
 # --- OPERASI FEDERATED LEARNING ---
 
@@ -132,18 +149,16 @@ async def get_backbone_model(db: Session = Depends(get_db)):
 # Mengunduh Parameter Batch Normalization (BN)
 @app.get("/api/model/bn")
 async def get_bn_model():
-    path = "data/global_bn_combined.pth"
-    if os.path.exists(path):
-        with open(path, "rb") as f:
+    if os.path.exists(BN_PATH):
+        with open(BN_PATH, "rb") as f:
             return Response(content=f.read(), media_type="application/octet-stream")
     raise HTTPException(status_code=404, detail="BN Assets not found")
 
 # Mengunduh Pustaka Identitas Global (Registry)
 @app.get("/api/model/registry")
 async def get_registry():
-    path = "data/global_embedding_registry.pth"
-    if os.path.exists(path):
-        with open(path, "rb") as f:
+    if os.path.exists(REGISTRY_PATH):
+        with open(REGISTRY_PATH, "rb") as f:
             return Response(content=f.read(), media_type="application/octet-stream")
     raise HTTPException(status_code=404, detail="Registry not found")
 
@@ -169,7 +184,6 @@ async def get_label(data: dict, db: Session = Depends(get_db)):
     
     embedding_bytes = None
     if embedding_b64:
-        import base64
         embedding_bytes = base64.b64decode(embedding_b64)
 
     user = db.query(UserGlobal).filter_by(nrp=nrp).first()
@@ -189,14 +203,8 @@ async def get_label(data: dict, db: Session = Depends(get_db)):
         
     return {"nrp": nrp, "label": user.user_id}
 
-# Menerima Aset Registry dari Terminal setelah Training
 @app.post("/api/training/registry_assets")
 async def receive_registry_assets(data: dict, db: Session = Depends(get_db)):
-    import base64
-    import torch
-    import io
-    import numpy as np
-
     client_id = data.get("client_id")
     serialized_bn = data.get("bn_params")
     centroids = data.get("centroids")
@@ -251,7 +259,6 @@ async def sync_attendance(records: list, db: Session = Depends(get_db)):
 # Mendapatkan Detail Status Sesi Pelatihan
 @app.get("/api/fl/status/{session_id}")
 async def get_fl_status(session_id: str, db: Session = Depends(get_db)):
-    import math
     rounds = db.query(FLRound).filter_by(session_id=session_id).order_by(FLRound.round_number.asc()).all()
     history = []
     for r in rounds:

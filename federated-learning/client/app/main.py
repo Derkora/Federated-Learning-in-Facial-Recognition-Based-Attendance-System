@@ -1,16 +1,18 @@
+import os
+import requests
+import uvicorn
+import cv2
+import numpy as np
+import time
 from fastapi import FastAPI, Request, Depends, HTTPException, BackgroundTasks
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
-import os
-import requests
-import uvicorn
-
-from .db.db import engine, get_db, Base
-from .client_manager_instance import fl_manager
-from .controllers.attendance_controller import AttendanceController
+from app.db.db import engine, get_db, Base
+from app.client_manager_instance import fl_manager
+from app.controllers.attendance_controller import AttendanceController
 
 # Inisialisasi Database SQLite Lokal
 Base.metadata.create_all(bind=engine)
@@ -40,10 +42,38 @@ async def index(request: Request):
 @app.post("/api/inference")
 async def api_inference(data: dict, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     try:
-        return await attendance_ptr.process_inference(data['image'], db, background_tasks)
+        from PIL import Image
+        import io
+        import base64
+        
+        img_bytes = base64.b64decode(data['image'])
+        img_pil = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+        
+        # Set as latest frame for MJPEG monitoring
+        fl_manager.latest_frame = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+        
+        res = await attendance_ptr.process_inference(data['image'], db, background_tasks)
+        res["is_virtual"] = False # Remote frame is considered "Real" in UI
+        fl_manager.latest_result = res
+        return res
     except Exception as e:
         print(f"[ERROR] Gagal memproses inference: {e}")
         return JSONResponse({"matched": "Error", "error": str(e)}, status_code=400)
+
+@app.get("/video_feed")
+async def video_feed():
+    def gen_frames():
+        while True:
+            if fl_manager.latest_frame is not None:
+                ret, buffer = cv2.imencode('.jpg', fl_manager.latest_frame)
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            time.sleep(0.2)
+    return StreamingResponse(gen_frames(), media_type='multipart/x-mixed-replace; boundary=frame')
+
+@app.get("/api/results/latest")
+async def get_latest_result():
+    return fl_manager.latest_result
 
 # API Registrasi Mahasiswa
 # Digunakan untuk mendaftarkan mahasiswa baru secara lokal di terminal ini.

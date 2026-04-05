@@ -12,17 +12,20 @@ from PIL import Image
 import cv2
 import numpy as np
 
-from ..utils.face_utils import face_handler, DEVICE
-from ..utils.mobilefacenet import MobileFaceNet, ArcMarginProduct
-from ..db import models
-from ..server_manager_instance import cl_manager
+from app.utils.face_utils import face_handler, DEVICE
+from app.utils.mobilefacenet import MobileFaceNet, ArcMarginProduct
+from app.db import models
+from app.server_manager_instance import cl_manager
+from app.config import (
+    UPLOAD_DIR, PROCESSED_DATA, MODEL_DIR, MODEL_PATH, 
+    PRETRAINED_PATH, EMISSIONS_DIR, TRAINING_PARAMS, CODECARBON_AVAILABLE
+)
 
-# Konfigurasi Jalur Data (Dataset Paths)
-UPLOAD_DIR = "data/students"
-PROCESSED_DATA = "data/datasets_processed"
-MODEL_DIR = "app/model"
-MODEL_PATH = f"{MODEL_DIR}/global_model.pth"
-PRETRAINED_PATH = "app/model/global_model_v0.pth"
+if CODECARBON_AVAILABLE:
+    try:
+        from codecarbon import OfflineEmissionsTracker
+    except ImportError:
+        pass
 
 class TrainingController:
     # Kontroler Utama untuk Siklus Pelatihan Terpusat (Centralized Training).
@@ -94,7 +97,7 @@ class TrainingController:
         
         return {
             "status": "success", 
-            "payload_mb": round(total_size / (1024 * 1024), 2),
+            "upload_volume_mb": round(total_size / (1024 * 1024), 2),
             "classes": len(subdirs),
             "images": last_img_count
         }
@@ -106,7 +109,7 @@ class TrainingController:
             if os.path.exists(PROCESSED_DATA): shutil.rmtree(PROCESSED_DATA)
             os.makedirs(PROCESSED_DATA, exist_ok=True)
             
-            # 1. Deteksi dan Cropping Wajah (MTCNN)
+            # Deteksi dan Cropping Wajah (MTCNN)
             folders = [f for f in os.listdir(UPLOAD_DIR) if os.path.isdir(os.path.join(UPLOAD_DIR, f))]
             total_folders = len(folders)
             for i, nrp_folder in enumerate(folders):
@@ -127,13 +130,38 @@ class TrainingController:
                 for img_name in top_images:
                     face_handler.detect_and_save(os.path.join(src, img_name), os.path.join(dst, img_name))
             
-            # 2. Augmentasi sekarang dilakukan secara dinamis (on-the-fly) saat training
+            # Augmentasi sekarang dilakukan secara dinamis (on-the-fly) saat training
             return {"status": "success", "message": "Pra-pemrosesan dan seleksi kualitas (Top 50 Laplacian) selesai."}
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
-    def train_model(self, epochs=10):
+    def _get_lr(self, epoch):
+        # Penyelarasan LR Schedule dari konfigurasi terpusat
+        schedule = TRAINING_PARAMS["lr_schedule"]
+        # Ambil LR berdasarkan epoch tertinggi yang sudah dilewati
+        lr = 1e-4 # Default
+        for threshold in sorted(schedule.keys()):
+            if epoch >= threshold:
+                lr = schedule[threshold]
+        return lr
+
+    def train_model(self, epochs=None):
+        if epochs is None:
+            epochs = TRAINING_PARAMS["total_epochs"]
+            
         # Tahap 3: Pelatihan Model MobileFaceNet
+        tracker = None
+        if CODECARBON_AVAILABLE:
+            try:
+                tracker = OfflineEmissionsTracker(
+                    country_iso_code="IDN", 
+                    log_level="error", 
+                    save_to_file=True, 
+                    output_dir=EMISSIONS_DIR
+                )
+                tracker.start()
+            except: pass
+
         try:
             print(f"[FASE 3] Memulai Pelatihan dengan Augmentasi Dinamis ({epochs} epoch)...", flush=True)
             transform = transforms.Compose([
@@ -147,21 +175,36 @@ class TrainingController:
             ])
             train_dataset = datasets.ImageFolder(PROCESSED_DATA, transform=transform)
             num_classes = len(train_dataset.classes)
-            train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+            batch_size = TRAINING_PARAMS["batch_size"]
+            train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
             
             model = MobileFaceNet().to(DEVICE)
             if os.path.exists(PRETRAINED_PATH):
                 model.load_state_dict(torch.load(PRETRAINED_PATH, map_location=DEVICE))
             
             metric_fc = ArcMarginProduct(128, num_classes).to(DEVICE)
-            optimizer = optim.Adam([{'params': model.parameters()}, {'params': metric_fc.parameters()}], lr=0.001)
-            criterion = nn.CrossEntropyLoss()
             
-            model.train()
+            # 3. Adam Optimizer dengan Label Smoothing dari Config
+            smoothing = TRAINING_PARAMS["label_smoothing"]
+            criterion = nn.CrossEntropyLoss(label_smoothing=smoothing)
+            
+            optimizer = optim.Adam([
+                {'params': model.parameters()}, 
+                {'params': metric_fc.parameters()}
+            ], lr=self._get_lr(0))
+            
+            epoch_history = []
             final_acc = 0
             start_time = time.time()
+            
             for epoch in range(epochs):
-                correct, total = 0, 0
+                # 4. Perbarui Learning Rate sesuai Jadwal
+                current_lr = self._get_lr(epoch)
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = current_lr
+                
+                model.train()
+                correct, total, total_loss = 0, 0, 0.0
                 for img, label in train_loader:
                     img, label = img.to(DEVICE), label.to(DEVICE)
                     optimizer.zero_grad()
@@ -169,80 +212,75 @@ class TrainingController:
                     loss = criterion(output, label)
                     loss.backward()
                     optimizer.step()
+                    
+                    total_loss += loss.item()
                     _, pred = torch.max(output.data, 1)
                     total += label.size(0)
                     correct += (pred == label).sum().item()
-                final_acc = round(100 * correct / total, 2)
-                msg = f"Epoch {epoch+1}/{epochs} - Akurasi: {final_acc}%"
+                
+                epoch_acc = round(100 * correct / total, 2)
+                avg_loss = round(total_loss / len(train_loader), 4)
+                epoch_history.append({"epoch": epoch + 1, "loss": avg_loss, "accuracy": epoch_acc})
+                
+                msg = f"Epoch {epoch+1}/{epochs} | LR: {current_lr:.1e} | Loss: {avg_loss} | Acc: {epoch_acc}%"
                 print(f"[FASE 3] {msg}", flush=True)
                 cl_manager.update_logs(msg)
+                final_acc = epoch_acc
             
             torch.save(model.state_dict(), MODEL_PATH)
             cl_manager.update_logs("Pelatihan selesai. Model berhasil disimpan.")
+            
+            # 5. Ambil data energi jika CodeCarbon aktif
+            energy_kwh = 0
+            if tracker:
+                try:
+                    emissions_data = tracker.stop()
+                    energy_kwh = tracker.final_emissions_data.energy_consumed
+                except: pass
+
             return {
                 "status": "success", 
-                "accuracy": final_acc, 
-                "duration_s": round(time.time() - start_time, 2)
+                "duration_s": round(time.time() - start_time, 2),
+                "compute_energy_kwh": energy_kwh,
+                "accuracy": final_acc,
+                "epoch_history": epoch_history
             }
         except Exception as e:
+            if tracker: tracker.stop()
             return {"status": "error", "message": str(e)}
 
     def generate_reference_and_eval(self):
-        # Tahap 4: Pembuatan Basis Data Referensi Wajah dan Evaluasi Biometrik
+        # Tahap 4: Pembuatan Basis Data Referensi Wajah dan Evaluasi Transmisi
         try:
-            print("[FASE 4] Menghasilkan basis data referensi dan evaluasi...", flush=True)
+            print("[FASE 4] Menghasilkan basis data referensi dan menghitung volume transmisi...", flush=True)
             model = MobileFaceNet().to(DEVICE)
             model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
             model.eval()
             
             ref_db = {}
-            val_samples = []
             with torch.no_grad():
                 for nrp in os.listdir(PROCESSED_DATA):
                     p = os.path.join(PROCESSED_DATA, nrp)
                     if not os.path.isdir(p): continue
                     all_files = sorted(os.listdir(p))
-                    train_files, val_files = all_files[:-10], all_files[-10:]
+                    # Gunakan 5 gambar pertama untuk membuat rata-rata embedding referensi (Centroid)
+                    train_files = all_files[:5]
                     
-                    # Membuat embedding referensi dari data latih
-                    embs = [face_handler.get_embedding(model, Image.open(os.path.join(p, f)).convert('RGB')) for f in train_files[:5]]
+                    embs = [face_handler.get_embedding(model, Image.open(os.path.join(p, f)).convert('RGB')) for f in train_files]
                     if embs: ref_db[nrp] = torch.mean(torch.stack(embs), dim=0)
-                    # Sampel validasi dari data sisa
-                    for vf in val_files:
-                        val_samples.append((face_handler.get_embedding(model, Image.open(os.path.join(p, vf)).convert('RGB')), nrp))
             
             torch.save(ref_db, f"{MODEL_DIR}/reference_embeddings.pth")
             
-            # Pengujian Biometrik (Threshold Sweeping)
-            tars, fars = [], []
-            thresholds = [i/100 for i in range(0, 101, 5)]
-            for th in thresholds:
-                ta, fa, tr, fr = 0, 0, 0, 0
-                for v_emb, v_nrp in val_samples:
-                    best_sim, best_match = -1, "Unknown"
-                    for r_nrp, r_emb in ref_db.items():
-                        sim = torch.nn.functional.cosine_similarity(v_emb, r_emb).item()
-                        if sim > best_sim: best_sim, best_match = sim, r_nrp
-                    if best_sim > th:
-                        if best_match == v_nrp: ta += 1
-                        else: fa += 1
-                    else:
-                        if best_match == v_nrp: fr += 1
-                        else: tr += 1
-                tars.append(ta / (ta + fr) if (ta + fr) > 0 else 0)
-                fars.append(fa / (fa + tr) if (fa + tr) > 0 else 0)
+            # Hitung Ukuran Aset yang akan didownload client (Model + Registri)
+            download_size = 0
+            if os.path.exists(MODEL_PATH): download_size += os.path.getsize(MODEL_PATH)
+            REF_PATH = f"{MODEL_DIR}/reference_embeddings.pth"
+            if os.path.exists(REF_PATH): download_size += os.path.getsize(REF_PATH)
 
-            eer = 0
-            for i in range(len(fars)):
-                if fars[i] >= (1 - tars[i]):
-                    eer = round(fars[i] * 100, 2)
-                    break
-
+            # 5. Kembalikan volume transmisi
             return {
                 "status": "success",
-                "tar": round(tars[thresholds.index(0.65)] * 100, 2) if 0.65 in thresholds else 0,
-                "far": round(fars[thresholds.index(0.65)] * 100, 2) if 0.65 in thresholds else 0,
-                "eer": eer
+                "download_volume_mb": round(download_size / (1024 * 1024), 2)
             }
         except Exception as e:
             return {"status": "error", "message": str(e)}

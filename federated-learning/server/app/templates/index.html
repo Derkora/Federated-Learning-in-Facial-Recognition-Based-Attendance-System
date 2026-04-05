@@ -1,97 +1,32 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div class="stats-grid">
-    <div class="stat-card glass">
-        <div class="stat-label">System Phase</div>
-        <div class="stat-value" id="phase-display"
-            style="font-size: 1.2rem; color: var(--accent); text-transform: capitalize;">
-            {{ status.phase if status.phase else 'Idle' }}
+<div class="glass" style="padding: 2rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+        <div>
+            <h1 style="color: var(--accent); margin-bottom: 0.5rem;">Federated Learning Server</h1>
+            <p id="phase-display" style="color: var(--text-muted); font-weight: 500; text-transform: capitalize;">
+                Status: Standby</p>
         </div>
-    </div>
-    <div class="stat-card glass">
-        <div class="stat-label">System Status</div>
-        <div class="stat-value {% if status.is_running %}status-running{% else %}status-standby{% endif %}"
-            id="status-phase" style="font-size: 1.2rem;">
-            {{ "Training Active" if status.is_running else "Standby" }}
-        </div>
-    </div>
-    <div class="stat-card glass">
-        <div class="stat-label">Model Accuracy</div>
-        <div class="stat-value" id="model-acc" style="font-size: 1.2rem; color: var(--accent);">-- %</div>
-    </div>
-    <div class="stat-card glass">
-        <div class="stat-label">TAR / FAR (0.70)</div>
-        <div class="stat-value" id="metric-biometric" style="font-size: 1.2rem;">-- / --</div>
-    </div>
-    <div class="stat-card glass">
-        <div class="stat-label">Estimated Cost (IDR)</div>
-        <div class="stat-value" id="cost-idr" style="font-size: 1.2rem; color: var(--danger);">Rp 0</div>
-    </div>
-</div>
-
-<div class="chart-section" style="grid-template-columns: 1fr 350px;">
-    <div class="glass" style="padding: 1.5rem;">
-        <div style="margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center;">
-            <div>
-                <h2 style="margin: 0;">Federated Learning Rounds</h2>
-                <p style="color: var(--text-muted); font-size: 0.9rem;">Trigger and monitor the global backbone
-                    aggregation.</p>
-            </div>
-            <div style="display: flex; gap: 0.5rem;">
+        <div style="display: flex; gap: 1rem; align-items: center;">
+            <div
+                style="background: rgba(0,0,0,0.2); padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1);">
+                <label style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-bottom: 4px;">JUMLAH
+                    RONDE</label>
                 <input type="number" id="rounds" value="{{ status.default_rounds }}" min="1"
-                    style="width: 50px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); color: white; border-radius: 4px; padding: 5px;">
-                <button id="start-btn" class="btn btn-primary" onclick="startTraining()" {{ 'disabled' if
-                    status.is_running }}>
-                    {{ "RUNNING..." if status.is_running else "🚀 START TRAINING" }}
-                </button>
+                    style="width: 60px; background: transparent; border: none; color: white; font-size: 1.1rem; font-weight: bold; outline: none;">
             </div>
-        </div>
-
-        <div id="training-terminal">
-            [READY] Federated coordinator initialized.<br>
-            [WAITING] Clients connected: 2. Waiting for start signal...
+            <button id="start-btn" class="btn btn-primary" onclick="startTraining()"
+                style="padding: 1rem 2rem; font-size: 1.1rem;" {{ 'disabled' if status.is_running }}>
+                {{ "SEDANG BERJALAN..." if status.is_running else "🚀 MULAI TRAINING FEDERATED" }}
+            </button>
         </div>
     </div>
 
-    <div class="glass" style="padding: 1.5rem;">
-        <h2 style="margin-top: 0;">Student Presence</h2>
-        <div id="student-list" style="margin-top: 1.2rem; max-height: 400px; overflow-y: auto;">
-            {% if status.attendance_count == 0 %}
-            <p style="color: var(--text-muted);">No logs received yet.</p>
-            {% endif %}
-        </div>
-        <hr style="margin: 1.5rem 0; border: none; border-top: 1px solid rgba(255,255,255,0.05);">
-        <h2 style="margin-top: 0;">Learning Health</h2>
-        <div style="margin-top: 1.2rem;">
-            <div class="metric-row">
-                <span>Shared Model:</span>
-                <b style="color: var(--accent);">MobileFaceNet</b>
-            </div>
-            <div class="metric-row">
-                <span>Participation:</span>
-                <b>{{ status.default_min_clients }}/{{ status.default_min_clients }} Clients</b>
-            </div>
-            <div class="metric-row">
-                <span>Total Rounds:</span>
-                <b>{{ status.default_rounds }}</b>
-            </div>
-            <div class="metric-row">
-                <span>Payload Transfer:</span>
-                <b id="metric-transfer">-- MB</b>
-            </div>
-            <div class="metric-row">
-                <span>EER (Equal Error Rate):</span>
-                <b id="metric-eer">-- %</b>
-            </div>
-            <div class="metric-row" style="border: none;">
-                <span>Latest Loss:</span>
-                <b id="latest-loss">--</b>
-            </div>
-            <div style="height: 100px; margin-top: 0.5rem;">
-                <canvas id="lossChartMini"></canvas>
-            </div>
-        </div>
+    <div id="training-terminal"
+        style="height: 500px; overflow-y: auto; background: rgba(0,0,0,0.4); padding: 25px; border-radius: 12px; font-family: 'Fira Code', monospace; font-size: 0.9rem; border: 1px solid var(--accent-low); line-height: 1.6; color: #e5e7eb; box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);">
+        [READY] Federated coordinator initialized.<br>
+        [WAITING] Menunggu terminal client terhubung untuk memulai sinyal agregasi...
     </div>
 </div>
 
@@ -113,33 +48,6 @@
 <script>
     let lossChart;
     let pollInterval = null;
-
-    function initChart() {
-        const ctx = document.getElementById('lossChartMini').getContext('2d');
-        lossChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: [],
-                datasets: [{
-                    data: [],
-                    borderColor: '#4f46e5',
-                    borderWidth: 2,
-                    pointRadius: 0,
-                    tension: 0.4,
-                    fill: false
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: {
-                    y: { display: false },
-                    x: { display: false }
-                },
-                plugins: { legend: { display: false } }
-            }
-        });
-    }
 
     async function startTraining() {
         const rounds = document.getElementById('rounds').value;
@@ -170,37 +78,19 @@
 
             // 1. Update Phase & Running Status
             const phaseEl = document.getElementById('phase-display');
-            phaseEl.innerText = data.phase || 'Idle';
+            const phaseText = data.phase || 'Standby';
+            phaseEl.innerText = "Status: " + (data.is_running ? "Sedang Berjalan (" + phaseText + ")" : "Standby");
             phaseEl.style.color = (data.is_busy) ? 'var(--accent)' : 'var(--text-muted)';
 
-            const statusEl = document.getElementById('status-phase');
-            statusEl.innerText = data.is_running ? "Training Active" : "Standby";
-            statusEl.className = `stat-value ${data.is_running ? 'status-running' : 'status-standby'}`;
+            const startBtn = document.getElementById('start-btn');
+            startBtn.disabled = data.is_running;
+            startBtn.innerText = data.is_running ? "SEDANG BERJALAN..." : "🚀 MULAI TRAINING FEDERATED";
 
             // 2. Update Logs (Terminal)
             const terminal = document.getElementById('training-terminal');
             if (data.phase_logs && data.phase_logs.length > 0) {
                 terminal.innerHTML = data.phase_logs.join('<br>');
                 terminal.scrollTop = terminal.scrollHeight;
-            }
-
-            // 3. Update Metrics
-            if (data.metrics) {
-                const m = data.metrics;
-                document.getElementById('latest-loss').innerText = (m.loss || 0).toFixed(4);
-                document.getElementById('model-acc').innerText = `${((m.accuracy || 0) * 100).toFixed(1)} %`;
-                document.getElementById('cost-idr').innerText = `Rp ${(m.cost_idr || 0).toLocaleString()}`;
-                document.getElementById('metric-transfer').innerText = `${(m.payload_size_mb || 0).toFixed(1)} MB`;
-
-                // Biometric metrics from data.metrics
-                document.getElementById('metric-biometric').innerText = `${((m.tar || 0) * 100).toFixed(1)}% / ${((m.far || 0) * 100).toFixed(1)}%`;
-                document.getElementById('metric-eer').innerText = `${((m.eer || 0) * 100).toFixed(1)} %`;
-            }
-
-            // 4. Update Student List (Training Participation)
-            const list = document.getElementById('student-list');
-            if (data.received_data && data.received_data.length > 0) {
-                list.innerHTML = data.received_data.map(s => `<div class="student-item">✅ ${s}</div>`).join('');
             }
 
             // 5. Polling Management

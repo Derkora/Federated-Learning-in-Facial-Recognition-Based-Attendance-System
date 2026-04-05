@@ -21,11 +21,12 @@ Berbeda dengan Federated Learning, sistem terpusat ini tidak memisahkan komponen
 ---
 
 ## Tahap 3: Siklus Pelatihan Terpusat (Bulk Data Transfer)
-Alur kerja yang memindahkan data mentah (cropped images) dari terminal ke server pusat:
-1.  **Fase Registrasi**: Terminal mendaftar ke server pusat sebagai node pengirim data.
-2.  **Fase Data Collection & Upload**: Terminal mengumpulkan wajah mahasiswa, memaketkannya (ZIP), dan mengunggahnya ke server.
-3.  **Fase Centralized Processing**: Server mengekstrak seluruh paket data dari semua terminal dan melatih model secara massal menggunakan GPU/CPU tinggi.
-4.  **Fase Asset Distribution**: Setelah proses training selesai, server mengirimkan model hasil pelatihan kembali ke seluruh terminal yang terhubung.
+Alur kerja yang memindahkan dataset wajah dari terminal ke server pusat secara efisien:
+1.  **Fase Registrasi & Signal**: Terminal memantau status server. Saat server memulai fase `Import Data`, terminal menerima sinyal untuk mulai mengirimkan dataset.
+2.  **Bulk Packaging (ZIP)**: Terminal mengumpulkan seluruh foto mahasiswa yang telah di-crop, mengemas folder `raw_data/students` menjadi satu berkas ZIP (`data.zip`) untuk efisiensi transmisi.
+3.  **Endpoint /upload-bulk-zip**: Terminal mengirimkan berkas ZIP tersebut ke server melalui endpoint khusus. Server secara otomatis mengekstrak berkas tersebut ke direktori `data/students/` di sisi server.
+4.  **Centralized Processing**: Server memproses seluruh data gabungan dari berbagai terminal (pemeriksaan duplikat, balancing) dan melatih model MobileFaceNet secara terpusat menggunakan resource komputasi tinggi.
+5.  **Direct Asset Deployment**: Setelah training selesai, terminal secara otomatis mengunduh bobot model (`.pth`) dan registri embedding terbaru untuk digunakan dalam inferensi real-time.
 
 ---
 

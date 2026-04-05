@@ -1,67 +1,22 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div class="stats-grid">
-    <div class="stat-card glass">
-        <div class="stat-label">System Status</div>
-        <div class="stat-value" id="status-phase" style="font-size: 1.2rem; color: var(--accent);">Standby</div>
-    </div>
-    <div class="stat-card glass">
-        <div class="stat-label">Model Accuracy</div>
-        <div class="stat-value" id="model-acc">--</div>
-    </div>
-    <div class="stat-card glass">
-        <div class="stat-label">TAR / FAR (0.65)</div>
-        <div class="stat-value" id="metric-biometric" style="font-size: 1.2rem;">-- / --</div>
-    </div>
-    <div class="stat-card glass">
-        <div class="stat-label">Estimated Cost (IDR)</div>
-        <div class="stat-value" id="cost-idr" style="color: #ef4444;">Rp 0</div>
-    </div>
-</div>
-
-<div class="chart-section" style="grid-template-columns: 1fr 350px;">
-    <div class="glass" style="padding: 1.5rem;">
-        <div style="margin-bottom: 1.5rem;">
-            <h2>Research Lifecycle Phases</h2>
-            <p style="color: var(--text-muted); font-size: 0.9rem;">Execute each phase sequentially for a granular
-                evaluation.</p>
+<div class="glass" style="padding: 2rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+        <div>
+            <h1 style="color: var(--accent); margin-bottom: 0.5rem;">Centralized Learning Server</h1>
+            <p id="status-phase" style="color: var(--text-muted); font-weight: 500;">Status: Standby</p>
         </div>
-
-        <div style="display: grid; grid-template-columns: 1fr; gap: 1rem;">
-            <button id="btn-lifecycle" class="btn btn-primary" onclick="runLifecycle()"
-                style="height: 60px; font-size: 1.2rem;">
-                🚀 RUN FULL TRAINING CYCLE
-            </button>
-        </div>
-
-        <div id="training-terminal"
-            style="margin-top: 1.5rem; height: 300px; overflow-y: auto; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 8px; font-family: monospace; font-size: 0.85rem; border: 1px solid var(--accent-low);">
-            [READY] Centralized Research Environment Initialized.
-        </div>
+        <button id="btn-lifecycle" class="btn btn-primary" onclick="runLifecycle()"
+            style="padding: 1rem 2rem; font-size: 1.1rem;">
+            🚀 MULAI PELATIHAN TERPUSAT
+        </button>
     </div>
 
-    <div class="glass" style="padding: 1.5rem;">
-        <h2>Received Student Data</h2>
-        <div id="student-list" style="margin-top: 1.2rem; max-height: 400px; overflow-y: auto;">
-            <p style="color: var(--text-muted);">No data received yet.</p>
-        </div>
-        <hr style="margin: 1.5rem 0; border: none; border-top: 1px solid rgba(255,255,255,0.05);">
-        <h2>Biometric Health</h2>
-        <div style="margin-top: 1.2rem;">
-            <div class="metric-row">
-                <span>Model Version:</span>
-                <b id="metric-version">v0</b>
-            </div>
-            <div class="metric-row">
-                <span>Payload Transfer:</span>
-                <b id="metric-transfer">0 MB</b>
-            </div>
-            <div class="metric-row">
-                <span>EER (Equal Error Rate):</span>
-                <b id="metric-eer">--</b>
-            </div>
-        </div>
+    <div id="training-terminal"
+        style="height: 500px; overflow-y: auto; background: rgba(0,0,0,0.4); padding: 20px; border-radius: 12px; font-family: 'Fira Code', monospace; font-size: 0.9rem; border: 1px solid var(--accent-low); line-height: 1.6; color: #d1d5db;">
+        [READY] Centralized Research Environment Initialized.<br>
+        [INFO] Menunggu sinyal mulai untuk memproses data dari terminal...
     </div>
 </div>
 
@@ -130,23 +85,7 @@
             const terminal = document.getElementById('training-terminal');
             terminal.innerHTML = status.current_logs.join('<br>');
             terminal.scrollTop = terminal.scrollHeight;
-            document.getElementById('status-phase').innerText = status.is_busy ? "Running " + status.current_phase : "Standby";
-
-            // Update Metrics
-            document.getElementById('metric-version').innerText = `v${status.model_version}`;
-            document.getElementById('metric-transfer').innerText = `${status.metrics.payload_size_mb} MB`;
-            document.getElementById('model-acc').innerText = `${status.metrics.accuracy}%`;
-            document.getElementById('metric-biometric').innerText = `${status.metrics.tar}% / ${status.metrics.far}%`;
-            document.getElementById('metric-eer').innerText = `${status.metrics.eer}%`;
-            document.getElementById('cost-idr').innerText = `Rp ${status.metrics.cost_idr.toLocaleString()}`;
-
-            // Update Student List (Training Data)
-            const list = document.getElementById('student-list');
-            if (status.received_data.length > 0) {
-                list.innerHTML = status.received_data.map(s => `<div class="student-item">✅ ${s}</div>`).join('');
-            } else {
-                list.innerHTML = '<p style="color: var(--text-muted);">No data received yet.</p>';
-            }
+            document.getElementById('status-phase').innerText = "Status: " + (status.is_busy ? "Sedang Berjalan (" + status.current_phase + ")" : "Standby");
 
             // Persistence of polling if busy
             if (status.is_busy && !pollInterval) startPolling();

@@ -3,40 +3,38 @@ import json
 import torch
 import threading
 import collections
-import flwr as fl
 import requests
-from PIL import Image
-from facenet_pytorch import MTCNN
 import time
 import socket
 import io
 import base64
-import numpy as np
-import cv2
 import shutil
-
+import cv2
+import numpy as np
+import flwr as fl
+from PIL import Image
+from facenet_pytorch import MTCNN
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 
-from .utils.security import encryptor
-from .utils.classifier import identify_user_globally
-from .utils.mobilefacenet import MobileFaceNet, ArcMarginProduct
-from .db.db import SessionLocal
-from .db.models import UserLocal, EmbeddingLocal
-from .client import FaceRecognitionClient
+from app.utils.security import encryptor
+from app.utils.classifier import identify_user_globally
+from app.utils.mobilefacenet import MobileFaceNet, ArcMarginProduct
+from app.db.db import SessionLocal
+from app.db.models import UserLocal, EmbeddingLocal
+from app.client import FaceRecognitionClient
+from app.controllers.attendance_controller import AttendanceController
 
 def add_phase_log(msg):
     print(f"[LOG] {msg}")
 
 class FLClientManager:
-    def __init__(self):
-        self.data_path = os.getenv("DATA_PATH", "/app/data")
         self.raw_data_path = os.getenv("RAW_DATA_PATH", "/app/raw_data")
-        self.artifacts_path = os.getenv("ARTIFACTS_PATH", "/app/data/artifacts")
+        self.data_path = os.getenv("DATA_PATH", "/app/data")
         # Ensure directories exist
-        os.makedirs(self.artifacts_path, exist_ok=True)
-        os.makedirs(os.path.join(self.artifacts_path, "models"), exist_ok=True)
-        os.makedirs(os.path.join(self.artifacts_path, "processed"), exist_ok=True)
+        os.makedirs(self.data_path, exist_ok=True)
+        os.makedirs(os.path.join(self.data_path, "models"), exist_ok=True)
+        os.makedirs(os.path.join(self.data_path, "processed"), exist_ok=True)
 
         self.device = torch.device("cpu")
         self.backbone = MobileFaceNet().to(self.device)
@@ -44,8 +42,8 @@ class FLClientManager:
         self.detector = MTCNN(image_size=112, margin=20, keep_all=False, device=self.device, post_process=False)
         
         # PERSISTENCE: Determine dynamic head size
-        save_path = os.path.join(self.artifacts_path, "models", "backbone.pth")
-        head_path = os.path.join(self.artifacts_path, "models", "local_head.pth")
+        save_path = os.path.join(self.data_path, "models", "backbone.pth")
+        head_path = os.path.join(self.data_path, "models", "local_head.pth")
         
         self.num_classes = 1000 # Default fallback
         if os.path.exists(head_path):
@@ -65,12 +63,12 @@ class FLClientManager:
                 self.backbone.load_state_dict(torch.load(save_path, map_location=self.device))
                 
                 # Load Combined BN if exists (Universal Mode)
-                bn_combined_path = os.path.join(self.artifacts_path, "models", "global_bn_combined.pth")
+                bn_combined_path = os.path.join(self.data_path, "models", "global_bn_combined.pth")
                 if os.path.exists(bn_combined_path):
                     print("Loading Combined BN statistics...")
                     self.backbone.load_state_dict(torch.load(bn_combined_path, map_location=self.device), strict=False)
 
-                v_path = os.path.join(self.artifacts_path, "models", "model_version.txt")
+                v_path = os.path.join(self.data_path, "models", "model_version.txt")
                 if os.path.exists(v_path):
                     with open(v_path, "r") as f:
                         self.model_version = int(f.read().strip())
@@ -84,7 +82,7 @@ class FLClientManager:
         
         self.client = FaceRecognitionClient(
             self.backbone, self.head, 
-            artifacts_path=self.artifacts_path, 
+            data_path=self.data_path, 
             device=self.device
         )
         
@@ -99,10 +97,95 @@ class FLClientManager:
         
         self.prediction_buffer = collections.deque(maxlen=10)
         self.last_face_time = 0
+        
+        # Headless Camera Support
+        self.latest_frame = None
+        self.latest_result = {"matched": "Standby", "confidence": 0, "latency_ms": 0, "is_virtual": False}
+        self.is_camera_running = False
 
     def start_background_tasks(self):
         print(f"[STARTUP] Starting background tasks for client: {self.client_id}")
         threading.Thread(target=self.heartbeat_loop, daemon=True).start()
+        threading.Thread(target=self._camera_loop, daemon=True).start()
+
+    def _camera_loop(self):
+        # Loop kamera mandiri (Headless Mode)
+        print(f"[CAMERA] Menjalankan loop kamera otomatis (FL)...")
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            cap = cv2.VideoCapture(1)
+            
+        self.is_camera_running = True
+        virtual_mode = not cap.isOpened()
+        if virtual_mode:
+            print("[CAMERA] Tidak ada hardware terdeteksi. Menggunakan Mode Virtual (Foto).")
+            
+        virtual_images = []
+        virtual_idx = 0
+        
+        attendance_engine = AttendanceController(self)
+        
+        while self.is_camera_running:
+            ret, frame = False, None
+            if not virtual_mode:
+                ret, frame = cap.read()
+                if not ret:
+                    print("[CAMERA ERROR] Gagal akses hardware. Beralih ke VIRTUAL CAMERA mode.")
+                    virtual_mode = True
+                    # Scan for virtual images
+                    root_dir = os.path.join(self.raw_data_path, "students")
+                    if os.path.exists(root_dir):
+                        for root, dirs, files in os.walk(root_dir):
+                            for f in files:
+                                if f.lower().endswith(('.jpg', '.jpeg', '.png')):
+                                    virtual_images.append(os.path.join(root, f))
+                    if not virtual_images:
+                        print("[VIRTUAL ERROR] Tidak ada dataset lokal untuk simulasi.")
+            
+            if virtual_mode and virtual_images:
+                img_path = virtual_images[virtual_idx]
+                frame = cv2.imread(img_path)
+                if frame is not None:
+                    ret = True
+                    virtual_idx = (virtual_idx + 1) % len(virtual_images)
+                    # Beri penanda virtual di frame
+                    cv2.putText(frame, "VIRTUAL MODE (FL)", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+                time.sleep(1.0) # Lambatkan simulasi
+            
+            if not ret:
+                if not virtual_mode: print("[CAMERA ERROR] Gagal membaca frame dari kamera. Cek mapping device /dev/video0.")
+                time.sleep(5)
+                continue
+            
+            # Simpan frame terbaru untuk streaming MJPEG
+            self.latest_frame = frame.copy()
+            
+            # Lakukan pemrosesan jika model sudah siap (Inference)
+            # Pastikan registry sudah ada
+            reg_path = os.path.join(self.data_path, "models", "global_embedding_registry.pth")
+            if os.path.exists(reg_path):
+                start_time = time.time()
+                try:
+                    # Konversi ke PIL Image
+                    img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    img_pil = Image.fromarray(img_rgb)
+                    
+                    matched, confidence = attendance_engine.recognize_directly(img_pil)
+                    
+                    self.latest_result = {
+                        "matched": matched,
+                        "confidence": confidence,
+                        "latency_ms": int((time.time() - start_time) * 1000),
+                        "model_version": self.model_version,
+                        "is_virtual": virtual_mode
+                    }
+                except Exception as e:
+                    # print(f"[CAMERA ERROR] {e}") # Terlalu berisik untuk log loop
+                    pass
+            
+            if not virtual_mode: time.sleep(0.5)
+        
+        cap.release()
 
     def report_status(self, status=None):
         if status: self.fl_status = status
@@ -128,12 +211,17 @@ class FLClientManager:
             try:
                 self.report_status()
                 
-                # Get Phase from Server
+                # 2. Cek Versi Model
                 resp = requests.get(f"{self.server_api_url}/api/training/status", timeout=2)
                 if resp.status_code == 200:
                     data = resp.json()
                     phase = data.get("current_phase", "idle")
+                    server_version = data.get("model_version", 0)
                     
+                    # Update status ketersediaan update
+                    if server_version > self.model_version:
+                        self.fl_status = f"Update v{server_version} Tersedia"
+
                     if phase != self.last_phase:
                         self.handle_phase_transition(phase)
                         self.last_phase = phase
@@ -160,9 +248,23 @@ class FLClientManager:
             print("[CLIENT] Training finished. Downloading Final Registry assets...")
             def update_task():
                 if self.download_registry_assets():
+                    # Ambil versi terbaru dari server setelah download selesai
+                    try:
+                        resp = requests.get(f"{self.server_api_url}/api/status", timeout=2)
+                        if resp.status_code == 200:
+                            v = resp.json().get("model_version", self.model_version)
+                            self._save_version(v)
+                    except: pass
+                    
                     self.sync_label_map()
                     self.refresh_local_embeddings() 
             threading.Thread(target=update_task, daemon=True).start()
+
+    def _save_version(self, v):
+        self.model_version = v
+        v_path = os.path.join(self.data_path, "models", "model_version.txt")
+        with open(v_path, "w") as f:
+            f.write(str(v))
 
     def download_backbone(self):
         """Fetches the aggregated Backbone StateDict from server."""
@@ -171,7 +273,7 @@ class FLClientManager:
             print(f"[SYNC] Fetching global backbone from {url_bb}...")
             res_bb = requests.get(url_bb, timeout=30)
             if res_bb.status_code == 200:
-                save_path = os.path.join(self.artifacts_path, "models", "backbone.pth")
+                save_path = os.path.join(self.data_path, "models", "backbone.pth")
                 with open(save_path, "wb") as f:
                     f.write(res_bb.content)
                 
@@ -210,7 +312,7 @@ class FLClientManager:
 
     def download_bn(self, max_wait=60):
         """Fetches the aggregated BN stats (Running Mean/Var) for global consistency."""
-        path = os.path.join(self.artifacts_path, "models", "global_bn_combined.pth")
+        path = os.path.join(self.data_path, "models", "global_bn_combined.pth")
         url = f"{self.server_api_url}/api/model/bn"
         
         deadline = time.time() + max_wait
@@ -245,7 +347,7 @@ class FLClientManager:
             url_reg = f"{self.server_api_url}/api/model/registry"
             res_reg = requests.get(url_reg, timeout=20)
             if res_reg.status_code == 200:
-                reg_path = os.path.join(self.artifacts_path, "models", "global_embedding_registry.pth")
+                reg_path = os.path.join(self.data_path, "models", "global_embedding_registry.pth")
                 with open(reg_path, "wb") as f:
                     f.write(res_reg.content)
                 print("[RELOAD] Centroid Registry updated.")
@@ -284,7 +386,7 @@ class FLClientManager:
         db = SessionLocal()
         try:
             users = db.query(UserLocal).all()
-            processed_dir = os.path.join(self.artifacts_path, "processed")
+            processed_dir = os.path.join(self.data_path, "processed")
             
             for user in users:
                 user_folder = os.path.join(processed_dir, user.user_id)
@@ -381,7 +483,7 @@ class FLClientManager:
             res = requests.get(f"{self.server_api_url}/api/training/label_map", timeout=10)
             if res.status_code == 200:
                 self.client.label_map = res.json()
-                map_path = os.path.join(self.artifacts_path, "models", "label_map.json")
+                map_path = os.path.join(self.data_path, "models", "label_map.json")
                 with open(map_path, "w") as f:
                     json.dump(self.client.label_map, f)
                 return True
@@ -395,7 +497,7 @@ class FLClientManager:
             return
 
         students_dir = os.path.join(self.raw_data_path, "students")
-        processed_dir = os.path.join(self.artifacts_path, "processed")
+        processed_dir = os.path.join(self.data_path, "processed")
         os.makedirs(processed_dir, exist_ok=True)
         
         if not os.path.exists(students_dir):
@@ -463,7 +565,7 @@ class FLClientManager:
             centroids = self.client.trainer.calculate_centroids(label_map=self.client.label_map)
             
             # Save a local fallback immediately
-            local_registry_path = os.path.join(self.artifacts_path, "models", "global_embedding_registry.pth")
+            local_registry_path = os.path.join(self.data_path, "models", "global_embedding_registry.pth")
             torch.save(centroids, local_registry_path)
             
             # 3. SUBMIT TO SERVER
@@ -504,14 +606,13 @@ class FLClientManager:
             self.refresh_local_embeddings() # Final refresh with global BN
 
     def _download_global_registry(self, max_wait=60):
-        import time
         registry_url = f"{self.server_api_url}/api/model/registry"
         deadline = time.time() + max_wait
         while time.time() < deadline:
             try:
                 res = requests.get(registry_url, timeout=15)
                 if res.status_code == 200:
-                    save_path = os.path.join(self.artifacts_path, "models", "global_embedding_registry.pth")
+                    save_path = os.path.join(self.data_path, "models", "global_embedding_registry.pth")
                     with open(save_path, "wb") as f:
                         f.write(res.content)
                     if hasattr(self, 'cached_refs'):

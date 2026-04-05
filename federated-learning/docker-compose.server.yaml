@@ -1,0 +1,30 @@
+services:
+  server-fl:
+    build: ./server
+    container_name: federated_server
+    ports:
+      - "8081:8080"
+      - "8085:8085"
+    environment:
+      DATABASE_URL: postgresql://admin:admin123@server-fl-db:5432/fl_server
+      PYTHONUNBUFFERED: 1
+    depends_on:
+      server-fl-db:
+        condition: service_healthy
+
+  server-fl-db:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=admin123
+      - POSTGRES_DB=fl_server
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U admin -d fl_server" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - server_fl_data:/var/lib/postgresql/data
+
+volumes:
+  server_fl_data:

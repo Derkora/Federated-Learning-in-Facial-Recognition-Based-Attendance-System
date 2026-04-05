@@ -1,0 +1,33 @@
+services:
+  client2-cl:
+    build: ./client
+    container_name: centralized_client2
+    ports:
+      - "8083:8080"
+    environment:
+      DATABASE_URL: postgresql://client:client123@client2-cl-db:5432/cl_client
+      CL_SERVER_ADDRESS: http://${SERVER_IP}:8081
+      PYTHONUNBUFFERED: 1
+      HOSTNAME: terminal-2
+    depends_on:
+      client2-cl-db:
+        condition: service_healthy
+    volumes:
+      - ./${RAW_DATA_PATH_CLIENT2}:/app/raw_data
+
+  client2-cl-db:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=client
+      - POSTGRES_PASSWORD=client123
+      - POSTGRES_DB=cl_client
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U client -d cl_client" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - client2_cl_data:/var/lib/postgresql/data
+
+volumes:
+  client2_cl_data:

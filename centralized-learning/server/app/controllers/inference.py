@@ -3,11 +3,8 @@ from fastapi import HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from datetime import datetime
-from ..db import models, schemas
-
-MODEL_DIR = "app/model"
-MODEL_PATH = f"{MODEL_DIR}/global_model.pth"
-REF_PATH = f"{MODEL_DIR}/reference_embeddings.pth"
+from app.db import models, schemas
+from app.config import MODEL_PATH, REF_PATH
 
 class InferenceController:
     # Kontroler untuk distribusi aset model dan manajemen laporan presensi.

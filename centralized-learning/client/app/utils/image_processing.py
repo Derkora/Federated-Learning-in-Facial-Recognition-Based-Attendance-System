@@ -2,7 +2,7 @@ import torch
 import torchvision.transforms as T
 from PIL import Image
 from facenet_pytorch import MTCNN
-from .mobilefacenet import MobileFaceNet
+from app.utils.mobilefacenet import MobileFaceNet
 
 # Konfigurasi Perangkat (CPU dipaksakan untuk terminal)
 DEVICE = torch.device('cpu')

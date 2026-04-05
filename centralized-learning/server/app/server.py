@@ -2,6 +2,7 @@ import os
 import time
 from .db.db import SessionLocal
 from .db import models
+from .config import ECONOMICS
 
 class CentralizedServerManager:
     # Manajer Utama Dashboard Server Terpusat
@@ -17,14 +18,14 @@ class CentralizedServerManager:
         self.model_version = 0
         
         self.metrics = {
-            "accuracy": 0,
-            "tar": 0,
-            "far": 0,
-            "eer": 0,
-            "payload_size_mb": 0,
+            "upload_volume_mb": 0,
+            "download_volume_mb": 0,
+            "transmission_cost_idr": 0,
             "training_duration_s": 0,
             "total_round_time_s": 0,
-            "cost_idr": 0
+            "compute_energy_kwh": 0,
+            "compute_cost_idr": 0,
+            "epoch_history": [] # Riwayat {"epoch": i, "loss": l, "accuracy": a}
         }
 
     def start_phase(self, phase_name):
@@ -57,12 +58,27 @@ class CentralizedServerManager:
         self.update_logs(f"Versi Model Global naik ke v{self.model_version}")
 
     def update_metrics(self, new_data):
-        # Memperbarui metrik performa dan estimasi biaya komputasi
+        # Memperbarui metrik performa dan estimasi biaya
         self.metrics.update(new_data)
-        payload = self.metrics.get("payload_size_mb", 0)
-        duration = self.metrics.get("total_round_time_s", 0)
-        # Estimasi biaya sederhana (contoh alokasi resource cloud)
-        self.metrics["cost_idr"] = int((payload / 1024 * 5000) + (duration * 10))
+        
+        # 1. Transmisi: Upload + Download
+        upload_mb = self.metrics.get("upload_volume_mb", 0)
+        download_mb = self.metrics.get("download_volume_mb", 0)
+        cost_per_mb = ECONOMICS["transmission_cost_per_mb"]
+        self.metrics["transmission_cost_idr"] = round((upload_mb + download_mb) * cost_per_mb, 2)
+        
+        # 2. Komputasi: kWh -> IDR
+        # Jika CodeCarbon tidak tersedia, gunakan estimasi dari durasi
+        energy_kwh = self.metrics.get("compute_energy_kwh", 0)
+        if energy_kwh == 0:
+            duration_h = self.metrics.get("total_round_time_s", 0) / 3600
+            # Estimasi daya dari konfigurasi jika CodeCarbon tidak tersedia
+            power_kw = ECONOMICS["estimated_server_power_kw"]
+            energy_kwh = duration_h * power_kw
+            self.metrics["compute_energy_kwh"] = round(energy_kwh, 6)
+            
+        cost_per_kwh = ECONOMICS["compute_cost_per_kwh"]
+        self.metrics["compute_cost_idr"] = round(energy_kwh * cost_per_kwh, 2)
 
     def get_status(self):
         # Mengembalikan status lengkap server untuk dashboard UI

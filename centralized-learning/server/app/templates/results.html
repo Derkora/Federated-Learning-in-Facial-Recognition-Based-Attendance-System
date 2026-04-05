@@ -1,0 +1,132 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
+    <h1 style="color: var(--accent);">Hasil Evaluasi (Centralized Learning)</h1>
+    <p style="color: var(--text-muted);">Halaman ini berisi tabel hasil evaluasi yang dapat disalin untuk kebutuhan
+        paper atau skripsi Anda.</p>
+</div>
+
+<!-- Table 1: Training Metrics -->
+<div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2>1. Kontribusi Performa Pelatihan (Per Epoch)</h2>
+        <button class="btn btn-primary" onclick="copyTable('training-table')">Salin Tabel</button>
+    </div>
+    <div style="overflow-x: auto;">
+        <table id="training-table" class="result-table">
+            <thead>
+                <tr>
+                    <th>Epoch</th>
+                    <th>Loss</th>
+                    <th>Accuracy (%)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if status.metrics.epoch_history %}
+                {% for h in status.metrics.epoch_history %}
+                <tr>
+                    <td>{{ h.epoch }}</td>
+                    <td>{{ h.loss }}</td>
+                    <td>{{ h.accuracy }}%</td>
+                </tr>
+                {% endfor %}
+                {% else %}
+                <tr>
+                    <td colspan="3" style="text-align: center;">Data pelatihan tidak tersedia.</td>
+                </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Table 2: Economic & Operational Metrics -->
+<div class="glass" style="padding: 2rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2>2. Nilai Ekonomi & Operasional</h2>
+        <button class="btn btn-primary" onclick="copyTable('economic-table')">Salin Tabel</button>
+    </div>
+    <div style="overflow-x: auto;">
+        <table id="economic-table" class="result-table">
+            <thead>
+                <tr>
+                    <th>Tipe Metrik</th>
+                    <th>Sub-Metrik</th>
+                    <th>Nilai</th>
+                    <th>Biaya (IDR)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td rowspan="2"><b>Transmisi</b></td>
+                    <td>Unggahan (Gambar)</td>
+                    <td>{{ status.metrics.upload_volume_mb }} MB</td>
+                    <td rowspan="2">Rp {{ status.metrics.transmission_cost_idr }}</td>
+                </tr>
+                <tr>
+                    <td>Unduhan (Model + Ref)</td>
+                    <td>{{ status.metrics.download_volume_mb }} MB</td>
+                </tr>
+                <tr>
+                    <td rowspan="2"><b>Komputasi</b></td>
+                    <td>Konsumsi Energi</td>
+                    <td>{{ status.metrics.compute_energy_kwh }} kWh</td>
+                    <td rowspan="2">Rp {{ status.metrics.compute_cost_idr }}</td>
+                </tr>
+                <tr>
+                    <td>Durasi Pelatihan</td>
+                    <td>{{ (status.metrics.training_duration_s * 1000)|round(0) }} ms</td>
+                </tr>
+                <tr>
+                    <td colspan="2"><b>Status (Confidence)</b></td>
+                    <td colspan="2" style="color: #00ff00;">Berhasil (Selesai)</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<style>
+    .result-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 1rem;
+        background: rgba(0, 0, 0, 0.2);
+        color: #fff;
+    }
+
+    .result-table th,
+    .result-table td {
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        padding: 12px 15px;
+        text-align: left;
+    }
+
+    .result-table th {
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--accent);
+    }
+
+    .result-table tr:hover {
+        background: rgba(255, 255, 255, 0.02);
+    }
+</style>
+
+<script>
+    function copyTable(tableId) {
+        const table = document.getElementById(tableId);
+        const range = document.createRange();
+        range.selectNode(table);
+        window.getSelection().removeAllRanges();
+        window.getSelection().addRange(range);
+        try {
+            document.execCommand('copy');
+            alert('Tabel berhasil disalin ke clipboard!');
+        } catch (err) {
+            alert('Gagal menyalin tabel.');
+        }
+        window.getSelection().removeAllRanges();
+    }
+</script>
+{% endblock %}

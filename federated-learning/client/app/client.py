@@ -1,36 +1,36 @@
 import flwr as fl
 import torch
 import numpy as np
-from .utils.trainer import LocalTrainer, TrainingNaNError
-from .utils.mobilefacenet import MobileFaceNet, ArcMarginProduct
+from app.utils.trainer import LocalTrainer, TrainingNaNError
+from app.utils.mobilefacenet import MobileFaceNet, ArcMarginProduct
 import os
 import requests
 import base64
 import io
 
-from .db.db import SessionLocal
-from .db.models import EmbeddingLocal, UserLocal
+from app.db.db import SessionLocal
+from app.db.models import EmbeddingLocal, UserLocal
 
 class FaceRecognitionClient(fl.client.NumPyClient):
-    def __init__(self, model, head, artifacts_path="/app/artifacts", device="cpu"):
+    def __init__(self, model, head, data_path="/app/data", device="cpu"):
         self.model = model
         self.head = head
-        self.artifacts_path = artifacts_path
+        self.data_path = data_path
         self.device = device if isinstance(device, torch.device) else torch.device(device)
         self.label_map = None
         
         # Priority: Load from local archive (Permanent Label Mastery)
-        map_path = os.path.join(self.artifacts_path, "models", "label_map.json")
+        map_path = os.path.join(self.data_path, "models", "label_map.json")
         if os.path.exists(map_path):
             import json
             with open(map_path, "r") as f:
                 self.label_map = json.load(f)
                 print(f"[CLIENT] Initialized with archived Global Label Map: {len(self.label_map)} identities.")
         
-        processed_path = os.path.join(self.artifacts_path, "processed")
+        processed_path = os.path.join(self.data_path, "processed")
         self.trainer = LocalTrainer(self.model, self.head, device=self.device, data_path=processed_path)
         
-        head_path = os.path.join(self.artifacts_path, "models", "local_head.pth")
+        head_path = os.path.join(self.data_path, "models", "local_head.pth")
         if os.path.exists(head_path):
             print(f"Loading local classifier head from {head_path}...")
             self.head.load_state_dict(torch.load(head_path, map_location=self.device))
@@ -93,7 +93,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
             loss, accuracy, num_samples = 0.0, 0.0, 0
             status = "Training Error"
         
-        model_dir = os.path.join(self.artifacts_path, "models")
+        model_dir = os.path.join(self.data_path, "models")
         os.makedirs(model_dir, exist_ok=True)
         torch.save(self.model.state_dict(), os.path.join(model_dir, "backbone.pth"))
         torch.save(self.trainer.head.state_dict(), os.path.join(model_dir, "local_head.pth"))
@@ -130,6 +130,6 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         loss, accuracy, num_samples = self.trainer.evaluate(global_embeddings=global_embs, label_map=self.label_map)
         return float(loss), num_samples, {"accuracy": float(accuracy)}
 
-def start_fl_client(server_address, model, head, artifacts_path="/app/artifacts", device="cpu"):
-    client = FaceRecognitionClient(model, head, artifacts_path, device)
+def start_fl_client(server_address, model, head, data_path="/app/data", device="cpu"):
+    client = FaceRecognitionClient(model, head, data_path, device)
     fl.client.start_numpy_client(server_address=server_address, client=client)

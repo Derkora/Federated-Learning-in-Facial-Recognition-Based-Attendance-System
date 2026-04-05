@@ -1,0 +1,153 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
+    <h1 style="color: var(--accent);">Hasil Evaluasi (Federated Learning)</h1>
+    <p style="color: var(--text-muted);">Halaman ini berisi tabel hasil evaluasi dengan rincian per-client dan server
+        yang dapat disalin untuk kebutuhan paper atau skripsi Anda.</p>
+</div>
+
+<!-- Table 1: Training Metrics -->
+<div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2>1. Kontribusi Performa Pelatihan (Global vs Client Breakdown)</h2>
+        <button class="btn btn-primary" onclick="copyTable('training-table')">Salin Tabel</button>
+    </div>
+    <div style="overflow-x: auto;">
+        <table id="training-table" class="result-table">
+            <thead>
+                <tr>
+                    <th rowspan="2">Ronde</th>
+                    <th colspan="2">Server (Agregasi)</th>
+                    <th rowspan="2">Weight Div.</th>
+                    <th colspan="2">Client 1</th>
+                    <th colspan="2">Client 2</th>
+                </tr>
+                <tr>
+                    <th>Loss</th>
+                    <th>Acc (%)</th>
+                    <th>Loss</th>
+                    <th>Acc (%)</th>
+                    <th>Loss</th>
+                    <th>Acc (%)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if status.metrics.round_history %}
+                {% for h in status.metrics.round_history %}
+                <tr>
+                    <td>{{ h.round }}</td>
+                    <td>{{ h.server.loss|round(4) }}</td>
+                    <td>{{ (h.server.accuracy * 100)|round(2) }}%</td>
+                    <td>{{ h.server.weight_divergence|round(6) }}</td>
+
+                    <!-- Client 1 -->
+                    {% set c1 = h.clients.get('terminal-1') or h.clients.get('client-0') %}
+                    <td>{{ c1.loss|round(4) if c1 else '--' }}</td>
+                    <td>{{ (c1.accuracy * 100)|round(2) if c1 else '--' }}%</td>
+
+                    <!-- Client 2 -->
+                    {% set c2 = h.clients.get('terminal-2') or h.clients.get('client-1') %}
+                    <td>{{ c2.loss|round(4) if c2 else '--' }}</td>
+                    <td>{{ (c2.accuracy * 100)|round(2) if c2 else '--' }}%</td>
+                </tr>
+                {% endfor %}
+                {% else %}
+                <tr>
+                    <td colspan="8" style="text-align: center;">Data pelatihan tidak tersedia.</td>
+                </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="glass" style="padding: 2rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2>2. Nilai Ekonomi & Operasional</h2>
+        <button class="btn btn-primary" onclick="copyTable('economic-table')">Salin Tabel</button>
+    </div>
+    <div style="overflow-x: auto;">
+        <table id="economic-table" class="result-table">
+            <thead>
+                <tr>
+                    <th>Tipe Metrik</th>
+                    <th>Sub-Metrik</th>
+                    <th>Nilai</th>
+                    <th>Biaya (IDR)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td rowspan="2"><b>Transmisi</b></td>
+                    <td>Sinkronisasi Backbone (Unggah/Unduh)</td>
+                    <td>{{ status.metrics.backbone_sync_mb }} MB</td>
+                    <td rowspan="2">Rp {{ status.metrics.transmission_cost_idr }}</td>
+                </tr>
+                <tr>
+                    <td>Sinkronisasi Registri & BN</td>
+                    <td>{{ status.metrics.registry_sync_mb }} MB</td>
+                </tr>
+                <tr>
+                    <td rowspan="2"><b>Komputasi</b></td>
+                    <td>Konsumsi Energi (Total)</td>
+                    <td>{{ status.metrics.compute_energy_kwh }} kWh</td>
+                    <td rowspan="2">Rp {{ status.metrics.compute_cost_idr }}</td>
+                </tr>
+                <tr>
+                    <td>Total Durasi Siklus</td>
+                    <td>{{ (status.metrics.total_round_time_s * 1000)|round(0) }} ms</td>
+                </tr>
+                <tr>
+                    <td colspan="2"><b>Status (Confidence)</b></td>
+                    <td colspan="2" style="color: #00ff00;">Berhasil (Selesai)</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<style>
+    .result-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 1rem;
+        background: rgba(0, 0, 0, 0.2);
+        color: #fff;
+        font-size: 0.85rem;
+    }
+
+    .result-table th,
+    .result-table td {
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        padding: 10px;
+        text-align: center;
+    }
+
+    .result-table th {
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--accent);
+    }
+
+    .result-table tr:hover {
+        background: rgba(255, 255, 255, 0.02);
+    }
+</style>
+
+<script>
+    function copyTable(tableId) {
+        const table = document.getElementById(tableId);
+        const range = document.createRange();
+        range.selectNode(table);
+        window.getSelection().removeAllRanges();
+        window.getSelection().addRange(range);
+        try {
+            document.execCommand('copy');
+            alert('Tabel berhasil disalin ke clipboard!');
+        } catch (err) {
+            alert('Gagal menyalin tabel.');
+        }
+        window.getSelection().removeAllRanges();
+    }
+</script>
+{% endblock %}

@@ -8,11 +8,11 @@ import traceback
 from PIL import Image
 from sqlalchemy.orm import Session
 
-from ..db.models import UserLocal, EmbeddingLocal, AttendanceLocal
-from ..utils.preprocessing import image_processor
-from ..utils.classifier import identify_user_globally
-from ..utils.security import encryptor
-from ..utils.sync_utils import sync_record_to_server
+from app.db.models import UserLocal, EmbeddingLocal, AttendanceLocal
+from app.utils.preprocessing import image_processor
+from app.utils.classifier import identify_user_globally
+from app.utils.security import encryptor
+from app.utils.sync_utils import sync_record_to_server
 
 class AttendanceController:
     # Logika Utama Pengenalan Wajah dan Absensi
@@ -93,8 +93,20 @@ class AttendanceController:
             "is_confirmed": user_id != "Unknown",
             "confidence": float(confidence), 
             "box": box.tolist() if box is not None else None,
-            "latency_ms": latency
+            "latency_ms": latency,
+            "model_version": self.fl_manager.model_version
         }
+
+    def recognize_directly(self, img_pil):
+        # Memproses pengenalan secara langsung tanpa melalui API/DB
+        try:
+            matched, confidence, _ = identify_user_globally(
+                img_pil, self.fl_manager.backbone, self.fl_manager.detector, 
+                self.fl_manager.data_path, self.fl_manager.device
+            )
+            return matched, float(confidence)
+        except:
+            return "Unknown", 0.0
 
     def process_registration(self, user_id: str, name: str, image_b64: str, db: Session):
         # Registrasi Mahasiswa Baru
@@ -148,7 +160,7 @@ class AttendanceController:
             local_refs = {}
             
             # Prioritas 1: Menggunakan Global Registry hasil Federated Learning
-            registry_path = os.path.join(self.fl_manager.artifacts_path, "models", "global_embedding_registry.pth")
+            registry_path = os.path.join(self.fl_manager.data_path, "models", "global_embedding_registry.pth")
             if os.path.exists(registry_path):
                 try:
                     registry = torch.load(registry_path, map_location="cpu")

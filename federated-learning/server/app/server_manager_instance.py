@@ -5,9 +5,10 @@ import torch
 import json
 from collections import OrderedDict
 from datetime import datetime
-from .db.db import SessionLocal
-from .db.models import FLRound, GlobalModel
-from .utils.mobilefacenet import MobileFaceNet
+from app.db.db import SessionLocal
+from app.db.models import FLRound, GlobalModel, UserGlobal, AttendanceRecap
+from app.utils.mobilefacenet import MobileFaceNet
+from app.config import ECONOMICS, TRAINING_PARAMS, FALLBACK_MODEL_PATH
 
 # Fungsi rata-rata tertimbang untuk metrik
 def weighted_average(metrics: list) -> dict:
@@ -97,8 +98,32 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                 print(f"[ERROR] Gagal memproses parameter agregasi: {e}")
                 
         if aggregated_metrics:
+            # Hitung Weight Divergence (Avg L2 Distance)
+            weight_div = 0.0
+            if results and aggregated_parameters:
+                try:
+                    target_params = fl.common.parameters_to_ndarrays(aggregated_parameters)
+                    total_dist = 0
+                    for _, fit_res in results:
+                        client_params = fl.common.parameters_to_ndarrays(fit_res.parameters)
+                        dist = 0
+                        for cp, tp in zip(client_params, target_params):
+                            dist += np.linalg.norm(cp - tp)
+                        total_dist += dist / len(client_params)
+                    weight_div = round(total_dist / len(results), 6)
+                except: pass
+            
+            aggregated_metrics["weight_divergence"] = weight_div
+            
+            # Record per-client breakdown
+            client_data = {}
+            for i, (client_proxy, fit_res) in enumerate(results):
+                cid = getattr(client_proxy, "cid", f"client-{i}")
+                client_data[cid] = fit_res.metrics
+            
+            self.manager.record_round_data(server_round, aggregated_metrics, client_data)
             self.manager.update_metrics(aggregated_metrics)
-            self.manager.update_logs(f"Ronde {server_round} selesai. Akurasi: {aggregated_metrics.get('accuracy', 0):.4f}")
+            self.manager.update_logs(f"Ronde {server_round} selesai. Acc: {aggregated_metrics.get('accuracy', 0):.4f} | Div: {weight_div}")
 
         return aggregated_parameters, aggregated_metrics
 
@@ -114,7 +139,7 @@ class FLServerManager:
         self.start_time = 0
         self.current_logs = []
         self.model_version = 0
-        self.default_rounds = 5
+        self.default_rounds = 15
         self.default_epochs = 3
         self.default_min_clients = 2
         self.default_lr = 1e-4
@@ -123,13 +148,21 @@ class FLServerManager:
         self.registered_clients = {}
         self.registry_submissions = {}
         self.ready_clients = set() 
+
+    def increment_version(self):
+        self.model_version += 1
+        self.update_logs(f"Versi Model Global naik ke v{self.model_version}")
         self.discovery_clients = set() 
         self.received_data = [] 
         
         self.metrics = {
-            "accuracy": 0, "loss": 0, "payload_size_mb": 0,
+            "accuracy": 0, "loss": 0, 
+            "backbone_sync_mb": 0, "registry_sync_mb": 0,
+            "transmission_cost_idr": 0,
             "training_duration_s": 0, "total_round_time_s": 0,
-            "cost_idr": 0, "tar": 0.0, "far": 0.0, "eer": 0.0
+            "compute_energy_kwh": 0, "compute_cost_idr": 0,
+            "round_history": [], # Riwayat data ronde dengan breakdown client
+            "convergence_round": None
         }
 
     def start_phase(self, phase_name):
@@ -151,13 +184,53 @@ class FLServerManager:
 
     def update_metrics(self, new_data):
         self.metrics.update(new_data)
-        duration = self.metrics.get("total_round_time_s", 0)
-        self.metrics["cost_idr"] = int(duration * 1500)
+        
+        # 1. Transmisi
+        bb_mb = self.metrics.get("backbone_sync_mb", 0)
+        reg_mb = self.metrics.get("registry_sync_mb", 0)
+        cost_per_mb = ECONOMICS["transmission_cost_per_mb"]
+        self.metrics["transmission_cost_idr"] = round((bb_mb + reg_mb) * cost_per_mb, 2)
+        
+        # 2. Komputasi (Server + Aggregate Clients)
+        energy_kwh = self.metrics.get("compute_energy_kwh", 0)
+        if energy_kwh == 0:
+            # Estimasi daya dari config
+            duration_h = self.metrics.get("total_round_time_s", 0) / 3600
+            server_p = ECONOMICS["estimated_server_power_kw"]
+            client_p = ECONOMICS["estimated_client_power_kw"]
+            
+            # Asumsi 2 client aktif untuk estimasi daya total sistem
+            energy_kwh = duration_h * (server_p + 2 * client_p)
+            self.metrics["compute_energy_kwh"] = round(energy_kwh, 6)
+            
+        cost_per_kwh = ECONOMICS["compute_cost_per_kwh"]
+        self.metrics["compute_cost_idr"] = round(energy_kwh * cost_per_kwh, 2)
+
+    def record_round_data(self, round_num, server_metrics, client_metrics):
+        entry = {
+            "round": round_num,
+            "server": server_metrics,
+            "clients": client_metrics
+        }
+        self.metrics["round_history"].append(entry)
+        
+        # Cek Konvergensi
+        if self.metrics["convergence_round"] is None and server_metrics.get("accuracy", 0) > 0.90:
+            # Ambang batas sederhana untuk konvergensi
+            self.metrics["convergence_round"] = round_num
+
+    def _get_lr_for_round(self, server_round):
+        # Penyelarasan LR Schedule dari konfigurasi terpusat
+        schedule = TRAINING_PARAMS["lr_schedule"]
+        lr = 1e-4 # Default
+        for threshold in sorted(schedule.keys()):
+            if server_round >= threshold:
+                lr = schedule[threshold]
+        return lr
 
     def get_status(self, db=None):
         attendance_count = 0
         if db:
-            from .db.models import AttendanceRecap
             attendance_count = db.query(AttendanceRecap).count()
             
         return {
@@ -181,7 +254,7 @@ class FLServerManager:
         latest_model = db.query(GlobalModel).order_by(GlobalModel.last_updated.desc()).first()
         if latest_model and latest_model.weights: return
             
-        fallback_path = os.path.join("app", "model", "global_model_v0.pth")
+        fallback_path = FALLBACK_MODEL_PATH
         if os.path.exists(fallback_path):
             print(f"Memulai seeding GlobalModel dari {fallback_path}...")
             try:
@@ -209,7 +282,6 @@ class FLServerManager:
         # Mengambil daftar ID mahasiswa global sebagai acuan index untuk pelatihan
         db = SessionLocal()
         try:
-            from .db.models import UserGlobal
             users = db.query(UserGlobal).order_by(UserGlobal.nrp).all()
             return [u.nrp for u in users]
         finally:
@@ -247,7 +319,7 @@ class FLServerManager:
                 "round": server_round,
                 "total_rounds": rounds,
                 "local_epochs": self.default_epochs,
-                "lr": self.default_lr if server_round <= 5 else (self.default_lr/10),
+                "lr": self._get_lr_for_round(server_round),
                 "mu": 0.05, 
                 "lambda": self.default_lambda,
                 "label_map": json.dumps(self.get_label_map_from_db())

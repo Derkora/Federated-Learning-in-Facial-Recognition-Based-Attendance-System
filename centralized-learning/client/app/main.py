@@ -1,13 +1,15 @@
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 import os
-import uvicorn
 import base64
 import io
 import time
+import uvicorn
+import cv2
+import numpy as np
 from PIL import Image
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
 from app.client_manager_instance import cl_client
 
@@ -37,16 +39,46 @@ async def api_inference(data: dict):
         img_data = base64.b64decode(data['image'])
         img_pil = Image.open(io.BytesIO(img_data)).convert('RGB')
         
+        # Set as latest frame for MJPEG monitoring
+        cl_client.latest_frame = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+        
         # Proses pengenalan wajah melalui controller attendance
         matched, confidence = cl_client.attendance.recognize_and_submit(
             img_pil, cl_client.model, cl_client.reference_embeddings
         )
         
         latency = int((time.time() - start) * 1000)
-        return {"matched": matched, "confidence": confidence, "latency_ms": latency}
+        res = {
+            "matched": matched, 
+            "confidence": confidence, 
+            "latency_ms": latency,
+            "model_version": cl_client.current_model_version,
+            "is_virtual": False # Remote frame is considered "Real" in UI
+        }
+        cl_client.latest_result = res
+        return res
     except Exception as e:
         print(f"[ERROR] Gagal memproses inference: {e}")
         return JSONResponse({"matched": "Error", "error": str(e)}, status_code=400)
+# Endpoint Monitoring Video (MJPEG Stream)
+@app.get("/video_feed")
+async def video_feed():
+    def gen_frames():
+        while True:
+            if cl_client.latest_frame is not None:
+                # Kompres ke JPEG untuk efisiensi bandwidth
+                ret, buffer = cv2.imencode('.jpg', cl_client.latest_frame)
+                frame_bytes = buffer.tobytes()
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            time.sleep(0.2)
+
+    return StreamingResponse(gen_frames(), media_type='multipart/x-mixed-replace; boundary=frame')
+
+# API Hasil Terakhir (untuk Polling UI Remote)
+@app.get("/api/results/latest")
+async def get_latest_result():
+    return cl_client.latest_result
 
 # API Permintaan Data dari Server
 @app.post("/api/request-data")

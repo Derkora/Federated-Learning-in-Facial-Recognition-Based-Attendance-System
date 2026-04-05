@@ -5,12 +5,22 @@
     <h2 style="margin: 0;">Edge Terminal: {{ client_id }}</h2>
     <span class="badge" id="model-badge">Model v{{ model_version }}</span>
 </div>
-<video id="webcam" autoplay muted playsinline></video>
-<canvas id="canvas" style="display:none;"></canvas>
+<div style="position: relative; overflow: hidden; border-radius: 12px; background: #000;">
+    <img id="video-stream" src="/video_feed" style="width: 100%; height: auto; display: block;">
+    <div
+        style="position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 4px; font-size: 0.7rem;">
+        🔴 LIVE STREAMING (REMOTE) <span id="virtual-indicator" style="display:none; color:#f87171; margin-left:5px;">|
+            VIRTUAL CAMERA</span>
+    </div>
+</div>
 
 <div class="result-card" id="status-card">
     Scanning faces...
 </div>
+<button id="btn-browser-cam" class="btn"
+    style="width: 100%; margin-top: 1rem; background: rgba(255,255,255,0.05); color: var(--text-muted); border: 1px solid rgba(255,255,255,0.1); padding: 0.8rem;">
+    📷 Aktifkan Kamera Laptop
+</button>
 </div>
 
 <style>
@@ -25,51 +35,76 @@
 </style>
 
 <script>
-    const video = document.getElementById('webcam');
-    const canvas = document.getElementById('canvas');
     const statusCard = document.getElementById('status-card');
+    const bVideo = document.createElement('video');
+    const bCanvas = document.createElement('canvas');
+    let bStream = null;
+    let bBusy = false;
 
-    async function setupCamera() {
+    document.getElementById('btn-browser-cam').onclick = () => {
+        if (!bStream) startBrowserCam();
+        else alert("Kamera browser sudah aktif.");
+    };
+
+    async function pollResults() {
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-            video.srcObject = stream;
-        } catch (err) {
-            console.error("Gagal nyalakan kamera: ", err);
-            statusCard.innerText = "Error: Kamera tidak terdeteksi!";
-            statusCard.style.color = "#ef4444";
-        }
-    }
+            const res = await fetch('/api/results/latest');
+            const data = await res.json();
 
-    async function sendFrame() {
-        if (!video.videoWidth) return;
+            if (data.model_version !== undefined) {
+                document.getElementById('model-badge').innerText = `Model v${data.model_version}`;
+            }
 
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        canvas.getContext('2d').drawImage(video, 0, 0);
-
-        const dataUrl = canvas.toDataURL('image/jpeg');
-        const base64Data = dataUrl.split(',')[1];
-
-        try {
-            const response = await fetch('/api/inference', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ image: base64Data })
-            });
-            const result = await response.json();
-
-            if (result.matched !== "Unknown") {
-                statusCard.innerHTML = `<span style="color: #10b981;">Accepted: ${result.matched}</span> <br><small>${(result.confidence * 100).toFixed(1)}% | ${result.latency_ms}ms</small>`;
+            if (data.is_virtual) {
+                document.getElementById('virtual-indicator').style.display = 'inline';
+                if (!bStream && !bBusy) startBrowserCam();
             } else {
-                statusCard.innerText = "Scanning faces...";
-                statusCard.style.color = "#f8fafc";
+                document.getElementById('virtual-indicator').style.display = 'none';
+            }
+
+            if (data.matched && data.matched !== "Standby") {
+                if (data.matched !== "Unknown") {
+                    statusCard.innerHTML = `<span style="color: #10b981;">Accepted: ${data.matched}</span> <br><small>${(data.confidence * 100).toFixed(1)}% | ${data.latency_ms}ms</small>`;
+                } else {
+                    statusCard.innerText = "Scanning faces...";
+                    statusCard.style.color = "#f8fafc";
+                }
+            } else {
+                statusCard.innerText = "Kamera: Menunggu Model...";
             }
         } catch (e) {
-            console.error("Inference Error:", e);
+            console.error("Poll Error:", e);
         }
     }
 
-    setupCamera();
-    setInterval(sendFrame, 1500); // Send frame every 1.5 seconds
+    async function startBrowserCam() {
+        try {
+            bBusy = true;
+            bStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+            bVideo.srcObject = bStream;
+            bVideo.play();
+            console.log("[BROWSER CAM] Started.");
+
+            setInterval(async () => {
+                if (bStream) {
+                    bCanvas.width = 640; bCanvas.height = 480;
+                    bCanvas.getContext('2d').drawImage(bVideo, 0, 0, 640, 480);
+                    const b64 = bCanvas.toDataURL('image/jpeg', 0.6).split(',')[1];
+                    try {
+                        await fetch('/api/inference', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ image: b64 })
+                        });
+                    } catch (e) { }
+                }
+            }, 1000);
+        } catch (e) {
+            console.warn("[BROWSER CAM] Failed:", e);
+            bBusy = false;
+        }
+    }
+
+    setInterval(pollResults, 1000);
 </script>
 {% endblock %}

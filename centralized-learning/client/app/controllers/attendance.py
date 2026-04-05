@@ -1,7 +1,7 @@
 import requests
 import torch
 import torch.nn.functional as F
-from ..utils.image_processing import image_processor, DEVICE
+from app.utils.image_processing import image_processor, DEVICE
 
 class AttendanceController:
     # Kontroler untuk proses Pengenalan Wajah dan Pelaporan Presensi.

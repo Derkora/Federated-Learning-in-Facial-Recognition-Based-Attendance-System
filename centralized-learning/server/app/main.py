@@ -1,31 +1,29 @@
+import os
+import shutil
+import time
+import torch
+from datetime import datetime, time as dt_time
 from fastapi import FastAPI, Depends, Request, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
-from datetime import datetime
-import os
 import uvicorn
-import shutil
-import torch
+import zipfile
 
-from .db import models, db, schemas, crud
-from .controllers.student import student_controller
-from .controllers.training import training_controller
-from .controllers.inference import inference_controller
-from .server_manager_instance import cl_manager
-from ..utils.mobilefacenet import MobileFaceNet
-
-# Inisialisasi Database Server
+from app.db import models, db, schemas, crud
+from app.controllers.student import student_controller
+from app.controllers.training import training_controller
+from app.controllers.inference import inference_controller
+from app.server_manager_instance import cl_manager
+from app.utils.mobilefacenet import MobileFaceNet
+from app.config import (
+    MODEL_PATH, REF_PATH, UPLOAD_DIR, TRAINING_PARAMS
+)
 models.Base.metadata.create_all(bind=db.engine)
 
-# Inisialisasi Model MobileFaceNet Awal (v0) jika belum ada
-MODEL_DIR = "app/model"
-MODEL_PATH = f"{MODEL_DIR}/global_model.pth"
-REF_PATH = f"{MODEL_DIR}/reference_embeddings.pth"
-if not os.path.exists(MODEL_DIR): os.makedirs(MODEL_DIR, exist_ok=True)
+if not os.path.exists(os.path.dirname(MODEL_PATH)): os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
 if not os.path.exists(MODEL_PATH):
-    
     print("[INIT] Membuat model global awal v0...", flush=True)
     torch.save(MobileFaceNet().state_dict(), MODEL_PATH)
 if not os.path.exists(REF_PATH):
@@ -48,15 +46,24 @@ async def dashboard(request: Request):
 async def view_records(request: Request):
     return templates.TemplateResponse("records.html", {"request": request, "title": "Attendance Board"})
 
+# Halaman Hasil Evaluasi (Copy-Paste friendly)
+@app.get("/results", response_class=HTMLResponse)
+async def view_results(request: Request):
+    status = cl_manager.get_status()
+    return templates.TemplateResponse("results.html", {"request": request, "title": "Evaluation Results", "status": status})
+
 # API Status Sistem
 @app.get("/api/status")
 async def get_status():
     return cl_manager.get_status()
 
-# API Rekap Presensi Terkini
+# API Hasil Pelatihan (Metrik)
+@app.get("/api/results")
+async def get_results():
+    return cl_manager.metrics
+
 @app.get("/api/attendance")
 async def get_attendance_recap(dbs: Session = Depends(db.get_db)):
-    from datetime import datetime, time as dt_time
     today = datetime.utcnow().date()
     start_of_day = datetime.combine(today, dt_time.min)
     
@@ -100,6 +107,26 @@ async def register_client(client_data: schemas.ClientBase, request: Request, dbs
     client_data.ip_address = client_ip
     return crud.register_client(dbs, client_data)
 
+# Menerima Unggahan Dataset Bulk (ZIP) dari Terminal
+@app.post("/upload-bulk-zip")
+async def upload_bulk_zip(file: UploadFile = File(...)):
+    print(f"[UPLOAD] Menerima dataset bulk: {file.filename}", flush=True)
+    UPLOAD_TEMP = "data/upload.zip"
+    os.makedirs("data", exist_ok=True)
+    
+    with open(UPLOAD_TEMP, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
+    try:
+        with zipfile.ZipFile(UPLOAD_TEMP, 'r') as zip_ref:
+            zip_ref.extractall("data/students")
+        os.remove(UPLOAD_TEMP)
+        print(f"[UPLOAD] Berhasil mengekstrak dataset ke data/students/", flush=True)
+        return {"status": "success", "filename": file.filename}
+    except Exception as e:
+        print(f"[UPLOAD ERROR] Gagal ekstrak: {e}", flush=True)
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
 # --- ALUR KERJA PELATIHAN TERPUSAT (RESEARCH WORKFLOW) ---
 
 # Tahap 1: Impor Data dari Terminal
@@ -109,7 +136,6 @@ def workflow_import(dbs: Session = Depends(db.get_db)):
     
     cl_manager.start_phase("Import Data")
     cl_manager.received_data = [] 
-    UPLOAD_DIR = "data/students"
     if os.path.exists(UPLOAD_DIR): shutil.rmtree(UPLOAD_DIR)
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     
@@ -120,7 +146,7 @@ def workflow_import(dbs: Session = Depends(db.get_db)):
         res = training_controller.fetch_data(wait_timeout=600, expected_clients=online_count)
         
         if res['status'] == 'success':
-            cl_manager.update_metrics({"payload_size_mb": res['payload_mb']})
+            cl_manager.update_metrics({"upload_volume_mb": res['upload_volume_mb']})
             folders = [f for f in os.listdir(UPLOAD_DIR) if os.path.isdir(os.path.join(UPLOAD_DIR, f))]
             for folder in folders:
                 parts = folder.split("_", 1)
@@ -152,7 +178,7 @@ def workflow_preprocess():
 
 # Tahap 3: Pelatihan Model Global
 @app.post("/workflow/train")
-def workflow_train(epochs: int = 10):
+def workflow_train(epochs: int = TRAINING_PARAMS["total_epochs"]):
     if cl_manager.is_busy: raise HTTPException(400, "Server sedang sibuk")
     cl_manager.start_phase("Training")
     print(f"[INFO] Memulai pelatihan model ({epochs} epoch)...", flush=True)
@@ -161,7 +187,9 @@ def workflow_train(epochs: int = 10):
         if res['status'] == 'success':
             cl_manager.update_metrics({
                 "accuracy": res['accuracy'],
-                "training_duration_s": res['duration_s']
+                "training_duration_s": res['duration_s'],
+                "compute_energy_kwh": res.get('compute_energy_kwh', 0),
+                "epoch_history": res.get('epoch_history', [])
             })
         return res
     finally:
@@ -177,11 +205,8 @@ def workflow_export():
         res = training_controller.generate_reference_and_eval()
         if res['status'] == 'success':
             cl_manager.increment_version()
-            import time
             cl_manager.update_metrics({
-                "tar": res['tar'],
-                "far": res['far'],
-                "eer": res['eer'],
+                "download_volume_mb": res.get('download_volume_mb', 0),
                 "total_round_time_s": round(time.time() - cl_manager.start_time, 2)
             })
         return res
@@ -201,7 +226,7 @@ def workflow_full_lifecycle(dbs: Session = Depends(db.get_db)):
         res_pre = workflow_preprocess()
         if res_pre.get('status') != 'success': return res_pre
         
-        res_train = workflow_train(epochs=10)
+        res_train = workflow_train()
         if res_train.get('status') != 'success': return res_train
         
         res_export = workflow_export()

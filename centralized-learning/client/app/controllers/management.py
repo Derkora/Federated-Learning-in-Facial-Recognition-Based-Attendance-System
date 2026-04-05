@@ -4,7 +4,7 @@ import zipfile
 import requests
 import torch
 import traceback
-from ..utils.image_processing import DEVICE
+from app.utils.image_processing import DEVICE
 
 MODEL_DIR = "app/model"
 DATA_DIR = os.getenv("RAW_DATA_PATH", "raw_data") + "/students"
