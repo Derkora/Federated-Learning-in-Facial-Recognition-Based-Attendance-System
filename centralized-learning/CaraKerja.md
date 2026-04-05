@@ -6,7 +6,7 @@ Sistem ini dirancang untuk mencapai identifikasi wajah dengan performa maksimal 
 
 ## Tahap 1: Data Engineering & Mandatory Preprocessing
 Proses penyiapan data yang dilakukan di sisi terminal sebelum pengiriman ke server pusat.
-- **Laplacian Selection**: Setiap terminal memilih foto wajah tertajam untuk dikirim agar kualitas dataset terjaga.
+- **Laplacian Variance Selection**: Sistem memilih **50 foto tertajam** per mahasiswa untuk menghilangkan noise/blur.
 - **MTCNN Face Cropping**: Wajah dipotong secara otomatis dari frame kamera asli untuk meminimalkan noise latar belakang.
 - **112x96 Dimensional Alignment**: Wajah yang dipotong diubah ukurannya ke dimensi standar 112x96 agar sesuai dengan input arsitektur MobileFaceNet.
 
