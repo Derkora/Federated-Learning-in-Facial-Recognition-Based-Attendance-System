@@ -9,7 +9,7 @@ class CentralizedServerManager:
     # Melacak status pelatihan, fase aktif, dan metrik performa model global.
     
     def __init__(self):
-        self.is_busy = False
+        self.is_running = False
         self.current_phase = "Standby"
         self.upload_requested = False
         self.start_time = 0
@@ -30,14 +30,14 @@ class CentralizedServerManager:
 
     def start_phase(self, phase_name):
         # Menandai awal dari fase alur kerja penelitian
-        self.is_busy = True
+        self.is_running = True
         self.current_phase = phase_name
         if phase_name == "Import Data": self.start_time = time.time()
         self.update_logs(f"Fase {phase_name} dimulai.")
 
     def end_phase(self):
         # Mengembalikan status ke Standby setelah fase selesai
-        self.is_busy = False
+        self.is_running = False
         self.current_phase = "Standby"
 
     def update_logs(self, msg):
@@ -83,7 +83,7 @@ class CentralizedServerManager:
     def get_status(self):
         # Mengembalikan status lengkap server untuk dashboard UI
         return {
-            "is_busy": self.is_busy,
+            "is_running": self.is_running,
             "current_phase": self.current_phase,
             "upload_requested": self.upload_requested,
             "metrics": self.metrics,

@@ -13,8 +13,8 @@ from fastapi.templating import Jinja2Templates
 
 from app.client_manager_instance import cl_client
 
-# Konfigurasi Aplikasi Terminal Terpusat (Centralized)
-app = FastAPI(title="Centralized Edge Terminal")
+# Konfigurasi Aplikasi Client Terpusat (Centralized)
+app = FastAPI(title="Centralized Edge Client")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 
@@ -90,7 +90,7 @@ async def request_data():
 # Event saat Startup
 @app.on_event("startup")
 def startup_event():
-    print(f"[STARTUP] Inisialisasi Terminal: {cl_client.client_id}", flush=True)
+    print(f"[STARTUP] Inisialisasi Client: {cl_client.client_id}", flush=True)
     cl_client.start_background_tasks()
 
 if __name__ == "__main__":

@@ -93,7 +93,6 @@ async def start_fl_training(rounds: int = None, min_clients: int = None, epochs:
 @app.post("/api/fl/reset")
 async def reset_fl_state():
     fl_manager.is_running = False
-    fl_manager.is_busy = False
     fl_manager.start_phase("Idle")
     fl_manager.current_logs = []
     fl_manager.registry_submissions.clear()
@@ -176,7 +175,7 @@ async def get_training_status():
 @app.post("/api/training/get_label")
 async def get_label(data: dict, db: Session = Depends(get_db)):
     # Digunakan untuk memberikan ID numerik unik ke setiap mahasiswa baru
-    # yang didaftarkan di terminal mana pun.
+    # yang didaftarkan di client mana pun.
     nrp = data.get("nrp")
     name = data.get("name", "Unknown")
     edge_id = data.get("client_id", "edge-1")

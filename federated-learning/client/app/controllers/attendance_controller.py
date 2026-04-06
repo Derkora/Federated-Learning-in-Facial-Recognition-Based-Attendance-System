@@ -83,13 +83,13 @@ class AttendanceController:
             # Sinkronisasi ke server dilakukan di background agar tidak menghambat aliran video
             background_tasks.add_task(
                 sync_record_to_server, 
-                user_id, user_name, float(confidence), os.getenv("HOSTNAME", "terminal-1")
+                user_id, user_name, float(confidence), os.getenv("HOSTNAME", "client-1")
             )
-            print(f"[OK] Absensi Berhasil: {user_id} ({confidence:.2f})")
+            print(f"[OK] Absensi Berhasil: {user_id}_{user_name} ({confidence:.2f})")
             
         latency = int((time.time() - start_time) * 1000)
         return {
-            "matched": user_id, 
+            "matched": f"{user_id}_{user_name}" if user_id != "Unknown" else "Unknown", 
             "is_confirmed": user_id != "Unknown",
             "confidence": float(confidence), 
             "box": box.tolist() if box is not None else None,

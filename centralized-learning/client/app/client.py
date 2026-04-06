@@ -10,7 +10,7 @@ from app.controllers.management import ManagementController
 from app.controllers.attendance import AttendanceController
 
 class CentralizedClientManager:
-    # Manajer Utama Terminal Terpusat (Centralized)
+    # Manajer Utama Client Terpusat (Centralized)
     # Menangani proses registrasi, sinkronisasi model, dan pengunggahan dataset.
     
     def __init__(self):
@@ -156,7 +156,7 @@ class CentralizedClientManager:
                 if not self.is_registered:
                     if self.management.register_client(self.client_id):
                         self.is_registered = True
-                        print(f"[OK] Terminal berhasil terdaftar di server.")
+                        print(f"[OK] Client berhasil terdaftar di server.")
                     else: 
                         time.sleep(5)
                         continue

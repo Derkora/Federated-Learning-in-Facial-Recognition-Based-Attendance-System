@@ -26,18 +26,18 @@ class EmbeddingEncryptor:
         cipher = Cipher(algorithms.AES(self.key), modes.CBC(iv), backend=default_backend())
         encryptor = cipher.encryptor()
 
-        # Padding (PKCS7)
+        # Penggenapan (Padding) PKCS7
         padder = padding.PKCS7(128).padder()
         padded_data = padder.update(data_bytes) + padder.finalize()
 
-        # Encrypt
+        # Enkripsi
         encrypted_data = encryptor.update(padded_data) + encryptor.finalize()
 
         return encrypted_data, iv
 
     def decrypt_embedding(self, encrypted_data, iv):
         """
-        Returns numpy array from encrypted data
+        Mengembalikan numpy array dari data terenkripsi
         """
         cipher = Cipher(algorithms.AES(self.key), modes.CBC(iv), backend=default_backend())
         decryptor = cipher.decryptor()

@@ -31,7 +31,7 @@ class AttendanceController:
         return "Unknown", 0
 
     def submit_attendance(self, user_id, confidence):
-        # Mengirimkan laporan presensi mahasiswa ke database pusat.
+        # Mengirimkan laporan presensi mahasiswa ke server pusat.
         try:
             payload = {
                 "user_id": user_id, 
@@ -41,6 +41,6 @@ class AttendanceController:
             }
             res = requests.post(f"{self.server_url}/submit-attendance", json=payload, timeout=5)
             if res.status_code == 200:
-                print(f"[OK] Presensi berhasil dikirim untuk {user_id}.")
+                print(f"[OK] Presensi berhasil dikirim untuk: {user_id}")
         except Exception as e:
             print(f"[ERROR] Gagal mengirim presensi ke server: {e}")

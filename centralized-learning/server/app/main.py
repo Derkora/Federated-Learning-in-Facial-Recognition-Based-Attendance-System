@@ -81,7 +81,8 @@ async def get_attendance_recap(dbs: Session = Depends(db.get_db)):
             "nrp": user.nrp,
             "status": "Hadir" if last_entry else "Belum Hadir",
             "time": last_entry.timestamp.strftime("%H:%M:%S") if last_entry else "--:--",
-            "confidence": f"{int(last_entry.confidence * 100)}%" if last_entry else "--"
+            "confidence": f"{int(last_entry.confidence * 100)}%" if last_entry else "--",
+            "registered_edge_id": user.registered_edge_id or "client-1"
         })
     
     return recap
@@ -118,11 +119,14 @@ async def upload_bulk_zip(file: UploadFile = File(...)):
         shutil.copyfileobj(file.file, buffer)
         
     try:
+        edge_id = file.filename.split("_")[0]
+        
         with zipfile.ZipFile(UPLOAD_TEMP, 'r') as zip_ref:
             zip_ref.extractall("data/students")
         os.remove(UPLOAD_TEMP)
-        print(f"[UPLOAD] Berhasil mengekstrak dataset ke data/students/", flush=True)
-        return {"status": "success", "filename": file.filename}
+        
+        cl_manager.update_logs(f"Menerima data (zip) dari {edge_id}")
+        return {"status": "success", "filename": file.filename, "edge_id": edge_id}
     except Exception as e:
         print(f"[UPLOAD ERROR] Gagal ekstrak: {e}", flush=True)
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
@@ -132,7 +136,7 @@ async def upload_bulk_zip(file: UploadFile = File(...)):
 # Tahap 1: Impor Data dari Terminal
 @app.post("/workflow/import")
 def workflow_import(dbs: Session = Depends(db.get_db)):
-    if cl_manager.is_busy: raise HTTPException(400, "Server sedang sibuk")
+    if cl_manager.is_running: raise HTTPException(400, "Server sedang sibuk")
     
     cl_manager.start_phase("Import Data")
     cl_manager.received_data = [] 
@@ -140,7 +144,7 @@ def workflow_import(dbs: Session = Depends(db.get_db)):
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     
     cl_manager.upload_requested = True
-    print("[INFO] Menunggu terminal mengirimkan dataset...", flush=True)
+    print("[INFO] Menunggu client mengirimkan dataset...", flush=True)
     try:
         online_count = dbs.query(models.Client).filter(models.Client.status == "online").count()
         res = training_controller.fetch_data(wait_timeout=600, expected_clients=online_count)
@@ -155,7 +159,9 @@ def workflow_import(dbs: Session = Depends(db.get_db)):
                 
                 existing = dbs.query(models.UserGlobal).filter(models.UserGlobal.nrp == nrp).first()
                 if not existing:
-                    new_student = models.UserGlobal(name=name, nrp=nrp)
+                    # Coba deteksi edge_id dari file jika ada tracking (atau default ke client-1)
+                    # Di CL, data yang baru diupload biasanya dari client yang aktif
+                    new_student = models.UserGlobal(name=name, nrp=nrp, registered_edge_id="client-1")
                     dbs.add(new_student)
             dbs.commit()
             cl_manager.update_received_data(UPLOAD_DIR)
@@ -168,7 +174,7 @@ def workflow_import(dbs: Session = Depends(db.get_db)):
 # Tahap 2: Pra-pemrosesan & Penyeimbangan Dataset
 @app.post("/workflow/preprocess")
 def workflow_preprocess():
-    if cl_manager.is_busy: raise HTTPException(400, "Server sedang sibuk")
+    if cl_manager.is_running: raise HTTPException(400, "Server sedang sibuk")
     cl_manager.start_phase("Preprocess & Balance")
     print("[INFO] Memulai tahap pra-pemrosesan...", flush=True)
     try:
@@ -179,7 +185,7 @@ def workflow_preprocess():
 # Tahap 3: Pelatihan Model Global
 @app.post("/workflow/train")
 def workflow_train(epochs: int = TRAINING_PARAMS["total_epochs"]):
-    if cl_manager.is_busy: raise HTTPException(400, "Server sedang sibuk")
+    if cl_manager.is_running: raise HTTPException(400, "Server sedang sibuk")
     cl_manager.start_phase("Training")
     print(f"[INFO] Memulai pelatihan model ({epochs} epoch)...", flush=True)
     try:
@@ -198,7 +204,7 @@ def workflow_train(epochs: int = TRAINING_PARAMS["total_epochs"]):
 # Tahap 4: Ekspor Model & Evaluasi Akhir
 @app.post("/workflow/export")
 def workflow_export():
-    if cl_manager.is_busy: raise HTTPException(400, "Server sedang sibuk")
+    if cl_manager.is_running: raise HTTPException(400, "Server sedang sibuk")
     cl_manager.start_phase("Export & Eval")
     print("[INFO] Memulai tahap ekspor dan evaluasi model...", flush=True)
     try:
@@ -216,7 +222,7 @@ def workflow_export():
 # Menjalankan Seluruh Siklus Hidup Pelatihan dari Awal sampai Akhir
 @app.post("/workflow/full-lifecycle")
 def workflow_full_lifecycle(dbs: Session = Depends(db.get_db)):
-    if cl_manager.is_busy: raise HTTPException(400, "Server sedang sibuk")
+    if cl_manager.is_running: raise HTTPException(400, "Server sedang sibuk")
     
     try:
         cl_manager.update_logs("Memulai siklus pelatihan penuh (Full Lifecycle)...")
@@ -237,7 +243,7 @@ def workflow_full_lifecycle(dbs: Session = Depends(db.get_db)):
         cl_manager.update_logs(f"[ERROR] Kesalahan fatal dalam siklus: {e}")
         return {"status": "error", "message": str(e)}
     finally:
-        cl_manager.is_busy = False
+        cl_manager.is_running = False
         cl_manager.current_phase = "Standby"
 
 # --- API PENDUKUNG & AKSES ASET ---

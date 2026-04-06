@@ -2,25 +2,26 @@
 
 {% block content %}
 <div class="glass" style="padding: 1.5rem;">
-    <h2>Today's Attendance Board</h2>
-    <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 2rem;">Real-time monitoring of today's student
-        check-ins.</p>
+    <h2>Papan Kehadiran Hari Ini</h2>
+    <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 2rem;">Pemantauan kehadiran mahasiswa hari ini
+        secara real-time.</p>
 
     <div style="overflow-x: auto;">
         <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem; text-align: left;">
             <thead>
                 <tr style="border-bottom: 2px solid var(--accent-low);">
                     <th style="padding: 12px;">NRP</th>
-                    <th style="padding: 12px;">Name</th>
+                    <th style="padding: 12px;">Nama</th>
                     <th style="padding: 12px;">Status</th>
-                    <th style="padding: 12px;">Last Seen (Today)</th>
+                    <th style="padding: 12px;">Terakhir Terlihat (Hari Ini)</th>
                     <th style="padding: 12px;">Confidence</th>
+                    <th style="padding: 12px;">Client Asal</th>
                 </tr>
             </thead>
             <tbody id="attendance-body">
                 <tr>
                     <td colspan="5" style="padding: 40px; text-align: center; color: var(--text-muted);">
-                        Loading real-time attendance data...
+                        Memuat data kehadiran real-time...
                     </td>
                 </tr>
             </tbody>
@@ -76,16 +77,17 @@
                             <td><b>${a.name}</b></td>
                             <td>
                                 <span class="status-badge ${isAttended ? 'status-attended' : 'status-pending'}">
-                                    ${isAttended ? '✅ ATTENDED' : 'WAITING'}
+                                    ${isAttended ? '✅ HADIR' : 'MENUNGGU'}
                                 </span>
                             </td>
                             <td>${a.time}</td>
                             <td>${a.confidence}</td>
+                            <td><span class="badge" style="background: rgba(79, 70, 229, 0.1); color: #818cf8;">${a.registered_edge_id}</span></td>
                         </tr>
                     `;
                 }).join('');
             } else {
-                body.innerHTML = '<tr><td colspan="5" style="padding: 40px; text-align: center; color: var(--text-muted);">No students registered. Run "Import Data" on the dashboard first.</td></tr>';
+                body.innerHTML = '<tr><td colspan="5" style="padding: 40px; text-align: center; color: var(--text-muted);">Belum ada mahasiswa terdaftar. Jalankan "Import Data" di dashboard terlebih dahulu.</td></tr>';
             }
         } catch (e) {
             console.error("Attendance Update Error:", e);

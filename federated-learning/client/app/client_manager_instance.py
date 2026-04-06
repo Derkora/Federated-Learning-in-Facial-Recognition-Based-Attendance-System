@@ -29,9 +29,13 @@ def add_phase_log(msg):
     print(f"[LOG] {msg}")
 
 class FLClientManager:
+    # Manajer Utama Client Federated (FL)
+    # Menangani jantung operasional client mulai dari sinkronisasi fase,
+    # manajemen model lokal, hingga alur kamera (inference).
+    def __init__(self):
         self.raw_data_path = os.getenv("RAW_DATA_PATH", "/app/raw_data")
         self.data_path = os.getenv("DATA_PATH", "/app/data")
-        # Ensure directories exist
+        # Pastikan direktori tersedia
         os.makedirs(self.data_path, exist_ok=True)
         os.makedirs(os.path.join(self.data_path, "models"), exist_ok=True)
         os.makedirs(os.path.join(self.data_path, "processed"), exist_ok=True)
@@ -41,11 +45,11 @@ class FLClientManager:
         self.backbone.eval()
         self.detector = MTCNN(image_size=112, margin=20, keep_all=False, device=self.device, post_process=False)
         
-        # PERSISTENCE: Determine dynamic head size
+        # PERSISTENSI: Tentukan ukuran head dinamis
         save_path = os.path.join(self.data_path, "models", "backbone.pth")
         head_path = os.path.join(self.data_path, "models", "local_head.pth")
         
-        self.num_classes = 1000 # Default fallback
+        self.num_classes = 1000 # Fallback default
         if os.path.exists(head_path):
             try:
                 checkpoint = torch.load(head_path, map_location="cpu")
@@ -62,7 +66,7 @@ class FLClientManager:
                 print(f"Loading existing backbone weights from {save_path}...")
                 self.backbone.load_state_dict(torch.load(save_path, map_location=self.device))
                 
-                # Load Combined BN if exists (Universal Mode)
+                # Muat BN Gabungan jika ada (Mode Universal)
                 bn_combined_path = os.path.join(self.data_path, "models", "global_bn_combined.pth")
                 if os.path.exists(bn_combined_path):
                     print("Loading Combined BN statistics...")
@@ -78,7 +82,7 @@ class FLClientManager:
 
         self.fl_server_address = os.getenv("FL_SERVER_ADDRESS", "server-fl:8085")
         self.server_api_url = os.getenv("SERVER_API_URL", "http://server-fl:8080")
-        self.client_id = os.getenv("HOSTNAME", "terminal-1")
+        self.client_id = os.getenv("HOSTNAME", "client-1")
         
         self.client = FaceRecognitionClient(
             self.backbone, self.head, 
@@ -98,13 +102,13 @@ class FLClientManager:
         self.prediction_buffer = collections.deque(maxlen=10)
         self.last_face_time = 0
         
-        # Headless Camera Support
+        # Dukungan Kamera Headless
         self.latest_frame = None
         self.latest_result = {"matched": "Standby", "confidence": 0, "latency_ms": 0, "is_virtual": False}
         self.is_camera_running = False
 
     def start_background_tasks(self):
-        print(f"[STARTUP] Starting background tasks for client: {self.client_id}")
+        print(f"[STARTUP] Memulai tugas latar belakang untuk client: {self.client_id}")
         threading.Thread(target=self.heartbeat_loop, daemon=True).start()
         threading.Thread(target=self._camera_loop, daemon=True).start()
 
@@ -132,7 +136,7 @@ class FLClientManager:
                 if not ret:
                     print("[CAMERA ERROR] Gagal akses hardware. Beralih ke VIRTUAL CAMERA mode.")
                     virtual_mode = True
-                    # Scan for virtual images
+                    # Pindai gambar virtual
                     root_dir = os.path.join(self.raw_data_path, "students")
                     if os.path.exists(root_dir):
                         for root, dirs, files in os.walk(root_dir):
@@ -202,6 +206,7 @@ class FLClientManager:
             res = requests.post(f"{self.server_api_url}/api/clients/register", json=payload, timeout=2)
             if res.status_code == 200:
                 self.is_registered = True
+                print(f"[OK] Client {self.client_id} berhasil terdaftar.")
         except:
             self.is_registered = False
 
@@ -245,7 +250,7 @@ class FLClientManager:
             self.fl_status = "Online (Selesai)"
             
         if (self.last_phase == "training" or self.last_phase == "registry generation") and phase == "completed":
-            print("[CLIENT] Training finished. Downloading Final Registry assets...")
+            print("[CLIENT] Pelatihan selesai. Mengunduh aset Registry Final...")
             def update_task():
                 if self.download_registry_assets():
                     # Ambil versi terbaru dari server setelah download selesai
@@ -267,10 +272,10 @@ class FLClientManager:
             f.write(str(v))
 
     def download_backbone(self):
-        """Fetches the aggregated Backbone StateDict from server."""
+        """Mengambil StateDict Backbone hasil agregasi dari server."""
         try:
             url_bb = f"{self.server_api_url}/api/model/backbone"
-            print(f"[SYNC] Fetching global backbone from {url_bb}...")
+            print(f"[SYNC] Mengambil backbone global dari {url_bb}...")
             res_bb = requests.get(url_bb, timeout=30)
             if res_bb.status_code == 200:
                 save_path = os.path.join(self.data_path, "models", "backbone.pth")
@@ -311,7 +316,7 @@ class FLClientManager:
         return False
 
     def download_bn(self, max_wait=60):
-        """Fetches the aggregated BN stats (Running Mean/Var) for global consistency."""
+        """Mengambil statistik BN (Running Mean/Var) hasil agregasi untuk konsistensi global."""
         path = os.path.join(self.data_path, "models", "global_bn_combined.pth")
         url = f"{self.server_api_url}/api/model/bn"
         
@@ -342,7 +347,7 @@ class FLClientManager:
         return False
 
     def download_registry_assets(self):
-        """Download combined identification centroids for offline inference."""
+        """Unduh centroid identifikasi gabungan untuk inferensi offline."""
         try:
             url_reg = f"{self.server_api_url}/api/model/registry"
             res_reg = requests.get(url_reg, timeout=20)
@@ -382,7 +387,7 @@ class FLClientManager:
             db.close()
 
     def refresh_local_embeddings(self):
-        """Re-extract local embeddings using the latest SYNCED backbone."""
+        """Ekstraksi ulang embedding lokal menggunakan backbone terbaru yang sudah DISINKRONISASI."""
         db = SessionLocal()
         try:
             users = db.query(UserLocal).all()
@@ -421,7 +426,7 @@ class FLClientManager:
                     db.add(EmbeddingLocal(user_id=user.user_id, embedding_data=encrypted_data, iv=iv, is_global=False))
                 db.commit()
                 
-                # Share with server
+                # Bagikan ke server
                 try:
                     payload = {
                         "nrp": user.user_id, "name": user.name, "client_id": self.client_id,
@@ -445,7 +450,7 @@ class FLClientManager:
         except: return 0
 
     def run_discovery_phase(self):
-        """Scan folders and register IDs with the server."""
+        """Pindai folder dan daftarkan ID ke server."""
         self.report_status("Processing: Discovery Identitas...")
         try:
             student_path = os.path.join(self.raw_data_path, "students")
@@ -507,7 +512,7 @@ class FLClientManager:
         folders = sorted([f for f in os.listdir(students_dir) if os.path.isdir(os.path.join(students_dir, f))])
         for folder in folders:
             nrp = folder.split('_')[0] if "_" in folder else folder
-            print(f"[PREPROCESS] Selecting Top 50 faces for {nrp} using Laplacian Variance...")
+            print(f"[PREPROCESS] Memilih 50 wajah terbaik untuk {nrp} menggunakan Laplacian Variance...")
             
             target_folder = os.path.join(processed_dir, nrp)
             if os.path.exists(target_folder):
@@ -547,7 +552,7 @@ class FLClientManager:
             except: pass
 
     def run_registry_phase(self):
-        """FINAL Registry Extraction (Uses Unified Global Weights)."""
+        """Ekstraksi Registry FINAL (Menggunakan Bobot Global Terpadu)."""
         if getattr(self, "is_sending_registry", False):
             print("[REGISTRY] Generation already in progress, skipping duplicate trigger.")
             return
@@ -555,21 +560,21 @@ class FLClientManager:
         self.is_sending_registry = True
         self.report_status("Processing: Finalisasi Registry Identitas...")
         try:
-            # 1. SYNC BACKBONE FIRST (Ensure we use the latest shared knowledge)
-            print("[REGISTRY] Phase 1: Syncing Backbone...")
+            # 1. SINKRONISASI BACKBONE TERLEBIH DAHULU (Pastikan menggunakan pengetahuan bersama terbaru)
+            print("[REGISTRY] Fase 1: Sinkronisasi Backbone...")
             self.download_backbone()
             
-            # 2. CALCULATE CENTROIDS (Using current model state)
-            print("[REGISTRY] Phase 2: Calculating Local Centroids...")
+            # 2. HITUNG CENTROID (Menggunakan status model saat ini)
+            print("[REGISTRY] Fase 2: Menghitung Centroid Lokal...")
             bn_params = self.client.trainer.get_bn_parameters()
             centroids = self.client.trainer.calculate_centroids(label_map=self.client.label_map)
             
-            # Save a local fallback immediately
+            # Simpan cadangan lokal segera
             local_registry_path = os.path.join(self.data_path, "models", "global_embedding_registry.pth")
             torch.save(centroids, local_registry_path)
             
-            # 3. SUBMIT TO SERVER
-            print("[REGISTRY] Phase 3: Submitting local assets to server...")
+            # 3. KIRIM KE SERVER
+            print("[REGISTRY] Fase 3: Mengirim aset lokal ke server...")
             serialized_centroids = {nrp: base64.b64encode(vec.tobytes()).decode('utf-8') for nrp, vec in centroids.items()}
             bn_buf = io.BytesIO()
             torch.save(bn_params, bn_buf)
@@ -581,11 +586,11 @@ class FLClientManager:
             res = requests.post(f"{self.server_api_url}/api/training/registry_assets", json=payload, timeout=60)
             
             if res.status_code == 200:
-                print(f"[REGISTRY] Submission successful. Waiting for global aggregation...")
+                print(f"[REGISTRY] Pengiriman berhasil. Menunggu agregasi global...")
                 self.report_status("Processing: Menunggu Agregasi Global...")
                 
-                # 4. WAIT & DOWNLOAD GLOBAL RESULTS
-                # This ensures every client ends up with the SAME BN and SAME Registry
+                # 4. TUNGGU & UNDUH HASIL GLOBAL
+                # Ini memastikan setiap client memiliki BN dan Registry yang SAMA
                 if self.download_bn(max_wait=120):
                     print("[REGISTRY] Global BN Synced.")
                 

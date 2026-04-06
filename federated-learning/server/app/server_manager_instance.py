@@ -3,6 +3,7 @@ import os
 import io
 import torch
 import json
+import numpy as np
 from collections import OrderedDict
 from datetime import datetime
 from app.db.db import SessionLocal
@@ -12,17 +13,26 @@ from app.config import ECONOMICS, TRAINING_PARAMS, FALLBACK_MODEL_PATH
 
 # Fungsi rata-rata tertimbang untuk metrik
 def weighted_average(metrics: list) -> dict:
+    # Fungsi agregasi metrik dari seluruh terminal (Client)
+    print(f"[METRICS] Aggregating {len(metrics)} client results...")
     examples = [m[0] for m in metrics]
     total_examples = sum(examples)
-    if total_examples == 0: return {}
+    if total_examples == 0: 
+        print("[METRICS] Total examples is 0, returning empty.")
+        return {}
 
-    aggregated = {
-        "accuracy": sum([m[1]["accuracy"] * m[0] for m in metrics]) / total_examples,
-        "loss": sum([m[1]["loss"] * m[0] for m in metrics]) / total_examples,
-        "val_accuracy": sum([m[1].get("val_accuracy", 0.0) * m[0] for m in metrics]) / total_examples,
-        "val_loss": sum([m[1].get("val_loss", 0.0) * m[0] for m in metrics]) / total_examples,
-    }
-    return aggregated
+    try:
+        aggregated = {
+            "accuracy": sum([m[1].get("accuracy", 0.0) * m[0] for m in metrics]) / total_examples,
+            "loss": sum([m[1].get("loss", 0.0) * m[0] for m in metrics]) / total_examples,
+            "val_accuracy": sum([m[1].get("val_accuracy", 0.0) * m[0] for m in metrics]) / total_examples,
+            "val_loss": sum([m[1].get("val_loss", 0.0) * m[0] for m in metrics]) / total_examples,
+        }
+        print(f"[METRICS] Aggregated: {aggregated}")
+        return aggregated
+    except Exception as e:
+        print(f"[METRICS ERROR] Failed to aggregate: {e}")
+        return {}
 
 # Strategi Penyimpanan Model Federated
 # Bagian ini menangani penggabungan bobot model dari terminal-terminal (Aggregation)
@@ -36,7 +46,7 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
     def aggregate_fit(self, server_round: int, results: list, failures: list):
         print(f"\n[ROUND {server_round}] Ringkasan Performa")
         if failures:
-            print(f"[WARN] Ronde {server_round} mendapati {len(failures)} kegagalan terminal.")
+            print(f"[WARN] Ronde {server_round} mendapati {len(failures)} kegagalan client.")
 
         # Laporan masing-masing terminal
         for i, (client_proxy, fit_res) in enumerate(results):
@@ -45,7 +55,7 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
             acc = metrics.get("accuracy", 0.0)
             loss = metrics.get("loss", 0.0)
             val_acc = metrics.get("val_accuracy", 0.0)
-            print(f"  > Terminal {cid}: Akurasi: {acc:.4f} | Loss: {loss:.4f} | Val Acc: {val_acc:.4f}")
+            print(f"  > Client {cid}: Akurasi: {acc:.4f} | Loss: {loss:.4f} | Val Acc: {val_acc:.4f}")
 
         if not results:
             return None, {}
@@ -97,7 +107,7 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
             except Exception as e:
                 print(f"[ERROR] Gagal memproses parameter agregasi: {e}")
                 
-        if aggregated_metrics:
+        if aggregated_metrics or results:
             # Hitung Weight Divergence (Avg L2 Distance)
             weight_div = 0.0
             if results and aggregated_parameters:
@@ -113,28 +123,59 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                     weight_div = round(total_dist / len(results), 6)
                 except: pass
             
-            aggregated_metrics["weight_divergence"] = weight_div
+            if aggregated_metrics:
+                aggregated_metrics["weight_divergence"] = weight_div
             
-            # Record per-client breakdown
+            # Mencatat rincian per-client
             client_data = {}
             for i, (client_proxy, fit_res) in enumerate(results):
-                cid = getattr(client_proxy, "cid", f"client-{i}")
-                client_data[cid] = fit_res.metrics
+                # Menghitung divergensi per-client
+                client_params = fl.common.parameters_to_ndarrays(fit_res.parameters)
+                target_params = fl.common.parameters_to_ndarrays(aggregated_parameters) if aggregated_parameters else None
+                
+                c_div = 0.0
+                if target_params:
+                    c_dist = 0
+                    for cp, tp in zip(client_params, target_params):
+                        c_dist += np.linalg.norm(cp - tp)
+                    c_div = round(c_dist / len(client_params), 6)
+                
+                # CID default atau gunakan hostname jika ada di metrik
+                cid = fit_res.metrics.get("hostname") or getattr(client_proxy, "cid", f"client-{i}")
+                
+                # Menggabungkan semua metrik
+                m = fit_res.metrics.copy()
+                m["num_samples"] = fit_res.num_examples
+                m["divergence"] = c_div
+                
+                # Dekoding epoch_history jika berupa string
+                eh = fit_res.metrics.get("epoch_history", "[]")
+                if isinstance(eh, str):
+                    try:
+                        m["epoch_history"] = json.loads(eh)
+                    except:
+                        m["epoch_history"] = []
+                else:
+                    m["epoch_history"] = eh
+                    
+                client_data[cid] = m
             
-            self.manager.record_round_data(server_round, aggregated_metrics, client_data)
-            self.manager.update_metrics(aggregated_metrics)
-            self.manager.update_logs(f"Ronde {server_round} selesai. Acc: {aggregated_metrics.get('accuracy', 0):.4f} | Div: {weight_div}")
+            print(f"[STRATEGY] Recording data for round {server_round} (Clients: {len(client_data)})")
+            self.manager.record_round_data(server_round, aggregated_metrics or {}, client_data)
+            if aggregated_metrics:
+                self.manager.update_metrics(aggregated_metrics)
+                loss = aggregated_metrics.get('loss', 0)
+                self.manager.update_logs(f"Ronde {server_round} selesai. Acc: {aggregated_metrics.get('accuracy', 0):.4f} | Loss: {loss:.4f} | Div: {weight_div}")
 
         return aggregated_parameters, aggregated_metrics
 
 class FLServerManager:
-    # Manajer Sesi dan Status Server
+    # Manajer Sesi dan Status Server Federated (FL)
     # Menyimpan informasi status pelatihan, metrik performa, dan log aktivitas.
     
     def __init__(self):
         self.session_id = None
         self.is_running = False
-        self.is_busy = False 
         self.current_phase = "idle"
         self.start_time = 0
         self.current_logs = []
@@ -148,32 +189,34 @@ class FLServerManager:
         self.registered_clients = {}
         self.registry_submissions = {}
         self.ready_clients = set() 
-
-    def increment_version(self):
-        self.model_version += 1
-        self.update_logs(f"Versi Model Global naik ke v{self.model_version}")
-        self.discovery_clients = set() 
-        self.received_data = [] 
-        
+        self.received_data = []
+        self.discovery_clients = set()
         self.metrics = {
             "accuracy": 0, "loss": 0, 
             "backbone_sync_mb": 0, "registry_sync_mb": 0,
             "transmission_cost_idr": 0,
             "training_duration_s": 0, "total_round_time_s": 0,
             "compute_energy_kwh": 0, "compute_cost_idr": 0,
-            "round_history": [], # Riwayat data ronde dengan breakdown client
+            "round_history": [], # Riwayat data ronde dengan rincian client
+            "unique_client_ids": [], # Pelacakan ID unik client yang berkontribusi
             "convergence_round": None
         }
 
+    def increment_version(self):
+        self.model_version += 1
+        self.update_logs(f"Versi Model Global naik ke v{self.model_version}")
+        self.discovery_clients = set() 
+        self.received_data = [] 
+
     def start_phase(self, phase_name):
-        self.is_busy = True
+        self.is_running = True
         self.current_phase = phase_name.lower().replace(" ", "_")
         if self.current_phase == "data_prep": self.start_time = datetime.now().timestamp()
         self.update_logs(f"Fase {phase_name} dimulai.")
 
     def end_phase(self, phase_name=None):
         if phase_name: self.update_logs(f"Fase {phase_name} selesai.")
-        self.is_busy = False
+        self.is_running = False
         self.current_phase = "idle"
 
     def update_logs(self, msg):
@@ -207,12 +250,20 @@ class FLServerManager:
         self.metrics["compute_cost_idr"] = round(energy_kwh * cost_per_kwh, 2)
 
     def record_round_data(self, round_num, server_metrics, client_metrics):
+        print(f"[MANAGER] Recording round {round_num} data...")
         entry = {
             "round": round_num,
             "server": server_metrics,
             "clients": client_metrics
         }
         self.metrics["round_history"].append(entry)
+        print(f"[MANAGER] Round history now has {len(self.metrics['round_history'])} entries.")
+        
+        # Memperbarui pelacakan client unik
+        for cid in client_metrics.keys():
+            if cid not in self.metrics["unique_client_ids"]:
+                self.metrics["unique_client_ids"].append(cid)
+        print(f"[MANAGER] Unique clients tracked: {len(self.metrics['unique_client_ids'])}")
         
         # Cek Konvergensi
         if self.metrics["convergence_round"] is None and server_metrics.get("accuracy", 0) > 0.90:
@@ -222,7 +273,7 @@ class FLServerManager:
     def _get_lr_for_round(self, server_round):
         # Penyelarasan LR Schedule dari konfigurasi terpusat
         schedule = TRAINING_PARAMS["lr_schedule"]
-        lr = 1e-4 # Default
+        lr = 1e-4 # Nilai default
         for threshold in sorted(schedule.keys()):
             if server_round >= threshold:
                 lr = schedule[threshold]
@@ -235,7 +286,6 @@ class FLServerManager:
             
         return {
             "is_running": self.is_running,
-            "is_busy": self.is_busy,
             "phase": self.current_phase,
             "session_id": self.session_id,
             "metrics": self.metrics,
@@ -291,7 +341,7 @@ class FLServerManager:
         self.session_id = session_id
         self.is_running = True
         self.start_phase("Training")
-        self.update_logs(f"Pelatihan Federated dimulai: {rounds} ronde, {min_clients} terminal.")
+        self.update_logs(f"Pelatihan Federated dimulai: {rounds} ronde, {min_clients} client.")
         
         initial_parameters = None
         db = SessionLocal()

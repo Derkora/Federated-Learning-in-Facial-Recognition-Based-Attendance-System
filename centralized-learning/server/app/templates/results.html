@@ -76,11 +76,7 @@
                 </tr>
                 <tr>
                     <td>Durasi Pelatihan</td>
-                    <td>{{ (status.metrics.training_duration_s * 1000)|round(0) }} ms</td>
-                </tr>
-                <tr>
-                    <td colspan="2"><b>Status (Confidence)</b></td>
-                    <td colspan="2" style="color: #00ff00;">Berhasil (Selesai)</td>
+                    <td>{{ status.metrics.training_duration_s }} s</td>
                 </tr>
             </tbody>
         </table>

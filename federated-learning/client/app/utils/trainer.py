@@ -18,7 +18,7 @@ import seaborn as sns
 import numpy as np
 
 class TrainingNaNError(Exception):
-    """Custom exception when training loss or weights become NaN."""
+    """Pengecualian khusus saat loss atau bobot pelatihan menjadi NaN."""
     pass
 
 def hybrid_collate(batch):
@@ -65,10 +65,10 @@ class FaceDataset(Dataset):
         self.id_map = {idx: nrp for nrp, idx in self.nrp_to_idx.items()}
         self.num_classes = len(all_unique_nrps)
         
-        # Initialize counts
+        # Inisialisasi hitungan jumlah sampel per kelas
         self.class_counts = {idx: 0 for idx in range(self.num_classes)}
 
-        # Data Alignment with uji-fl: Strictly follow global label_map if provided
+        # Penyelarasan Data: Ikuti label_map global secara ketat jika tersedia
         print(f"[DATASET] Processing local folders for {len(local_nrps)} users...")
         for nrp in local_nrps:
             if label_map and nrp not in self.nrp_to_idx:
@@ -81,7 +81,7 @@ class FaceDataset(Dataset):
             
             if len(paths) == 0: continue
             
-            # Simple 80/20 Split as per user preference (Normal Split)
+            # Pembagian 80/20 sesuai preferensi pengguna (Split Normal)
             split_idx = int(0.8 * len(paths))
             if mode == "train":
                 selected = paths[:split_idx]
@@ -94,7 +94,7 @@ class FaceDataset(Dataset):
             
             print(f"  [OK] {nrp}: Loaded {len(selected)} {mode} images.")
 
-        # Add global embedding samples (Knowledge Sharing)
+        # Tambahkan sampel embedding global (Berbagi Pengetahuan / Knowledge Sharing)
         if global_embeddings:
             for item in global_embeddings:
                 idx = self.nrp_to_idx[item['nrp']]
@@ -144,7 +144,7 @@ class LocalTrainer:
         dataset = FaceDataset(self.data_path, global_embeddings=global_embeddings, transform=self.transform, mode="train", label_map=label_map)
         if len(dataset) < 2:
             print(f"[TRAINER] Data too small ({len(dataset)}) for training. Skipping round.")
-            return 0.0, 0.0, len(dataset)
+            return 0.0, 0.0, len(dataset), []
             
         if dataset.num_classes > 0 and dataset.num_classes != self.head.weight.shape[0]:
             self._update_head(dataset.num_classes, dataset.nrp_to_idx)
@@ -168,6 +168,7 @@ class LocalTrainer:
 
         print(f"[TRAINER] Round {round_num}: Training {len(dataset)} samples for {epochs} epochs")
         total_loss, correct, total = 0.0, 0, 0
+        epoch_history = []
         
         for epoch in range(epochs):
             epoch_loss = 0.0
@@ -214,7 +215,7 @@ class LocalTrainer:
                 total_loss += loss.item()
                 epoch_loss += loss.item()
                 
-                # METRICS: Calculate True Accuracy (Without Training Margin)
+                # METRIK: Hitung Akurasi Sebenarnya (Tanpa Margin Pelatihan)
                 with torch.no_grad():
                     logits_for_acc = F.linear(F.normalize(features_local), F.normalize(self.head.weight)) * self.head.s
                     _, predicted = torch.max(logits_for_acc.data, 1)
@@ -222,11 +223,13 @@ class LocalTrainer:
                     correct += (predicted == labels).sum().item()
             
             acc = correct / total if total > 0 else 0.0
-            print(f"  > Epoch {epoch+1}/{epochs} | Loss: {epoch_loss/len(dataloader):.4f} | Acc: {acc:.4f}")
+            avg_epoch_loss = epoch_loss / len(dataloader) if len(dataloader) > 0 else 0.0
+            print(f"  > Epoch {epoch+1}/{epochs} | Loss: {avg_epoch_loss:.4f} | Acc: {acc:.4f}")
+            epoch_history.append({"epoch": epoch + 1, "loss": avg_epoch_loss, "accuracy": acc})
                 
         avg_loss = total_loss / (len(dataloader) * epochs) if len(dataloader) > 0 else 0.0
         accuracy = correct / total if total > 0 else 0.0
-        return avg_loss, accuracy, total
+        return avg_loss, accuracy, total, epoch_history
 
     def evaluate(self, global_embeddings=None, label_map=None):
         dataset = FaceDataset(self.data_path, global_embeddings=global_embeddings, transform=self.val_transform, mode="val", label_map=label_map)
@@ -255,7 +258,7 @@ class LocalTrainer:
                 if emb_mask.any():
                     features[emb_mask] = embs[emb_mask]
                 
-                # True Accuracy for Reporting
+                # Akurasi Sebenarnya untuk Pelaporan
                 logits = F.linear(F.normalize(features), F.normalize(self.head.weight)) * self.head.s
                 outputs = self.head(features, labels)
                 loss = criterion(outputs, labels)
@@ -288,7 +291,7 @@ class LocalTrainer:
         self.nrp_to_idx = new_nrp_to_idx
 
     def _is_shared_param(self, name):
-        """Strict filter for pFedFace: Exclude BatchNorm."""
+        """Filter ketat untuk pFedFace: Kecualikan BatchNorm."""
         name = name.lower()
         if any(x in name for x in ['bn', 'running_', 'num_batches_tracked']):
             return False

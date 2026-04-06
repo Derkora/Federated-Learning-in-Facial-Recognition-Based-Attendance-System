@@ -6,17 +6,17 @@ def identify_user_globally(query_embedding, local_embeddings_dict, threshold=0.3
     if not local_embeddings_dict:
         return "Unknown", 0.0
     
-    # Prepare Query Tensor
+    # Siapkan Tensor Query
     query_tensor = torch.from_numpy(query_embedding).float() if isinstance(query_embedding, np.ndarray) else query_embedding.float()
     if query_tensor.dim() == 1:
         query_tensor = query_tensor.unsqueeze(0)
     
-    # Force L2 Normalization (Critical for both Cosine and normalized Euclidean)
+    # Paksa Normalisasi L2 (Kritis untuk Cosine dan Euclidean ternormalisasi)
     query_tensor = F.normalize(query_tensor, p=2, dim=1)
     
     best_match = "Unknown"
     max_sim = -1.0
-    min_dist = 10.0 # High value for Euclidean search
+    min_dist = 10.0 # Nilai tinggi untuk pencarian Euclidean
     
     for user_id, ref_embedding in local_embeddings_dict.items():
         ref_tensor = torch.from_numpy(ref_embedding).float() if isinstance(ref_embedding, np.ndarray) else ref_embedding.float()
@@ -39,11 +39,11 @@ def identify_user_globally(query_embedding, local_embeddings_dict, threshold=0.3
                 min_dist = dist
                 best_match = user_id
 
-    # Confidence Calculation & Thresholding
+    # Perhitungan Kepercayaan & Ambang Batas
     if metric == "cosine":
         confidence = float(max_sim)
     else:
-        # Convert Euclidean [0, 2] to similarity [0, 1]
+        # Konversi Euclidean [0, 2] menjadi kemiripan [0, 1]
         confidence = float(1.0 - (min_dist / 2.0))
         
     if confidence < threshold:

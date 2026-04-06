@@ -2,20 +2,20 @@
 
 {% block content %}
 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-    <h2 style="margin: 0;">Edge Terminal: {{ client_id }}</h2>
+    <h2 style="margin: 0;">Edge Client: {{ client_id }}</h2>
     <span class="badge" id="model-badge">Model v{{ model_version }}</span>
 </div>
 <div style="position: relative; overflow: hidden; border-radius: 12px; background: #000;">
     <img id="video-stream" src="/video_feed" style="width: 100%; height: auto; display: block;">
     <div
         style="position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 4px; font-size: 0.7rem;">
-        🔴 LIVE STREAMING (REMOTE) <span id="virtual-indicator" style="display:none; color:#f87171; margin-left:5px;">|
-            VIRTUAL CAMERA</span>
+        🔴 SIARAN LANGSUNG (REMOTE) <span id="virtual-indicator" style="display:none; color:#f87171; margin-left:5px;">|
+            KAMERA VIRTUAL</span>
     </div>
 </div>
 
 <div class="result-card" id="status-card">
-    Scanning faces...
+    Memindai wajah...
 </div>
 <button id="btn-browser-cam" class="btn"
     style="width: 100%; margin-top: 1rem; background: rgba(255,255,255,0.05); color: var(--text-muted); border: 1px solid rgba(255,255,255,0.1); padding: 0.8rem;">
@@ -64,9 +64,9 @@
 
             if (data.matched && data.matched !== "Standby") {
                 if (data.matched !== "Unknown") {
-                    statusCard.innerHTML = `<span style="color: #10b981;">Accepted: ${data.matched}</span> <br><small>${(data.confidence * 100).toFixed(1)}% | ${data.latency_ms}ms</small>`;
+                    statusCard.innerHTML = `<span style="color: #10b981;">Diterima: ${data.matched}</span> <br><small>${(data.confidence * 100).toFixed(1)}% | ${data.latency_ms}ms</small>`;
                 } else {
-                    statusCard.innerText = "Scanning faces...";
+                    statusCard.innerText = "Memindai wajah...";
                     statusCard.style.color = "#f8fafc";
                 }
             } else {

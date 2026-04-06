@@ -2,19 +2,20 @@
 
 {% block content %}
 <div class="glass" style="padding: 1.5rem;">
-    <h2>Today's Attendance Board</h2>
-    <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 2rem;">Real-time monitoring of today's student
-        check-ins across all terminals.</p>
+    <h2>Papan Kehadiran Hari Ini</h2>
+    <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 2rem;">Pemantauan kehadiran mahasiswa hari ini
+        secara real-time dari seluruh terminal.</p>
 
     <div style="overflow-x: auto;">
         <table>
             <thead>
                 <tr>
                     <th>NRP</th>
-                    <th>Name</th>
+                    <th>Nama</th>
                     <th>Status</th>
-                    <th>Time</th>
+                    <th>Waktu</th>
                     <th>Confidence</th>
+                    <th>Client Asal</th>
                 </tr>
             </thead>
             <tbody>
@@ -35,12 +36,14 @@
                     </td>
                     <td>{{ record.timestamp.strftime('%H:%M:%S') if record.timestamp else '-' }}</td>
                     <td>{{ (record.confidence * 100) | round(1) }}%</td>
+                    <td><span class="badge" style="background: rgba(79, 70, 229, 0.1); color: #818cf8;">{{
+                            record.edge_id }}</span></td>
                 </tr>
                 {% endfor %}
                 {% if not records %}
                 <tr>
                     <td colspan="6" style="padding: 40px; text-align: center; color: var(--text-muted);">
-                        No students registered in the system yet.
+                        Belum ada data mahasiswa yang terdaftar di sistem.
                     </td>
                 </tr>
                 {% endif %}

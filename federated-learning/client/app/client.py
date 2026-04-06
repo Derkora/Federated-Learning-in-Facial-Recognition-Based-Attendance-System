@@ -4,6 +4,7 @@ import numpy as np
 from app.utils.trainer import LocalTrainer, TrainingNaNError
 from app.utils.mobilefacenet import MobileFaceNet, ArcMarginProduct
 import os
+import json
 import requests
 import base64
 import io
@@ -19,7 +20,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         self.device = device if isinstance(device, torch.device) else torch.device(device)
         self.label_map = None
         
-        # Priority: Load from local archive (Permanent Label Mastery)
+        # Prioritas: Muat dari arsip lokal (Penguasaan Label Permanen)
         map_path = os.path.join(self.data_path, "models", "label_map.json")
         if os.path.exists(map_path):
             import json
@@ -42,7 +43,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         rnd = config.get("round", 0)
         print(f"FL Fit [Round {rnd}]: Receiving {len(parameters)} parameters...")
         
-        # Redundant Sync: Ensure label map is present
+        # Sinkronisasi Redundan: Pastikan label map tersedia
         if not self.label_map and "label_map" in config:
             self.label_map = json.loads(config["label_map"])
             print(f"[CLIENT] Received label_map via fit config.")
@@ -81,7 +82,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         total_rounds = config.get("total_rounds", 20)
         
         try:
-            loss, accuracy, num_samples = self.trainer.train(
+            loss, accuracy, num_samples, epoch_history = self.trainer.train(
                 epochs=epochs, lr=lr, round_num=rnd, 
                 global_embeddings=global_embs,
                 label_map=self.label_map,
@@ -90,7 +91,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
             status = "Success"
         except TrainingNaNError as e:
             print(f"[CLIENT] {e}. Reporting error to server and rolling back.")
-            loss, accuracy, num_samples = 0.0, 0.0, 0
+            loss, accuracy, num_samples, epoch_history = 0.0, 0.0, 0, []
             status = "Training Error"
         
         model_dir = os.path.join(self.data_path, "models")
@@ -102,7 +103,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
             f.write(str(rnd))
             
 
-        # Evaluate on validation set for metrics reporting
+        # Evaluasi pada set validasi untuk pelaporan metrik
         val_loss, val_accuracy, _ = self.trainer.evaluate(global_embeddings=global_embs)
         
         return self.trainer.get_backbone_parameters(personalized=True), num_samples, {
@@ -110,7 +111,9 @@ class FaceRecognitionClient(fl.client.NumPyClient):
             "accuracy": accuracy,
             "val_loss": val_loss,
             "val_accuracy": val_accuracy,
-            "status": status
+            "status": status,
+            "hostname": os.getenv("HOSTNAME", "unknown-client"),
+            "epoch_history": json.dumps(epoch_history)
         }
 
     def evaluate(self, parameters, config):

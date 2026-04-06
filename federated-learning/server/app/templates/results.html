@@ -3,58 +3,40 @@
 {% block content %}
 <div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
     <h1 style="color: var(--accent);">Hasil Evaluasi (Federated Learning)</h1>
-    <p style="color: var(--text-muted);">Halaman ini berisi tabel hasil evaluasi dengan rincian per-client dan server
-        yang dapat disalin untuk kebutuhan paper atau skripsi Anda.</p>
+    <p style="color: var(--text-muted);">Halaman ini berisi tabel hasil evaluasi teragregasi dan performa individual
+        tiap terminal (client).</p>
 </div>
 
-<!-- Table 1: Training Metrics -->
+<!-- Table 1: Global Server Aggregation -->
 <div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <h2>1. Kontribusi Performa Pelatihan (Global vs Client Breakdown)</h2>
-        <button class="btn btn-primary" onclick="copyTable('training-table')">Salin Tabel</button>
+        <h2 style="color: var(--accent);">1. Performa Agregasi Global (Server)</h2>
+        <button class="btn btn-primary" onclick="copyTable('server-table')">Salin Tabel</button>
     </div>
     <div style="overflow-x: auto;">
-        <table id="training-table" class="result-table">
+        <table id="server-table" class="result-table">
             <thead>
                 <tr>
-                    <th rowspan="2">Ronde</th>
-                    <th colspan="2">Server (Agregasi)</th>
-                    <th rowspan="2">Weight Div.</th>
-                    <th colspan="2">Client 1</th>
-                    <th colspan="2">Client 2</th>
-                </tr>
-                <tr>
-                    <th>Loss</th>
-                    <th>Acc (%)</th>
-                    <th>Loss</th>
-                    <th>Acc (%)</th>
-                    <th>Loss</th>
-                    <th>Acc (%)</th>
+                    <th>Ronde</th>
+                    <th>Loss Global</th>
+                    <th>Akurasi Global (%)</th>
+                    <th>Weight Divergence</th>
                 </tr>
             </thead>
             <tbody>
                 {% if status.metrics.round_history %}
-                {% for h in status.metrics.round_history %}
+                {% for r in status.metrics.round_history %}
                 <tr>
-                    <td>{{ h.round }}</td>
-                    <td>{{ h.server.loss|round(4) }}</td>
-                    <td>{{ (h.server.accuracy * 100)|round(2) }}%</td>
-                    <td>{{ h.server.weight_divergence|round(6) }}</td>
-
-                    <!-- Client 1 -->
-                    {% set c1 = h.clients.get('terminal-1') or h.clients.get('client-0') %}
-                    <td>{{ c1.loss|round(4) if c1 else '--' }}</td>
-                    <td>{{ (c1.accuracy * 100)|round(2) if c1 else '--' }}%</td>
-
-                    <!-- Client 2 -->
-                    {% set c2 = h.clients.get('terminal-2') or h.clients.get('client-1') %}
-                    <td>{{ c2.loss|round(4) if c2 else '--' }}</td>
-                    <td>{{ (c2.accuracy * 100)|round(2) if c2 else '--' }}%</td>
+                    <td>{{ r.round }}</td>
+                    <td>{{ "%.4f"|format(r.server.loss) if r.server.loss is defined else "-" }}</td>
+                    <td>{{ "%.2f"|format(r.server.accuracy * 100) if r.server.accuracy is defined else "-" }}%</td>
+                    <td style="color: #a5b4fc;">{{ "%.6f"|format(r.server.weight_divergence) if
+                        r.server.weight_divergence is defined else "-" }}</td>
                 </tr>
                 {% endfor %}
                 {% else %}
                 <tr>
-                    <td colspan="8" style="text-align: center;">Data pelatihan tidak tersedia.</td>
+                    <td colspan="5" style="text-align: center;">Belum ada ronde pelatihan yang selesai.</td>
                 </tr>
                 {% endif %}
             </tbody>
@@ -62,9 +44,60 @@
     </div>
 </div>
 
+<!-- Dynamic Client Performance Tables -->
+{% for cid in status.metrics.unique_client_ids %}
+<div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2 style="color: var(--accent);">Performa Client: {{ cid }}</h2>
+        <button class="btn btn-primary" onclick="copyTable('table-{{ cid }}')">Salin Tabel</button>
+    </div>
+    <div style="overflow-x: auto;">
+        <table id="table-{{ cid }}" class="result-table">
+            <thead>
+                <tr>
+                    <th>Ronde</th>
+                    <th>Samples</th>
+                    <th>Loss Akhir</th>
+                    <th>Akurasi Akhir (%)</th>
+                    <th>Divergence (L2)</th>
+                    <th>Riwayat Epoch (Loss / Acc)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in status.metrics.round_history %}
+                {% if cid in r.clients %}
+                {% set c = r.clients[cid] %}
+                <tr>
+                    <td>{{ r.round }}</td>
+                    <td>{{ c.num_samples }}</td>
+                    <td>{{ "%.4f"|format(c.loss) }}</td>
+                    <td>{{ "%.2f"|format(c.accuracy * 100) }}%</td>
+                    <td style="color: var(--accent-light);">{{ "%.6f"|format(c.divergence) if c.divergence is defined
+                        else "-" }}</td>
+                    <td style="font-size: 0.85rem; font-family: 'JetBrains Mono';">
+                        {% if c.epoch_history %}
+                        <div style="max-height: 100px; overflow-y: auto;">
+                            {% for eh in c.epoch_history %}
+                            E{{ eh.epoch }}: {{ "%.3f"|format(eh.loss) }} / {{ "%.1f"|format(eh.accuracy * 100) }}%<br>
+                            {% endfor %}
+                        </div>
+                        {% else %}
+                        -
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endif %}
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endfor %}
+
+<!-- Table 3: Economic & Operational Metrics -->
 <div class="glass" style="padding: 2rem;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <h2>2. Nilai Ekonomi & Operasional</h2>
+        <h2 style="color: var(--accent);">N. Nilai Ekonomi & Operasional (Federated)</h2>
         <button class="btn btn-primary" onclick="copyTable('economic-table')">Salin Tabel</button>
     </div>
     <div style="overflow-x: auto;">
@@ -74,33 +107,29 @@
                     <th>Tipe Metrik</th>
                     <th>Sub-Metrik</th>
                     <th>Nilai</th>
-                    <th>Biaya (IDR)</th>
+                    <th>Biaya (Estimasi IDR)</th>
                 </tr>
             </thead>
             <tbody>
                 <tr>
                     <td rowspan="2"><b>Transmisi</b></td>
-                    <td>Sinkronisasi Backbone (Unggah/Unduh)</td>
+                    <td>Sinkronisasi Backbone (Komunikasi)</td>
                     <td>{{ status.metrics.backbone_sync_mb }} MB</td>
                     <td rowspan="2">Rp {{ status.metrics.transmission_cost_idr }}</td>
                 </tr>
                 <tr>
-                    <td>Sinkronisasi Registri & BN</td>
+                    <td>Sinkronisasi Registry (Aset)</td>
                     <td>{{ status.metrics.registry_sync_mb }} MB</td>
                 </tr>
                 <tr>
                     <td rowspan="2"><b>Komputasi</b></td>
-                    <td>Konsumsi Energi (Total)</td>
+                    <td>Konsumsi Energi (Sistem)</td>
                     <td>{{ status.metrics.compute_energy_kwh }} kWh</td>
                     <td rowspan="2">Rp {{ status.metrics.compute_cost_idr }}</td>
                 </tr>
                 <tr>
-                    <td>Total Durasi Siklus</td>
-                    <td>{{ (status.metrics.total_round_time_s * 1000)|round(0) }} ms</td>
-                </tr>
-                <tr>
-                    <td colspan="2"><b>Status (Confidence)</b></td>
-                    <td colspan="2" style="color: #00ff00;">Berhasil (Selesai)</td>
+                    <td>Total Waktu Pelatihan</td>
+                    <td>{{ status.metrics.total_round_time_s }} s</td>
                 </tr>
             </tbody>
         </table>
@@ -114,14 +143,13 @@
         margin-top: 1rem;
         background: rgba(0, 0, 0, 0.2);
         color: #fff;
-        font-size: 0.85rem;
     }
 
     .result-table th,
     .result-table td {
         border: 1px solid rgba(255, 255, 255, 0.1);
-        padding: 10px;
-        text-align: center;
+        padding: 12px 15px;
+        text-align: left;
     }
 
     .result-table th {

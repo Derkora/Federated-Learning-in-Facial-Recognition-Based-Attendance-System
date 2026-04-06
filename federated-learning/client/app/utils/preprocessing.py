@@ -9,7 +9,7 @@ DEVICE = torch.device('cpu')
 
 class ImageProcessor:
     def __init__(self):
-        # MTCNN for face detection
+        # MTCNN untuk deteksi wajah
         self.mtcnn = MTCNN(
             image_size=112, 
             margin=20, 
@@ -18,13 +18,13 @@ class ImageProcessor:
             post_process=False 
         )
         
-        # Standard MobileFaceNet Normalization: [0, 1] range shifted to [-1, 1]
+        # Normalisasi Standar MobileFaceNet: rentang [0, 1] digeser menjadi [-1, 1]
         self.normalize = T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
 
     def detect_face(self, img, save_path=None):
         """
-        Detect face and return (face_tensor, box, probability).
-        Box format: [x, y, x2, y2]
+        Deteksi wajah dan kembalikan (face_tensor, box, probabilitas).
+        Format kotak: [x, y, x2, y2]
         """
         try:
             boxes, probs = self.mtcnn.detect(img)
@@ -39,28 +39,28 @@ class ImageProcessor:
 
     def prepare_for_model(self, face_data):
         """
-        Converts PIL face or Tensor into 112x96 tensor with normalization.
-        Output Shape: (1, 3, 112, 96)
+        Mengonversi wajah PIL atau Tensor menjadi tensor 112x96 dengan normalisasi.
+        Bentuk Keluaran: (1, 3, 112, 96)
         """
         if isinstance(face_data, torch.Tensor):
-            # MTCNN with post_process=False returns [0, 255] float
-            # Scale to [0, 1] before any PIL conversion or normalization
+            # MTCNN dengan post_process=False mengembalikan float [0, 255]
+            # Skala ke [0, 1] sebelum konversi PIL atau normalisasi apa pun
             if face_data.max() > 1.0:
                 face_tensor = face_data.float() / 255.0
             else:
                 face_tensor = face_data.float()
 
-            # Ensure 112x96 shape (H, W)
+            # Pastikan bentuk 112x96 (H, W)
             if face_tensor.shape[1:] != (112, 96):
                 img_pil = TF.to_pil_image(face_tensor)
                 img_resized = img_pil.resize((96, 112), Image.BILINEAR)
                 face_tensor = TF.to_tensor(img_resized)
         else:
-            # Assume PIL Input
+            # Asumsikan Input PIL
             img_resized = face_data.resize((96, 112), Image.BILINEAR)
             face_tensor = TF.to_tensor(img_resized)
 
-        # Final Normalization to [-1, 1]
+        # Normalisasi Akhir ke [-1, 1]
         normalized_tensor = self.normalize(face_tensor)
         
         return normalized_tensor.unsqueeze(0).to(DEVICE)

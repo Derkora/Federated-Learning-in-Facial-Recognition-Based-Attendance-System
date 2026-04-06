@@ -4,6 +4,9 @@ import uvicorn
 import cv2
 import numpy as np
 import time
+from PIL import Image
+import io
+import base64
 from fastapi import FastAPI, Request, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -33,7 +36,7 @@ async def index(request: Request):
         "request": request,
         "client_id": fl_manager.client_id,
         "model_version": fl_manager.model_version,
-        "title": "Edge Terminal"
+        "title": "Edge Client"
     })
 
 # API Pengenalan Wajah (Inference)
@@ -42,10 +45,6 @@ async def index(request: Request):
 @app.post("/api/inference")
 async def api_inference(data: dict, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     try:
-        from PIL import Image
-        import io
-        import base64
-        
         img_bytes = base64.b64decode(data['image'])
         img_pil = Image.open(io.BytesIO(img_bytes)).convert('RGB')
         
@@ -76,7 +75,7 @@ async def get_latest_result():
     return fl_manager.latest_result
 
 # API Registrasi Mahasiswa
-# Digunakan untuk mendaftarkan mahasiswa baru secara lokal di terminal ini.
+# Digunakan untuk mendaftarkan mahasiswa baru secara lokal di client ini.
 @app.post("/api/register")
 async def register_user(user_id: str, name: str, image_base64: str, db: Session = Depends(get_db)):
     try:
