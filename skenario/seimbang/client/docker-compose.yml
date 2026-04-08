@@ -1,0 +1,43 @@
+services:
+  client-fl:
+    build:
+      context: ../../../federated-learning
+      dockerfile: client/Dockerfile
+    container_name: client_fl_balanced
+    ports:
+      - "8081:8080"
+    environment:
+      - DATABASE_URL=postgresql://client:client123@client-fl-db-balanced:5432/fl_client
+      - SERVER_API_URL=http://${SERVER_IP}:8080
+      - FL_SERVER_ADDRESS=${SERVER_IP}:8085
+      - PYTHONUNBUFFERED=1
+      - HOSTNAME=${CLIENT_ID:-terminal-1}
+    depends_on:
+      client-fl-db-balanced:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+      - ${RAW_DATA_PATH_CLIENT}:/app/raw_data/students
+    networks:
+      - fl-network
+
+  client-fl-db-balanced:
+    image: postgres:15
+    container_name: db_client_fl_balanced
+    environment:
+      - POSTGRES_USER=client
+      - POSTGRES_PASSWORD=client123
+      - POSTGRES_DB=fl_client
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U client -d fl_client" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - ./data/db:/var/lib/postgresql/data
+    networks:
+      - fl-network
+
+networks:
+  fl-network:
+    driver: bridge

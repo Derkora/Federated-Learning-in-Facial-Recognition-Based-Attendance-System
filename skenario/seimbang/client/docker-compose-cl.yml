@@ -1,0 +1,42 @@
+services:
+  client-cl:
+    build:
+      context: ../../../centralized-learning
+      dockerfile: client/Dockerfile
+    container_name: client_cl_balanced
+    ports:
+      - "8081:8080"
+    environment:
+      - DATABASE_URL=postgresql://client:client123@client-cl-db-balanced:5432/cl_client
+      - SERVER_API_URL=http://${SERVER_IP}:8081
+      - PYTHONUNBUFFERED=1
+      - HOSTNAME=${CLIENT_ID:-terminal-1}
+    networks:
+      - cl-network
+    depends_on:
+      client-cl-db-balanced:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+      - ${RAW_DATA_PATH_CLIENT}:/app/raw_data/students
+
+  client-cl-db-balanced:
+    image: postgres:15
+    container_name: db_client_cl_balanced
+    environment:
+      - POSTGRES_USER=client
+      - POSTGRES_PASSWORD=client123
+      - POSTGRES_DB=cl_client
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U client -d cl_client" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - ./data/db:/var/lib/postgresql/data
+    networks:
+      - cl-network
+
+networks:
+  cl-network:
+    driver: bridge

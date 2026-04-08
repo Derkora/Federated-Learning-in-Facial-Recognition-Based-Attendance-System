@@ -1,0 +1,39 @@
+services:
+  server-cl:
+    build:
+      context: ../../../centralized-learning
+      dockerfile: server/Dockerfile
+    container_name: server_cl_balanced
+    ports:
+      - "8081:8080"
+    environment:
+      - DATABASE_URL=postgresql://server:server123@server-cl-db-balanced:5432/cl_server
+      - PYTHONUNBUFFERED=1
+    networks:
+      - cl-network
+    depends_on:
+      server-cl-db-balanced:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+
+  server-cl-db-balanced:
+    image: postgres:15
+    container_name: db_server_cl_balanced
+    environment:
+      - POSTGRES_USER=server
+      - POSTGRES_PASSWORD=server123
+      - POSTGRES_DB=cl_server
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U server -d cl_server" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - ./data/db:/var/lib/postgresql/data
+    networks:
+      - cl-network
+
+networks:
+  cl-network:
+    driver: bridge
