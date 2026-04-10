@@ -44,7 +44,7 @@
 <!-- Table 2: Economic & Operational Metrics -->
 <div class="glass" style="padding: 2rem;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <h2>2. Nilai Ekonomi & Operasional</h2>
+        <h2 style="color: var(--accent);">2. Nilai Ekonomi & Operasional (Centralized)</h2>
         <button class="btn btn-primary" onclick="copyTable('economic-table')">Salin Tabel</button>
     </div>
     <div style="overflow-x: auto;">
@@ -59,18 +59,18 @@
             </thead>
             <tbody>
                 <tr>
-                    <td rowspan="2"><b>Transmisi</b></td>
-                    <td>Unggahan (Gambar)</td>
-                    <td>{{ status.metrics.upload_volume_mb }} MB</td>
+                    <td rowspan="2"><b>Transmisi Data</b></td>
+                    <td>Total Bandwidth (Gambar + Model)</td>
+                    <td>{{ status.metrics.upload_volume_mb + status.metrics.download_volume_mb }} MB</td>
                     <td rowspan="2">Rp {{ status.metrics.transmission_cost_idr }}</td>
                 </tr>
                 <tr>
-                    <td>Unduhan (Model + Ref)</td>
-                    <td>{{ status.metrics.download_volume_mb }} MB</td>
+                    <td>Estimasi Total Bandwidth (Transmisi)</td>
+                    <td>{{ (status.metrics.upload_volume_mb + status.metrics.download_volume_mb) | round(2) }} MB</td>
                 </tr>
                 <tr>
-                    <td rowspan="2"><b>Komputasi</b></td>
-                    <td>Konsumsi Energi</td>
+                    <td rowspan="2"><b>Konsumsi Daya</b></td>
+                    <td>Energi Terpakai (Total Sistem)</td>
                     <td>{{ status.metrics.compute_energy_kwh }} kWh</td>
                     <td rowspan="2">Rp {{ status.metrics.compute_cost_idr }}</td>
                 </tr>

@@ -25,18 +25,19 @@
     </div>
 
     <div class="glass" style="padding: 1.5rem;">
-        <h3>Metrik Sistem</h3>
-        <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 1.5rem;">Performa model terpusat saat ini.
-        </p>
-
-        <div id="side-metrics">
-            <div class="metric-row"><span>Akurasi Global</span><b id="m-acc">-%</b></div>
-            <div class="metric-row"><span>Volume Unggahan</span><b id="m-vol">0 MB</b></div>
-            <div class="metric-row"><span>Pelatihan Terakhir</span><b id="m-time">-</b></div>
+        <h3 style="color: var(--accent); margin-bottom: 1.5rem;">⚙️ Konfigurasi Pelatihan</h3>
+        <div id="side-config" style="margin-bottom: 2rem;">
+            <div class="metric-row"><span>Total Epoch</span><b>45</b></div>
+            <div class="metric-row"><span>Batch Size</span><b>32</b></div>
+            <div class="metric-row"><span>Learning Rate</span><b>Adaptive</b></div>
+            <div class="metric-row"><span>Optimizer</span><b>AdamW</b></div>
         </div>
 
-        <div style="margin-top:2rem; height: 180px;">
-            <canvas id="accuracyChart"></canvas>
+        <h3 style="color: var(--accent); margin-bottom: 1.5rem;">Pelatihan Terakhir</h3>
+        <div id="side-metrics">
+            <div class="metric-row"><span>Akurasi Global</span><b id="m-acc">-%</b></div>
+            <div class="metric-row"><span>Volume Transmisi</span><b id="m-vol">0 MB</b></div>
+            <div class="metric-row"><span>Durasi Total</span><b id="m-time">-</b></div>
         </div>
     </div>
 </div>

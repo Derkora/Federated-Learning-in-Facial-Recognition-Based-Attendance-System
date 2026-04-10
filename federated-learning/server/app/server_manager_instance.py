@@ -108,45 +108,12 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                 print(f"[ERROR] Gagal memproses parameter agregasi: {e}")
                 
         if aggregated_metrics or results:
-            # Hitung Weight Divergence (Avg L2 Distance)
-            weight_div = 0.0
-            if results and aggregated_parameters:
-                try:
-                    target_params = fl.common.parameters_to_ndarrays(aggregated_parameters)
-                    total_dist = 0
-                    for _, fit_res in results:
-                        client_params = fl.common.parameters_to_ndarrays(fit_res.parameters)
-                        dist = 0
-                        for cp, tp in zip(client_params, target_params):
-                            dist += np.linalg.norm(cp - tp)
-                        total_dist += dist / len(client_params)
-                    weight_div = round(total_dist / len(results), 6)
-                except: pass
-            
-            if aggregated_metrics:
-                aggregated_metrics["weight_divergence"] = weight_div
-            
-            # Mencatat rincian per-client
-            client_data = {}
-            for i, (client_proxy, fit_res) in enumerate(results):
-                # Menghitung divergensi per-client
-                client_params = fl.common.parameters_to_ndarrays(fit_res.parameters)
-                target_params = fl.common.parameters_to_ndarrays(aggregated_parameters) if aggregated_parameters else None
-                
-                c_div = 0.0
-                if target_params:
-                    c_dist = 0
-                    for cp, tp in zip(client_params, target_params):
-                        c_dist += np.linalg.norm(cp - tp)
-                    c_div = round(c_dist / len(client_params), 6)
-                
                 # CID default atau gunakan hostname jika ada di metrik
                 cid = fit_res.metrics.get("hostname") or getattr(client_proxy, "cid", f"client-{i}")
                 
                 # Menggabungkan semua metrik
                 m = fit_res.metrics.copy()
                 m["num_samples"] = fit_res.num_examples
-                m["divergence"] = c_div
                 
                 # Dekoding epoch_history jika berupa string
                 eh = fit_res.metrics.get("epoch_history", "[]")
@@ -228,25 +195,37 @@ class FLServerManager:
     def update_metrics(self, new_data):
         self.metrics.update(new_data)
         
-        # 1. Transmisi
-        bb_mb = self.metrics.get("backbone_sync_mb", 0)
-        reg_mb = self.metrics.get("registry_sync_mb", 0)
-        cost_per_mb = ECONOMICS["transmission_cost_per_mb"]
-        self.metrics["transmission_cost_idr"] = round((bb_mb + reg_mb) * cost_per_mb, 2)
+        # 1. Transmisi (Estimatif berdasarkan Ronde & Client yang terhubung)
+        current_rounds = len(self.metrics.get("round_history", []))
+        num_clients = len(self.metrics.get("unique_client_ids", []))
+        bb_size = ECONOMICS["estimated_backbone_size_mb"]
+        reg_size = ECONOMICS["estimated_registry_size_mb"]
+        
+        # Total BB = Ronde * Client * 2 (Upload + Download) * Ukuran Model
+        self.metrics["backbone_sync_mb"] = round(current_rounds * num_clients * 2 * bb_size, 2)
+        self.metrics["registry_sync_mb"] = round(num_clients * reg_size, 2)
+        
+        total_mb = self.metrics["backbone_sync_mb"] + self.metrics["registry_sync_mb"]
+        # Hitung biaya berdasarkan per-MB (Rp 3,25 / MB)
+        self.metrics["transmission_cost_idr"] = round(total_mb * 3.25, 2)
         
         # 2. Komputasi (Server + Aggregate Clients)
         energy_kwh = self.metrics.get("compute_energy_kwh", 0)
         if energy_kwh == 0:
-            # Estimasi daya dari config
-            duration_h = self.metrics.get("total_round_time_s", 0) / 3600
+            duration_s = self.metrics.get("total_round_time_s", 0)
+            if duration_s == 0:
+                # Fallback jika waktu belum tercatat, ambil rata-rata 3 menit per ronde
+                duration_s = current_rounds * 180
+            
+            duration_h = duration_s / 3600
             server_p = ECONOMICS["estimated_server_power_kw"]
             client_p = ECONOMICS["estimated_client_power_kw"]
             
-            # Asumsi 2 client aktif untuk estimasi daya total sistem
-            energy_kwh = duration_h * (server_p + 2 * client_p)
+            # Daya total = Daya Server + (Jumlah Client * Daya per Client)
+            energy_kwh = duration_h * (server_p + num_clients * client_p)
             self.metrics["compute_energy_kwh"] = round(energy_kwh, 6)
             
-        cost_per_kwh = ECONOMICS["compute_cost_per_kwh"]
+        cost_per_kwh = ECONOMICS["compute_cost_per_kwh"] # Rp 1.444,70
         self.metrics["compute_cost_idr"] = round(energy_kwh * cost_per_kwh, 2)
 
     def record_round_data(self, round_num, server_metrics, client_metrics):

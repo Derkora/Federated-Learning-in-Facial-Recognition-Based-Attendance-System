@@ -20,7 +20,6 @@
                     <th>Ronde</th>
                     <th>Loss Global</th>
                     <th>Akurasi Global (%)</th>
-                    <th>Weight Divergence</th>
                 </tr>
             </thead>
             <tbody>
@@ -30,8 +29,6 @@
                     <td>{{ r.round }}</td>
                     <td>{{ "%.4f"|format(r.server.loss) if r.server.loss is defined else "-" }}</td>
                     <td>{{ "%.2f"|format(r.server.accuracy * 100) if r.server.accuracy is defined else "-" }}%</td>
-                    <td style="color: #a5b4fc;">{{ "%.6f"|format(r.server.weight_divergence) if
-                        r.server.weight_divergence is defined else "-" }}</td>
                 </tr>
                 {% endfor %}
                 {% else %}
@@ -59,7 +56,6 @@
                     <th>Samples</th>
                     <th>Loss Akhir</th>
                     <th>Akurasi Akhir (%)</th>
-                    <th>Divergence (L2)</th>
                     <th>Riwayat Epoch (Loss / Acc)</th>
                 </tr>
             </thead>
@@ -72,8 +68,6 @@
                     <td>{{ c.num_samples }}</td>
                     <td>{{ "%.4f"|format(c.loss) }}</td>
                     <td>{{ "%.2f"|format(c.accuracy * 100) }}%</td>
-                    <td style="color: var(--accent-light);">{{ "%.6f"|format(c.divergence) if c.divergence is defined
-                        else "-" }}</td>
                     <td style="font-size: 0.85rem; font-family: 'JetBrains Mono';">
                         {% if c.epoch_history %}
                         <div style="max-height: 100px; overflow-y: auto;">
@@ -112,18 +106,18 @@
             </thead>
             <tbody>
                 <tr>
-                    <td rowspan="2"><b>Transmisi</b></td>
-                    <td>Sinkronisasi Backbone (Komunikasi)</td>
-                    <td>{{ status.metrics.backbone_sync_mb }} MB</td>
+                    <td rowspan="2"><b>Transmisi Data</b></td>
+                    <td>Total Bandwidth (Model + Registry)</td>
+                    <td>{{ status.metrics.backbone_sync_mb + status.metrics.registry_sync_mb }} MB</td>
                     <td rowspan="2">Rp {{ status.metrics.transmission_cost_idr }}</td>
                 </tr>
                 <tr>
-                    <td>Sinkronisasi Registry (Aset)</td>
-                    <td>{{ status.metrics.registry_sync_mb }} MB</td>
+                    <td>Estimasi Total Bandwidth (Transmisi)</td>
+                    <td>{{ (status.metrics.backbone_sync_mb + status.metrics.registry_sync_mb) | round(2) }} MB</td>
                 </tr>
                 <tr>
-                    <td rowspan="2"><b>Komputasi</b></td>
-                    <td>Konsumsi Energi (Sistem)</td>
+                    <td rowspan="2"><b>Konsumsi Daya</b></td>
+                    <td>Energi Terpakai (Total Sistem)</td>
                     <td>{{ status.metrics.compute_energy_kwh }} kWh</td>
                     <td rowspan="2">Rp {{ status.metrics.compute_cost_idr }}</td>
                 </tr>

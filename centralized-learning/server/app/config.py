@@ -33,5 +33,7 @@ TRAINING_PARAMS = {
 ECONOMICS = {
     "transmission_cost_per_mb": 3.25,
     "compute_cost_per_kwh": 1444.70,
-    "estimated_server_power_kw": 0.1  # Estimasi daya 100W jika CodeCarbon tidak tersedia
+    "estimated_server_power_kw": 0.1,  # 100W laptop/server
+    "estimated_backbone_size_mb": 4.5,
+    "estimated_registry_size_mb": 1.0
 }

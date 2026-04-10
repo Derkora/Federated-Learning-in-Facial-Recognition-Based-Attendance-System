@@ -64,20 +64,24 @@ class CentralizedServerManager:
         # 1. Transmisi: Upload + Download
         upload_mb = self.metrics.get("upload_volume_mb", 0)
         download_mb = self.metrics.get("download_volume_mb", 0)
-        cost_per_mb = ECONOMICS["transmission_cost_per_mb"]
-        self.metrics["transmission_cost_idr"] = round((upload_mb + download_mb) * cost_per_mb, 2)
+        total_mb = upload_mb + download_mb
+        
+        # Hitung biaya berdasarkan per-MB (Rp 3,25 / MB)
+        self.metrics["transmission_cost_idr"] = round(total_mb * 3.25, 2)
         
         # 2. Komputasi: kWh -> IDR
-        # Jika CodeCarbon tidak tersedia, gunakan estimasi dari durasi
         energy_kwh = self.metrics.get("compute_energy_kwh", 0)
         if energy_kwh == 0:
-            duration_h = self.metrics.get("total_round_time_s", 0) / 3600
-            # Estimasi daya dari konfigurasi jika CodeCarbon tidak tersedia
+            duration_s = self.metrics.get("training_duration_s", 0)
+            if duration_s == 0:
+                duration_s = self.metrics.get("total_round_time_s", 0)
+            
+            duration_h = duration_s / 3600
             power_kw = ECONOMICS["estimated_server_power_kw"]
             energy_kwh = duration_h * power_kw
             self.metrics["compute_energy_kwh"] = round(energy_kwh, 6)
             
-        cost_per_kwh = ECONOMICS["compute_cost_per_kwh"]
+        cost_per_kwh = ECONOMICS["compute_cost_per_kwh"] # Rp 1.444,70
         self.metrics["compute_cost_idr"] = round(energy_kwh * cost_per_kwh, 2)
 
     def get_status(self):

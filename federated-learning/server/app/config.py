@@ -34,7 +34,7 @@ ECONOMICS = {
     "transmission_cost_per_mb": 3.25,
     "compute_cost_per_kwh": 1444.70,
     "estimated_server_power_kw": 0.1,
-    "estimated_client_power_kw": 0.01,
+    "estimated_client_power_kw": 0.01, # 10W edge device (Raspberry Pi/Jetson)
     "estimated_backbone_size_mb": 4.5,
-    "estimated_registry_size_mb": 1.0  # Centroids + Registry sync
+    "estimated_registry_size_mb": 1.0
 }
