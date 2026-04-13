@@ -1,7 +1,7 @@
 services:
   server-fl:
     build:
-      context: ../../../federated-learning
+      context: ../../federated-learning
       dockerfile: server/Dockerfile
     container_name: server_fl_balanced
     ports:

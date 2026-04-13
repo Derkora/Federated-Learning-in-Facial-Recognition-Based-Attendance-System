@@ -2,16 +2,16 @@
 
 {% block content %}
 <div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
-    <h1 style="color: var(--accent);">Hasil Evaluasi (Centralized Learning)</h1>
-    <p style="color: var(--text-muted);">Halaman ini berisi tabel hasil evaluasi yang dapat disalin untuk kebutuhan
-        paper atau skripsi Anda.</p>
+    <h1 style="color: var(--accent); margin: 0; font-size: 1.8rem;">Hasil Evaluasi Terpusat</h1>
+    <p style="color: var(--text-muted); margin-top: 0.5rem;">Performansi model global yang dilatih di server pusat.</p>
 </div>
 
-<!-- Table 1: Training Metrics -->
-<div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <h2>1. Kontribusi Performa Pelatihan (Per Epoch)</h2>
-        <button class="btn btn-primary" onclick="copyTable('training-table')">Salin Tabel</button>
+<!-- Table 1: Global Performance -->
+<div class="glass" style="padding: 1.5rem; margin-bottom: 2rem;">
+    <div
+        style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+        <h2 style="color: var(--accent); margin: 0; font-size: 1.3rem;">1. Performa Pelatihan</h2>
+        <button class="btn btn-primary" onclick="copyTable('training-table')">Salin</button>
     </div>
     <div style="overflow-x: auto;">
         <table id="training-table" class="result-table">

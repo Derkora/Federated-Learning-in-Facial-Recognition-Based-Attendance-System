@@ -1,5 +1,6 @@
 import os
 import time
+from datetime import datetime, timedelta, timezone
 import requests
 
 # Sinkronisasi data ke server pusat
@@ -11,7 +12,7 @@ def sync_record_to_server(user_id, name, confidence, client_id):
         "user_id": user_id,
         "name": name,
         "client_id": client_id,
-        "timestamp": time.strftime('%Y-%m-%dT%H:%M:%S'),
+        "timestamp": datetime.now(timezone(timedelta(hours=7))).strftime('%Y-%m-%dT%H:%M:%S'),
         "confidence": confidence
     }]
     

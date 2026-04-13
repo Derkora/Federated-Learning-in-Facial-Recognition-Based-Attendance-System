@@ -1,32 +1,33 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div class="glass" style="padding: 1.5rem;">
-    <h2>Papan Kehadiran Hari Ini</h2>
-    <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 2rem;">Pemantauan kehadiran mahasiswa hari ini
-        secara real-time.</p>
+<div class="glass" style="padding: 1.5rem; margin-bottom: 2rem;">
+    <h2 style="color: var(--accent); margin-top: 0; font-size: 1.4rem;">Data Mahasiswa Terpusat</h2>
+    <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 2rem;">Pemantauan aktivitas presensi real-time
+        dari seluruh terminal (Centralized Method).</p>
+</div>
 
-    <div style="overflow-x: auto;">
-        <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem; text-align: left;">
-            <thead>
-                <tr style="border-bottom: 2px solid var(--accent-low);">
-                    <th style="padding: 12px;">NRP</th>
-                    <th style="padding: 12px;">Nama</th>
-                    <th style="padding: 12px;">Status</th>
-                    <th style="padding: 12px;">Terakhir Terlihat (Hari Ini)</th>
-                    <th style="padding: 12px;">Confidence</th>
-                    <th style="padding: 12px;">Client Asal</th>
-                </tr>
-            </thead>
-            <tbody id="attendance-body">
-                <tr>
-                    <td colspan="5" style="padding: 40px; text-align: center; color: var(--text-muted);">
-                        Memuat data kehadiran real-time...
-                    </td>
-                </tr>
-            </tbody>
-        </table>
-    </div>
+<div style="overflow-x: auto;">
+    <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem; text-align: left;">
+        <thead>
+            <tr style="border-bottom: 2px solid var(--accent-low);">
+                <th style="padding: 12px;">NRP</th>
+                <th style="padding: 12px;">Nama</th>
+                <th style="padding: 12px;">Status</th>
+                <th style="padding: 12px;">Terakhir Terlihat (Hari Ini)</th>
+                <th style="padding: 12px;">Confidence</th>
+                <th style="padding: 12px;">Client Asal</th>
+            </tr>
+        </thead>
+        <tbody id="attendance-body">
+            <tr>
+                <td colspan="5" style="padding: 40px; text-align: center; color: var(--text-muted);">
+                    Memuat data kehadiran real-time...
+                </td>
+            </tr>
+        </tbody>
+    </table>
+</div>
 </div>
 
 <style>
@@ -70,7 +71,7 @@
 
             if (data.length > 0) {
                 body.innerHTML = data.map(a => {
-                    const isAttended = a.status.includes('✅');
+                    const isAttended = a.status === 'HADIR';
                     return `
                         <tr>
                             <td>${a.nrp}</td>

@@ -9,12 +9,9 @@ import os
 import glob
 import random
 import copy
-import cv2
+import gc
 from collections import OrderedDict
 from torchvision.transforms import InterpolationMode
-from sklearn.metrics import confusion_matrix, classification_report
-import matplotlib.pyplot as plt
-import seaborn as sns
 import numpy as np
 
 class TrainingNaNError(Exception):
@@ -46,9 +43,12 @@ class FaceDataset(Dataset):
         self.samples = []
         self.class_counts = {}
         
+        print(f"[DATASET] Root: {data_root} | Mode: {mode}")
+        
         local_nrps = []
         if os.path.exists(data_root):
             local_nrps = sorted([f for f in os.listdir(data_root) if os.path.isdir(os.path.join(data_root, f))])
+            print(f"[DATASET] Found {len(local_nrps)} directories in {data_root}")
             
         global_nrps = []
         if global_embeddings:
@@ -76,10 +76,16 @@ class FaceDataset(Dataset):
                 continue
                 
             folder_path = os.path.join(data_root, nrp)
-            paths = sorted(glob.glob(os.path.join(folder_path, "*.*")))
+            paths = sorted([
+                os.path.join(folder_path, f)
+                for f in os.listdir(folder_path)
+                if f.lower().endswith(('.jpg', '.jpeg', '.png'))
+            ]) if os.path.exists(folder_path) else []
             idx = self.nrp_to_idx[nrp]
             
-            if len(paths) == 0: continue
+            if len(paths) == 0:
+                print(f"  [WARN] {nrp}: No images found in {folder_path}")
+                continue
             
             # Pembagian 80/20 sesuai preferensi pengguna (Split Normal)
             split_idx = int(0.8 * len(paths))
@@ -147,7 +153,7 @@ class LocalTrainer:
             return 0.0, 0.0, len(dataset), []
             
         if dataset.num_classes > 0 and dataset.num_classes != self.head.weight.shape[0]:
-            self._update_head(dataset.num_classes, dataset.nrp_to_idx)
+            self.update_head(dataset.num_classes, dataset.nrp_to_idx)
         else:
             self.nrp_to_idx = dataset.nrp_to_idx
 
@@ -272,7 +278,8 @@ class LocalTrainer:
         accuracy = correct / total if total > 0 else 0.0
         return avg_loss, accuracy, total
 
-    def _update_head(self, new_num_classes, new_nrp_to_idx):
+    def update_head(self, new_num_classes, new_nrp_to_idx):
+        """Mengekspansi head klasifikasi sambil mempertahankan bobot yang sudah terlatih."""
         old_head = self.head
         old_nrp_to_idx = self.nrp_to_idx
         new_head = ArcMarginProduct(old_head.weight.shape[1], new_num_classes).to(self.device)
@@ -282,13 +289,15 @@ class LocalTrainer:
             for nrp, new_idx in new_nrp_to_idx.items():
                 if nrp in old_nrp_to_idx:
                     old_idx = old_nrp_to_idx[nrp]
-                    if old_idx < old_head.weight.shape[0]: 
+                    if old_idx < old_head.weight.shape[0] and new_idx < new_num_classes: 
                          new_head.weight[new_idx] = old_head.weight[old_idx]
                          copied_count += 1
         
-        print(f"[TRAINER] Dynamic Head Update: {old_head.weight.shape[0]} -> {new_num_classes} ({copied_count} copied)")
+        print(f"[TRAINER] Head Expanded: {old_head.weight.shape[0]} -> {new_num_classes} ({copied_count} weights preserved)")
         self.head = new_head
         self.nrp_to_idx = new_nrp_to_idx
+        return new_head
+
 
     def _is_shared_param(self, name):
         """Filter ketat untuk pFedFace: Kecualikan BatchNorm."""

@@ -147,7 +147,7 @@ class TrainingController:
 
     def train_model(self, epochs=None):
         if epochs is None:
-            epochs = TRAINING_PARAMS["total_epochs"]
+            epochs = cl_manager.default_epochs
             
         # Tahap 3: Pelatihan Model MobileFaceNet
         tracker = None
@@ -175,7 +175,7 @@ class TrainingController:
             ])
             train_dataset = datasets.ImageFolder(PROCESSED_DATA, transform=transform)
             num_classes = len(train_dataset.classes)
-            batch_size = TRAINING_PARAMS["batch_size"]
+            batch_size = cl_manager.default_batch_size
             train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
             
             model = MobileFaceNet().to(DEVICE)

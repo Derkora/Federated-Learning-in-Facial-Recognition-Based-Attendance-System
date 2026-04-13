@@ -1,7 +1,7 @@
 services:
   client-fl:
     build:
-      context: ../../../federated-learning
+      context: ../../federated-learning
       dockerfile: client/Dockerfile
     container_name: client_fl_balanced
     ports:

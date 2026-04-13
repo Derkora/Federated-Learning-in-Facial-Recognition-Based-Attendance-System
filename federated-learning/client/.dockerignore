@@ -1,0 +1,23 @@
+# Abaikan file sampah dan dataset agar citra Docker tetap ringan
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual Environment
+env/
+venv/
+.venv/
+
+# Folder Metadata dan Git
+.git/
+.gitignore
+.dockerignore
+.vscode/
+
+# ASET TRAINING (Gunakan mounting volume saat run, jangan dicopy ke image)
+data/
+raw_data/
+models/
+*.pth
+*.log

@@ -5,6 +5,7 @@ import io
 import torch
 import numpy as np
 import traceback
+import onnxruntime as ort
 from PIL import Image
 from sqlalchemy.orm import Session
 
@@ -29,29 +30,61 @@ class AttendanceController:
         img_bytes = base64.b64decode(image_b64)
         img_pil = Image.open(io.BytesIO(img_bytes)).convert('RGB')
         
-        # Deteksi wajah menggunakan MTCNN
+        # Deteksi + Crop wajah menggunakan MTCNN
+        # Pipeline ini KONSISTEN dengan gambar training di data/processed/:
+        # MTCNN -> tensor -> prepare_for_model(squash ke 112x96)
         face_tensor, box, prob = image_processor.detect_face(img_pil)
         if face_tensor is None:
             return {"matched": "Unknown", "confidence": 0, "message": "Wajah tidak terdeteksi"}
         
-        # Preprocessing dan ekstraksi embedding menggunakan model backbone (MobileFaceNet)
-        input_tensor = image_processor.prepare_for_model(face_tensor).to(self.fl_manager.device)
+        input_tensor = image_processor.prepare_for_model(face_tensor)
+        input_np = input_tensor.cpu().numpy()
         
-        with torch.no_grad():
-            self.fl_manager.backbone.eval()
-            query_embedding_tensor = self.fl_manager.backbone(input_tensor)
-            # Normalisasi L2 adalah standar untuk perbandingan vektor wajah (Cosine Similarity)
-            query_embedding_tensor = torch.nn.functional.normalize(query_embedding_tensor, p=2, dim=1)
-            query_embedding = query_embedding_tensor.cpu().numpy()[0]
+        # ONNX akan diaktifkan kembali hanya setelah export ulang setelah training selesai.
+        onnx_path = os.path.join(self.fl_manager.data_path, "models", "backbone_quantized.onnx")
+        torch_path = os.path.join(self.fl_manager.data_path, "models", "backbone.pth")
+        
+        # Gunakan ONNX HANYA jika backbone.pth juga ada DAN versi ONNX sinkron
+        onnx_is_fresh = (
+            os.path.exists(onnx_path) and
+            os.path.exists(torch_path) and
+            os.path.getmtime(onnx_path) >= os.path.getmtime(torch_path)
+        )
+        
+        if onnx_is_fresh:
+            try:
+                if not hasattr(self, 'ort_session'):
+                    self.ort_session = ort.InferenceSession(onnx_path, providers=['CPUExecutionProvider'])
+                
+                outputs = self.ort_session.run(None, {'input': input_np})
+                query_embedding = outputs[0][0]
+                norm = np.linalg.norm(query_embedding)
+                query_embedding = query_embedding / (norm + 1e-6)
+                query_embedding_tensor = torch.from_numpy(query_embedding).unsqueeze(0)
+            except Exception as e:
+                print(f"[ONNX ERROR] Fallback to Torch: {e}")
+                if hasattr(self, 'ort_session'): del self.ort_session
+                input_tensor = input_tensor.to(self.fl_manager.device)
+                with torch.no_grad():
+                    self.fl_manager.backbone.eval()
+                    query_embedding_tensor = self.fl_manager.backbone(input_tensor)
+                    query_embedding_tensor = torch.nn.functional.normalize(query_embedding_tensor, p=2, dim=1)
+                    query_embedding = query_embedding_tensor.cpu().numpy()[0]
+        else:
+            # Backbone PyTorch terkini — selalu konsisten dengan Registry
+            if hasattr(self, 'ort_session'): del self.ort_session
+            input_tensor = input_tensor.to(self.fl_manager.device)
+            with torch.no_grad():
+                self.fl_manager.backbone.eval()
+                query_embedding_tensor = self.fl_manager.backbone(input_tensor)
+                query_embedding_tensor = torch.nn.functional.normalize(query_embedding_tensor, p=2, dim=1)
+                query_embedding = query_embedding_tensor.cpu().numpy()[0]
             
         # Manajemen Cache Identitas
-        # Library pengenal (Registry) diperbarui secara berkala dari server untuk memastikan
-        # terminal memiliki data terbaru hasil pelatihan federated learning.
         local_refs = self._get_cached_identities(db)
 
-        # Proses Voting Temporal
-        # Menggunakan rata-rata dari beberapa frame terakhir untuk meningkatkan stabilitas
-        # dan akurasi identifikasi saat wajah bergerak atau pencahayaan berubah.
+        # Proses Voting Temporal — DI AKTIFKAN KEMBALI untuk stabilitas
+        # Gunakan rata-rata dari beberapa frame terakhir untuk meningkatkan stabilitas
         now = time.time()
         if now - self.fl_manager.last_face_time > 1.0:
             self.fl_manager.prediction_buffer.clear()
@@ -63,8 +96,11 @@ class AttendanceController:
         mean_embedding_tensor = torch.nn.functional.normalize(mean_embedding_tensor, p=2, dim=1)
         mean_embedding = mean_embedding_tensor.cpu().numpy()[0]
         
+        # Log diagnostik (sekali per batch saja)
+        print(f"[INFER] Query norm={float(mean_embedding_tensor.norm()):.3f} buf_size={len(self.fl_manager.prediction_buffer)} refs={len(local_refs)}")
+        
         # Pencocokan identitas dengan threshold produksi
-        user_id, confidence = identify_user_globally(mean_embedding, local_refs, threshold=0.50)
+        user_id, confidence = identify_user_globally(mean_embedding, local_refs, threshold=self.fl_manager.inference_threshold)
         
         # Pencatatan Absensi
         # Jika mahasiswa dikenali, data akan disimpan di database lokal dan dikirim ke server.
@@ -85,11 +121,11 @@ class AttendanceController:
                 sync_record_to_server, 
                 user_id, user_name, float(confidence), os.getenv("HOSTNAME", "client-1")
             )
-            print(f"[OK] Absensi Berhasil: {user_id}_{user_name} ({confidence:.2f})")
+            print(f"[OK] Absensi Berhasil: {user_id} ({confidence:.2f})")
             
         latency = int((time.time() - start_time) * 1000)
         return {
-            "matched": f"{user_id}_{user_name}" if user_id != "Unknown" else "Unknown", 
+            "matched": user_id if user_id != "Unknown" else "Unknown", 
             "is_confirmed": user_id != "Unknown",
             "confidence": float(confidence), 
             "box": box.tolist() if box is not None else None,
@@ -100,12 +136,39 @@ class AttendanceController:
     def recognize_directly(self, img_pil):
         # Memproses pengenalan secara langsung tanpa melalui API/DB
         try:
-            matched, confidence, _ = identify_user_globally(
-                img_pil, self.fl_manager.backbone, self.fl_manager.detector, 
-                self.fl_manager.data_path, self.fl_manager.device
+            # 1. Ekstraksi wajah
+            face_tensor, _, _ = image_processor.detect_face(img_pil)
+            if face_tensor is None: return "Unknown", 0.0
+            
+            # 2. Preprocess & Embedding
+            input_tensor = image_processor.prepare_for_model(face_tensor).to(self.fl_manager.device)
+            with torch.no_grad():
+                self.fl_manager.backbone.eval()
+                query_embedding_tensor = self.fl_manager.backbone(input_tensor)
+                query_embedding_tensor = torch.nn.functional.normalize(query_embedding_tensor, p=2, dim=1)
+                query_embedding = query_embedding_tensor.cpu().numpy()[0]
+            
+            # 3. Dapatkan Cache Identitas
+            # Gunakan db dummy atau ambil dari manager jika sudah ada
+            local_refs = getattr(self.fl_manager, 'cached_refs', {})
+            if not local_refs:
+                # Jika belum ada cache, coba inisialisasi minimal
+                from app.db.db import SessionLocal
+                db = SessionLocal()
+                try:
+                    local_refs = self._get_cached_identities(db)
+                finally:
+                    db.close()
+
+            # 4. Pencocokan
+            matched, confidence = identify_user_globally(
+                query_embedding, 
+                local_refs, 
+                threshold=self.fl_manager.inference_threshold
             )
             return matched, float(confidence)
-        except:
+        except Exception as e:
+            print(f"[RECOG ERROR] {e}")
             return "Unknown", 0.0
 
     def process_registration(self, user_id: str, name: str, image_b64: str, db: Session):
@@ -123,7 +186,8 @@ class AttendanceController:
             img_bytes = base64.b64decode(image_b64)
             img_pil = Image.open(io.BytesIO(img_bytes)).convert('RGB')
             
-            user_dir = os.path.join(self.fl_manager.data_path, name)
+            # Pastikan folder students di raw_data tersedia
+            user_dir = os.path.join(self.fl_manager.raw_data_path, "students", name)
             os.makedirs(user_dir, exist_ok=True)
             target_path = os.path.join(user_dir, f"{int(time.time())}.jpg")
             img_pil.save(target_path)
@@ -159,34 +223,47 @@ class AttendanceController:
         if not hasattr(self.fl_manager, 'cached_refs') or time.time() - getattr(self.fl_manager, 'last_cache_update', 0) > 30:
             local_refs = {}
             
-            # Prioritas 1: Menggunakan Global Registry hasil Federated Learning
+            # 1. PUSTAKA GLOBAL: Muat dari File Registry (Aset Identitas Luar Terminal)
             registry_path = os.path.join(self.fl_manager.data_path, "models", "global_embedding_registry.pth")
             if os.path.exists(registry_path):
                 try:
                     registry = torch.load(registry_path, map_location="cpu")
                     for nrp, vec in registry.items():
                         if isinstance(vec, torch.Tensor):
-                            local_refs[nrp] = vec.to(self.fl_manager.device)
+                            v = vec.float()
                         else:
-                            local_refs[nrp] = torch.from_numpy(np.array(vec).copy()).to(self.fl_manager.device)
-                    print(f"[OK] Memuat {len(local_refs)} identitas global dari registry.")
+                            v = torch.from_numpy(np.array(vec, dtype=np.float32).copy())
+                        # PENTING: Normalisasi L2 agar cosine similarity valid
+                        v = torch.nn.functional.normalize(v.unsqueeze(0), p=2, dim=1).squeeze(0)
+                        local_refs[nrp] = v.to(self.fl_manager.device)
+                    print(f"[OK] Memuat {len(local_refs)} identitas global dari file.")
                 except Exception as e:
-                    print(f"[ERROR] Gagal memuat registry global: {e}")
+                    print(f"[ERROR] Gagal memuat file registry: {e}")
             
-            # Prioritas 2: Fallback ke database lokal jika registry belum tersedia
-            if not local_refs:
+            # 2. IDENTITAS SEGAR: Gabungkan dengan Database Lokal
+            # Embedding di database lokal di-refresh setiap kali BN Global masuk,
+            # sehingga lebih akurat daripada file registry statis.
+            try:
                 embeddings = db.query(EmbeddingLocal).all()
+                db_count = 0
                 for emb in embeddings:
-                    if emb.user_id in local_refs: continue 
                     try:
                         if emb.is_global:
                             dec_emb = np.frombuffer(emb.embedding_data, dtype=np.float32).copy()
                         else:
                             dec_emb = encryptor.decrypt_embedding(emb.embedding_data, emb.iv).copy()
-                        local_refs[emb.user_id] = torch.from_numpy(dec_emb).to(self.fl_manager.device)
+                        
+                        v = torch.from_numpy(dec_emb).float()
+                        v = torch.nn.functional.normalize(v.unsqueeze(0), p=2, dim=1).squeeze(0)
+                        local_refs[emb.user_id] = v.to(self.fl_manager.device)
+                        db_count += 1
                     except: continue
-                if local_refs:
-                    print(f"[OK] Menggunakan {len(local_refs)} identitas lokal (fallback).")
+                if db_count > 0:
+                    print(f"[OK] Sinkronisasi {db_count} identitas segar dari database lokal.")
+            except: pass
+            
+            self.fl_manager.cached_refs = local_refs
+            self.fl_manager.last_cache_update = time.time()
             
             self.fl_manager.cached_refs = local_refs
             self.fl_manager.last_cache_update = time.time()

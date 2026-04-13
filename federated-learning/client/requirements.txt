@@ -14,15 +14,11 @@ cryptography==41.0.6
 # --- Federated Learning (Flower) ---
 flwr==1.7.0
 
-# --- Deep Learning & Computer Vision ---
-torch==2.1.1
-torchvision==0.16.1
+# --- Deep Learning & Computer Vision (CPU Only) ---
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.1.1+cpu
+torchvision==0.16.1+cpu
 facenet-pytorch==2.5.3
 numpy==1.26.2
 Pillow==10.1.0
 opencv-python-headless==4.8.1.78
-
-# --- Analytics (Optional for Client) ---
-scikit-learn==1.3.2
-matplotlib==3.8.2
-seaborn==0.13.0

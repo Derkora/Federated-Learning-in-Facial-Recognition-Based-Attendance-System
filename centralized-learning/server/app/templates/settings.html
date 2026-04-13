@@ -1,0 +1,147 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
+    <h1 style="color: var(--accent); margin: 0; font-size: 1.8rem;">Pengaturan Server Terpusat</h1>
+    <p style="color: var(--text-muted); margin-top: 0.5rem;">Konfigurasi parameter riset dan ambang batas deteksi lokal.
+    </p>
+</div>
+
+<div class="layout-grid">
+    <!-- Card 1: Pelatihan -->
+    <div class="glass" style="padding: 1.5rem;">
+        <h3
+            style="color: var(--accent); margin-top: 0; margin-bottom: 2rem; font-size: 1.2rem; display: flex; align-items: center; gap: 0.5rem;">
+            ⚙️ Parameter Model
+        </h3>
+
+        <div class="dashboard-grid">
+            <!-- Tabel 1: Parameter Pelatihan -->
+            <div class="card full-width">
+                <div class="card-header">
+                    <i class="fas fa-cogs"></i>
+                    <h2>Parameter Pelatihan</h2>
+                </div>
+                <div class="card-body">
+                    <table class="results-table">
+                        <thead>
+                            <tr>
+                                <th>Parameter</th>
+                                <th>Nilai Saat Ini</th>
+                                <th>Input Baru</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>Total Epochs</strong></td>
+                                <td>{{ status.default_epochs }}</td>
+                                <td><input type="number" id="epochs" value="{{ status.default_epochs }}"
+                                        class="form-input">
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><strong>Batch Size</strong></td>
+                                <td>{{ status.default_batch_size }}</td>
+                                <td><input type="number" id="batch_size" value="{{ status.default_batch_size }}"
+                                        class="form-input"></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div style="margin-top: 15px; text-align: right;">
+                        <button onclick="saveSettings()" class="btn btn-primary">
+                            <i class="fas fa-save"></i> Simpan Parameter
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tabel 2: Konfigurasi Inferensi -->
+            <div class="card full-width">
+                <div class="card-header">
+                    <i class="fas fa-brain"></i>
+                    <h2>Konfigurasi Inferensi (Client)</h2>
+                </div>
+                <div class="card-body">
+                    <table class="results-table">
+                        <thead>
+                            <tr>
+                                <th>Fitur</th>
+                                <th>Nilai Saat Ini</th>
+                                <th>Input Baru</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>Ambang Batas (Threshold)</strong></td>
+                                <td>{{ status.inference_threshold }}</td>
+                                <td><input type="number" step="0.01" id="threshold"
+                                        value="{{ status.inference_threshold }}" class="form-input"></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div style="margin-top: 15px; text-align: right;">
+                        <button onclick="saveSettings()" class="btn btn-primary">
+                            <i class="fas fa-save"></i> Simpan Inferensi
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <style>
+            .full-width {
+                grid-column: 1 / -1;
+            }
+
+            .form-input {
+                width: 100%;
+                padding: 8px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                background: #f9f9f9;
+            }
+
+            .btn-primary {
+                background: var(--primary);
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 6px;
+                cursor: pointer;
+                font-weight: 600;
+                transition: 0.3s;
+            }
+
+            .btn-primary:hover {
+                opacity: 0.9;
+                transform: translateY(-2px);
+            }
+        </style>
+
+        <script>
+            async function saveSettings() {
+                const data = {
+                    epochs: document.getElementById('epochs').value,
+                    batch_size: document.getElementById('batch_size').value,
+                    threshold: document.getElementById('threshold').value
+                };
+
+                try {
+                    const res = await fetch('/api/settings', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(data)
+                    });
+                    const result = await res.json();
+                    if (result.status === 'success') {
+                        alert('Pengaturan berhasil disimpan!');
+                        location.reload();
+                    } else {
+                        alert('Gagal menyimpan: ' + result.message);
+                    }
+                } catch (e) {
+                    alert('Terjadi kesalahan: ' + e);
+                }
+            }
+        </script>
+        {% endblock %}

@@ -1,69 +1,32 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div class="glass" style="padding: 2rem;">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
-        <div>
-            <h1 style="color: var(--accent); margin-bottom: 0.5rem;">Federated Learning Server</h1>
-            <p id="phase-display" style="color: var(--text-muted); font-weight: 500; text-transform: capitalize;">
-                Status: Standby</p>
-        </div>
-    </div>
-</div>
-
-<div style="display: grid; grid-template-columns: 1fr 320px; gap: 2rem; align-items: start;">
-    <div id="training-terminal"
-        style="height: 500px; overflow-y: auto; background: rgba(0,0,0,0.4); padding: 25px; border-radius: 12px; font-family: 'Fira Code', monospace; font-size: 0.9rem; border: 1px solid var(--accent-low); line-height: 1.6; color: #e5e7eb; box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);">
-        {% if status.current_logs %}
-        {{ status.current_logs|join('<br>')|safe }}
-        {% else %}
-        [SIAP] Koordinator Federated telah diinisialisasi.<br>
-        [MENUNGGU] Menunggu koneksi client untuk memulai sinyal agregasi...
-        {% endif %}
-    </div>
-
-    <div class="glass"
-        style="padding: 1.5rem; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05);">
-        <h3
-            style="color: var(--accent); margin-bottom: 1.5rem; font-size: 1.1rem; display: flex; align-items: center; gap: 0.5rem;">
-            <span style="font-size: 1.3rem;">⚙️</span> Konfigurasi Pelatihan
-        </h3>
-        <div class="metric-row">
-            <span>Ronde (Rounds)</span>
-            <b id="conf-rounds">{{ status.default_rounds }}</b>
-        </div>
-        <div class="metric-row">
-            <span>Epoch/Ronde</span>
-            <b>{{ status.default_epochs }}</b>
-        </div>
-        <div class="metric-row">
-            <span>Min. Clients</span>
-            <b>{{ status.default_min_clients }}</b>
-        </div>
-        <div class="metric-row">
-            <span>Batch Size</span>
-            <b>16</b>
-        </div>
-        <div class="metric-row">
-            <span>Learning Rate</span>
-            <b>Adaptive</b>
-        </div>
-
-        <div style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid rgba(255,255,255,0.1);">
-            <label
-                style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 10px; font-weight: bold; letter-spacing: 0.05em;">JUMLAH
-                RONDE TARGET</label>
-            <div style="display: flex; gap: 0.5rem;">
-                <input type="number" id="rounds" value="{{ status.default_rounds }}" min="1"
-                    style="flex: 1; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); padding: 0.6rem; color: white; border-radius: 6px; outline: none; font-family: inherit;">
-                <button id="start-btn" class="btn btn-primary" onclick="startTraining()" style="padding: 0.6rem 1.2rem;"
-                    {{ 'disabled' if status.is_running }}>
-                    MULAI
-                </button>
+<div class="layout-grid">
+    <!-- LEFT COLUMN: Status & Terminal -->
+    <div class="glass" style="padding: 2.5rem;">
+        <div
+            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; flex-wrap: wrap; gap: 1rem;">
+            <div>
+                <h1 style="color: var(--accent); margin-bottom: 0.5rem; font-size: 1.8rem;">Federated Dashboard</h1>
+                <p id="phase-display" style="color: var(--text-muted); font-weight: 500;">Status: Standby</p>
             </div>
+            <button id="start-btn" class="btn btn-primary" onclick="startTraining()"
+                style="padding: 1rem 2rem; font-size: 1.1rem; border-radius: 8px;" {{ 'disabled' if status.is_running
+                }}>
+                {{ "SEDANG BERJALAN..." if status.is_running else "Mulai" }}
+            </button>
+        </div>
+
+        <div id="training-terminal"
+            style="height: 500px; overflow-y: auto; background: rgba(0,0,0,0.4); padding: 25px; border-radius: 12px; font-family: 'Fira Code', monospace; font-size: 0.85rem; border: 1px solid rgba(16, 185, 129, 0.2); line-height: 1.6; color: #e5e7eb; box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);">
+            {% if status.current_logs %}
+            {{ status.current_logs|join('<br>')|safe }}
+            {% else %}
+            [SIAP] Koordinator Federated telah diinisialisasi.<br>
+            [MENUNGGU] Menunggu koneksi client untuk memulai sinyal agregasi...
+            {% endif %}
         </div>
     </div>
-</div>
 </div>
 
 <style>
@@ -86,14 +49,14 @@
     let pollInterval = null;
 
     async function startTraining() {
-        const rounds = document.getElementById('rounds').value;
-        const res = await fetch(`/api/fl/start?rounds=${rounds}&min_clients={{ status.default_min_clients }}`, { method: 'POST' });
+        if (!confirm("Mulai siklus Federated Learning?")) return;
+        const res = await fetch(`/api/fl/start?rounds={{ status.default_rounds }}&min_clients={{ status.default_min_clients }}`, { method: 'POST' });
         const data = await res.json();
         if (data.status === 'started') {
-            alert("🚀 Siklus Hidup Penuh Dimulai: Sinkronisasi -> Pra-proses -> Pelatihan");
+            alert("Siklus Hidup Penuh Dimulai: Sinkronisasi -> Pra-proses -> Pelatihan");
             startPolling();
         } else if (data.status === 'already_running') {
-            alert("⚠️ Pelatihan sedang berlangsung.");
+            alert("Pelatihan sedang berlangsung.");
         }
     }
 
@@ -114,31 +77,30 @@
 
             // 1. Update Phase & Running Status
             const phaseEl = document.getElementById('phase-display');
-            const phaseText = data.phase || 'Standby';
+            const phaseText = data.current_phase || 'Standby';
             phaseEl.innerText = "Status: " + (data.is_running ? "Sedang Berjalan (" + phaseText + ")" : "Standby");
-            phaseEl.style.color = (data.is_busy) ? 'var(--accent)' : 'var(--text-muted)';
+            phaseEl.style.color = (data.is_running) ? 'var(--accent)' : 'var(--text-muted)';
 
             const startBtn = document.getElementById('start-btn');
-            startBtn.disabled = data.is_running;
-            startBtn.innerText = data.is_running ? "SEDANG BERJALAN..." : "🚀 MULAI TRAINING FEDERATED";
+            if (startBtn) {
+                startBtn.disabled = data.is_running;
+                startBtn.innerText = data.is_running ? "SEDANG BERJALAN..." : "Mulai";
+            }
 
             // 2. Update Logs (Terminal)
             const terminal = document.getElementById('training-terminal');
-            if (data.phase_logs && data.phase_logs.length > 0) {
-                terminal.innerHTML = data.phase_logs.join('<br>');
+            if (data.current_logs && data.current_logs.length > 0) {
+                terminal.innerHTML = data.current_logs.join('<br>');
                 terminal.scrollTop = terminal.scrollHeight;
             }
 
-            // 5. Polling Management
-            if (data.is_busy && !pollInterval) startPolling();
-            if (!data.is_busy && pollInterval) stopPolling();
+            // 3. Polling Management
+            if (data.is_running && !pollInterval) startPolling();
+            if (!data.is_running && pollInterval) stopPolling();
 
         } catch (e) { console.error("Poll error:", e); }
     }
 
-    initChart();
     updateUIState();
-    // Initial poll for live updates
-    startPolling();
 </script>
 {% endblock %}

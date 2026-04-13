@@ -7,7 +7,7 @@ import torch
 import io
 import numpy as np
 import math
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, Request, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -39,8 +39,8 @@ async def index(request: Request, db: Session = Depends(get_db)):
 
 # Status Sistem Global
 @app.get("/api/status")
-async def get_system_status():
-    return fl_manager.get_status()
+async def get_system_status(db: Session = Depends(get_db)):
+    return fl_manager.get_status(db=db)
 
 # API Hasil Pelatihan Global (Metrik)
 @app.get("/api/results")
@@ -52,7 +52,8 @@ async def get_results_api(db: Session = Depends(get_db)):
 @app.get("/records", response_class=HTMLResponse)
 async def records(request: Request, db: Session = Depends(get_db)):
     all_users = db.query(UserGlobal).order_by(UserGlobal.name.asc()).all()
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    tz_wib = timezone(timedelta(hours=7))
+    today_start = datetime.now(tz_wib).replace(hour=0, minute=0, second=0, microsecond=0)
     today_recap = db.query(AttendanceRecap).filter(AttendanceRecap.timestamp >= today_start).all()
     recap_map = {rec.user_id: rec for rec in today_recap}
     
@@ -79,7 +80,11 @@ async def view_results(request: Request, db: Session = Depends(get_db)):
     status = fl_manager.get_status(db=db)
     return templates.TemplateResponse("results.html", {"request": request, "title": "Evaluation Results", "status": status})
 
-# --- OPERASI FEDERATED LEARNING ---
+# Halaman Pengaturan (Settings)
+@app.get("/settings", response_class=HTMLResponse)
+async def view_settings(request: Request, db: Session = Depends(get_db)):
+    status = fl_manager.get_status(db=db)
+    return templates.TemplateResponse("settings.html", {"request": request, "title": "System Settings", "status": status})
 
 # Memulai Siklus Pelatihan Federated Learning
 @app.post("/api/fl/start")
@@ -115,7 +120,7 @@ async def register_client(data: dict, db: Session = Depends(get_db)):
         else:
             client.ip_address = ip
             client.status = "online"
-            client.last_seen = datetime.utcnow()
+            client.last_seen = datetime.now(timezone(timedelta(hours=7)))
         db.commit()
     return {"status": "ok", "server_time": time.time()}
 
@@ -168,7 +173,7 @@ async def get_training_status():
         "current_phase": fl_manager.current_phase,
         "is_running": fl_manager.is_running,
         "active_session_id": fl_manager.session_id,
-        "logs": fl_manager.current_logs[-10:]
+        "current_logs": fl_manager.current_logs[-10:]
     }
 
 # Sinkronisasi Label Mahasiswa (ID Mapping)
@@ -237,6 +242,19 @@ async def get_label_map(db: Session = Depends(get_db)):
     users = db.query(UserGlobal).order_by(UserGlobal.nrp).all()
     return [u.nrp for u in users]
 
+# Mendapatkan Detail Identitas Mahasiswa Global (NRP + Nama + Embedding)
+@app.get("/api/training/identities")
+async def get_global_identities(db: Session = Depends(get_db)):
+    users = db.query(UserGlobal).all()
+    results = []
+    for u in users:
+        item = {"nrp": u.nrp, "name": u.name}
+        if u.embedding:
+            item["embedding"] = base64.b64encode(u.embedding).decode('utf-8')
+        results.append(item)
+    return results
+
+
 # Sinkronisasi Hasil Presensi dari Terminal
 @app.post("/api/attendance/sync")
 async def sync_attendance(records: list, db: Session = Depends(get_db)):
@@ -254,6 +272,43 @@ async def sync_attendance(records: list, db: Session = Depends(get_db)):
             new_records += 1
     db.commit()
     return {"status": "success", "new_records": new_records}
+
+# API Ketepatan/Threshold Inferensi (Dinamis dari Dashboard)
+@app.post("/api/settings")
+async def update_settings(data: dict):
+    try:
+        # Perbarui konfigurasi server secara real-time
+        if 'rounds' in data: fl_manager.default_rounds = int(data['rounds'])
+        if 'epochs' in data: fl_manager.default_epochs = int(data['epochs'])
+        if 'min_clients' in data: fl_manager.default_min_clients = int(data['min_clients'])
+        if 'threshold' in data: fl_manager.inference_threshold = float(data['threshold'])
+        
+        fl_manager.update_logs("[OK] Pengaturan sistem diperbarui secara dinamis.")
+        return {"status": "success"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# API Data Kehadiran Realtime (Untuk records.html Polling)
+@app.get("/api/attendance")
+async def get_attendance_json(db: Session = Depends(get_db)):
+    all_users = db.query(UserGlobal).all()
+    tz_wib = timezone(timedelta(hours=7))
+    today_start = datetime.now(tz_wib).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_recap = db.query(AttendanceRecap).filter(AttendanceRecap.timestamp >= today_start).all()
+    recap_map = {rec.user_id: rec for rec in today_recap}
+    
+    results = []
+    for u in all_users:
+        rec = recap_map.get(u.user_id)
+        results.append({
+            "nrp": u.nrp,
+            "name": u.name,
+            "status": "HADIR" if rec else "MENUNGGU",
+            "time": rec.timestamp.strftime("%H:%M:%S") if rec else "-",
+            "confidence": f"{rec.confidence:.2f}" if rec else "-",
+            "registered_edge_id": rec.edge_id if rec else (u.registered_edge_id or "-")
+        })
+    return results
 
 # Mendapatkan Detail Status Sesi Pelatihan
 @app.get("/api/fl/status/{session_id}")
@@ -276,7 +331,7 @@ async def get_fl_status(session_id: str, db: Session = Depends(get_db)):
         "rounds_completed": len(rounds),
         "history": sanitized_history,
         "phase": fl_manager.current_phase,
-        "phase_logs": fl_manager.current_logs
+        "current_logs": fl_manager.current_logs
     }
 
 @app.on_event("startup")

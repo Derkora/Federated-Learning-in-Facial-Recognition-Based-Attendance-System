@@ -5,7 +5,7 @@ import torch
 import json
 import numpy as np
 from collections import OrderedDict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from app.db.db import SessionLocal
 from app.db.models import FLRound, GlobalModel, UserGlobal, AttendanceRecap
 from app.utils.mobilefacenet import MobileFaceNet
@@ -57,10 +57,14 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
             val_acc = metrics.get("val_accuracy", 0.0)
             print(f"  > Client {cid}: Akurasi: {acc:.4f} | Loss: {loss:.4f} | Val Acc: {val_acc:.4f}")
 
-        if not results:
+        # Filter client yang tidak punya data (mencegah division by zero di FedAvg)
+        valid_results = [(cp, fr) for cp, fr in results if fr.num_examples > 0]
+        
+        if not valid_results:
+            print(f"[WARN] Ronde {server_round} tidak memiliki data valid untuk diagregasi.")
             return None, {}
 
-        aggregated_parameters, aggregated_metrics = super().aggregate_fit(server_round, results, failures)
+        aggregated_parameters, aggregated_metrics = super().aggregate_fit(server_round, valid_results, failures)
 
         if aggregated_parameters is not None:
             print(f"[OK] Agregasi Ronde {server_round} Selesai: Akurasi Gabungan: {aggregated_metrics.get('accuracy', 0):.4f}")
@@ -68,6 +72,30 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                 params_np = fl.common.parameters_to_ndarrays(aggregated_parameters)
                 final_loss = aggregated_metrics.get("loss", 0.0)
                 
+                # 1. KONVERSI KE STATE_DICT (Critical for Identification Consistency)
+                # Kita tidak lagi menyimpan list parameter mentah, melainkan file .pth yang siap pakai.
+                global_model_instance = MobileFaceNet()
+                sd = global_model_instance.state_dict()
+                shared_keys = [k for k in sd.keys() if 
+                               not any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked'])
+                               and any(x in k.lower() for x in ['weight', 'bias'])]
+                
+                if len(params_np) == len(shared_keys):
+                    for k, v in zip(shared_keys, params_np):
+                        sd[k] = torch.from_numpy(v.copy())
+                else:
+                    print(f"[WARN] Key mismatch during saving: {len(params_np)} params vs {len(shared_keys)} keys.")
+
+                # 2. MERGE GLOBAL BN (Jika tersedia dari fase registry sebelumnya)
+                bn_path = "data/global_bn_combined.pth"
+                if os.path.exists(bn_path):
+                    try:
+                        bn_params = torch.load(bn_path, map_location="cpu")
+                        sd.update(bn_params)
+                        print(f"[ROUND {server_round}] Merged Global BN stats into backbone.")
+                    except Exception as bn_err:
+                        print(f"[ROUND {server_round} WARN] Serializing BN failed: {bn_err}")
+
                 # Simpan hasil ke database
                 db = SessionLocal()
                 try:
@@ -79,24 +107,26 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                     )
                     db.add(new_round)
                     
+                    # Simpan sebagai state_dict (Bukan list) agar API client konsisten
                     buf = io.BytesIO()
-                    torch.save(params_np, buf)
+                    torch.save(sd, buf)
+                    weights_bytes = buf.getvalue()
                     
                     global_model = db.query(GlobalModel).first()
                     if not global_model:
-                        global_model = GlobalModel(version=server_round, weights=buf.getvalue())
+                        global_model = GlobalModel(version=server_round, weights=weights_bytes)
                         db.add(global_model)
                     else:
                         global_model.version = server_round
-                        global_model.weights = buf.getvalue()
+                        global_model.weights = weights_bytes
                         global_model.last_updated = datetime.utcnow()
                     
                     db.commit()
                     
-                    # Simpan salinan file fisik untuk backup
+                    # Simpan salinan file fisik untuk backup & ONNX export stability
                     try:
                         os.makedirs("data", exist_ok=True)
-                        torch.save(params_np, "data/backbone.pth")
+                        torch.save(sd, "data/backbone.pth")
                     except: pass
                         
                 except Exception as e:
@@ -107,34 +137,38 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
             except Exception as e:
                 print(f"[ERROR] Gagal memproses parameter agregasi: {e}")
                 
-        if aggregated_metrics or results:
+        if results:
+            client_data = {}
+            for i, (client_proxy, fit_res) in enumerate(results):
                 # CID default atau gunakan hostname jika ada di metrik
                 cid = fit_res.metrics.get("hostname") or getattr(client_proxy, "cid", f"client-{i}")
-                
-                # Menggabungkan semua metrik
                 m = fit_res.metrics.copy()
                 m["num_samples"] = fit_res.num_examples
-                
-                # Dekoding epoch_history jika berupa string
                 eh = fit_res.metrics.get("epoch_history", "[]")
                 if isinstance(eh, str):
-                    try:
-                        m["epoch_history"] = json.loads(eh)
-                    except:
-                        m["epoch_history"] = []
-                else:
-                    m["epoch_history"] = eh
-                    
+                    try: m["epoch_history"] = json.loads(eh)
+                    except: m["epoch_history"] = []
+                else: m["epoch_history"] = eh
                 client_data[cid] = m
             
-            print(f"[STRATEGY] Recording data for round {server_round} (Clients: {len(client_data)})")
             self.manager.record_round_data(server_round, aggregated_metrics or {}, client_data)
             if aggregated_metrics:
                 self.manager.update_metrics(aggregated_metrics)
-                loss = aggregated_metrics.get('loss', 0)
-                self.manager.update_logs(f"Ronde {server_round} selesai. Acc: {aggregated_metrics.get('accuracy', 0):.4f} | Loss: {loss:.4f} | Div: {weight_div}")
+                loss = aggregated_metrics.get('loss', 0.0)
+                self.manager.update_logs(f"Ronde {server_round} selesai. Acc: {aggregated_metrics.get('accuracy', 0):.4f} | Loss: {loss:.4f}")
+
 
         return aggregated_parameters, aggregated_metrics
+
+    def aggregate_evaluate(self, server_round: int, results: list, failures: list):
+        if not results:
+            return None, {}
+        valid_results = [(cp, er) for cp, er in results if er.num_examples > 0]
+        if not valid_results:
+            return None, {}
+            
+        loss, metrics = super().aggregate_evaluate(server_round, valid_results, failures)
+        return loss, metrics
 
 class FLServerManager:
     # Manajer Sesi dan Status Server Federated (FL)
@@ -158,6 +192,7 @@ class FLServerManager:
         self.ready_clients = set() 
         self.received_data = []
         self.discovery_clients = set()
+        self.inference_threshold = 0.5
         self.metrics = {
             "accuracy": 0, "loss": 0, 
             "backbone_sync_mb": 0, "registry_sync_mb": 0,
@@ -187,7 +222,9 @@ class FLServerManager:
         self.current_phase = "idle"
 
     def update_logs(self, msg):
-        ts = datetime.now().strftime("%H:%M:%S")
+        # Gunakan Waktu Indonesia Barat (UTC+7)
+        tz_wib = timezone(timedelta(hours=7))
+        ts = datetime.now(tz_wib).strftime("%H:%M:%S")
         self.current_logs.append(f"[{ts}] {msg}")
         if len(self.current_logs) > 100: self.current_logs.pop(0)
         print(f"SERVER LOG: {msg}")
@@ -268,12 +305,13 @@ class FLServerManager:
             "phase": self.current_phase,
             "session_id": self.session_id,
             "metrics": self.metrics,
-            "phase_logs": self.current_logs,
+            "current_logs": self.current_logs,
             "received_data": self.received_data,
             "model_version": self.model_version,
             "default_rounds": self.default_rounds,
             "default_epochs": self.default_epochs,
             "default_min_clients": self.default_min_clients,
+            "inference_threshold": self.inference_threshold,
             "attendance_count": attendance_count,
             "uptime": int(datetime.now().timestamp() - self.start_time) if self.start_time > 0 else 0
         }
@@ -328,7 +366,19 @@ class FLServerManager:
             self.ensure_model_seeded(db)
             latest_model = db.query(GlobalModel).order_by(GlobalModel.last_updated.desc()).first()
             if latest_model and latest_model.weights:
-                weights_np = torch.load(io.BytesIO(latest_model.weights))
+                loaded = torch.load(io.BytesIO(latest_model.weights), map_location="cpu")
+                
+                # Konversi state_dict kembali ke ndarrays jika perlu
+                if isinstance(loaded, dict):
+                    # Ekstrak params conv untuk Flower fit configuration
+                    sd = loaded
+                    shared_keys = [k for k in sd.keys() if 
+                                   not any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked'])
+                                   and any(x in k.lower() for x in ['weight', 'bias'])]
+                    weights_np = [sd[k].cpu().numpy() for k in shared_keys]
+                else:
+                    weights_np = loaded
+                
                 initial_parameters = fl.common.ndarrays_to_parameters(weights_np)
         except Exception as e:
             print(f"[ERROR] Gagal memuat parameter awal: {e}")
@@ -344,6 +394,7 @@ class FLServerManager:
             min_fit_clients=min_clients,
             min_available_clients=min_clients,
             fit_metrics_aggregation_fn=weighted_average,
+            evaluate_metrics_aggregation_fn=weighted_average,
             on_fit_config_fn=lambda server_round: {
                 "round": server_round,
                 "total_rounds": rounds,

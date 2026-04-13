@@ -1,0 +1,33 @@
+# Abaikan file yang tidak perlu masuk ke citra Docker (Optimasi Ukuran)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Lingkungan Virtual Lokal
+.Python
+env/
+venv/
+.venv/
+
+# File Build dan Metadata
+build/
+dist/
+*.egg-info/
+.git/
+.gitignore
+.dockerignore
+.vscode/
+.idea/
+
+# DATASET DAN MODEL (WAJIB DIABAIKAN - Gunakan Volume)
+data/
+raw_data/
+models/
+notebooks/
+*.pth
+*.zip
+*.tar.gz
+
+# Log dan File Sementara
+*.log

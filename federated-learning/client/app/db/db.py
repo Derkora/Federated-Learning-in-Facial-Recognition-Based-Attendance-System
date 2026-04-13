@@ -12,6 +12,13 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+def init_db():
+    """Buat semua tabel jika belum ada.
+    Pastikan models sudah di-import di file pemanggil sebelum fungsi ini dipanggil.
+    """
+    Base.metadata.create_all(bind=engine)
+    print("[DB] Tables initialized.")
+
 # Dependency FastAPI
 def get_db():
     db = SessionLocal()

@@ -2,7 +2,7 @@ import os
 import shutil
 import time
 import torch
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timedelta, timezone
 from fastapi import FastAPI, Depends, Request, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -52,6 +52,21 @@ async def view_results(request: Request):
     status = cl_manager.get_status()
     return templates.TemplateResponse("results.html", {"request": request, "title": "Evaluation Results", "status": status})
 
+# Halaman Pengaturan (Settings)
+@app.get("/settings", response_class=HTMLResponse)
+async def view_settings(request: Request):
+    status = cl_manager.get_status()
+    return templates.TemplateResponse("settings.html", {"request": request, "title": "Settings", "status": status})
+
+# API Update Pengaturan
+@app.post("/api/settings")
+async def update_settings(data: dict):
+    success = cl_manager.save_settings(data)
+    if success:
+        return {"status": "success", "message": "Settings updated"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to save settings")
+
 # API Status Sistem
 @app.get("/api/status")
 async def get_status():
@@ -64,7 +79,8 @@ async def get_results():
 
 @app.get("/api/attendance")
 async def get_attendance_recap(dbs: Session = Depends(db.get_db)):
-    today = datetime.utcnow().date()
+    tz_wib = timezone(timedelta(hours=7))
+    today = datetime.now(tz_wib).date()
     start_of_day = datetime.combine(today, dt_time.min)
     
     users = dbs.query(models.UserGlobal).all()
@@ -79,7 +95,7 @@ async def get_attendance_recap(dbs: Session = Depends(db.get_db)):
         recap.append({
             "name": user.name,
             "nrp": user.nrp,
-            "status": "Hadir" if last_entry else "Belum Hadir",
+            "status": "HADIR" if last_entry else "MENUNGGU",
             "time": last_entry.timestamp.strftime("%H:%M:%S") if last_entry else "--:--",
             "confidence": f"{int(last_entry.confidence * 100)}%" if last_entry else "--",
             "registered_edge_id": user.registered_edge_id or "client-1"
@@ -99,7 +115,7 @@ async def register_client(client_data: schemas.ClientBase, request: Request, dbs
     print(f"[REG] Mendaftarkan terminal {client_data.edge_id} dari {client_ip}", flush=True)
     existing = dbs.query(models.Client).filter(models.Client.edge_id == client_data.edge_id).first()
     if existing:
-        existing.last_seen = datetime.utcnow()
+        existing.last_seen = datetime.now(timezone(timedelta(hours=7)))
         existing.ip_address = client_ip
         existing.status = client_data.status
         dbs.commit()
@@ -122,10 +138,19 @@ async def upload_bulk_zip(file: UploadFile = File(...)):
         edge_id = file.filename.split("_")[0]
         
         with zipfile.ZipFile(UPLOAD_TEMP, 'r') as zip_ref:
+            # Dapatkan daftar folder (NRP) sebelum diekstrak untuk pemetaan
+            names = zip_ref.namelist()
+            # Asumsi folder adalah level pertama: "NRP_Name/"
+            top_level = {n.split('/')[0] for n in names if '/' in n}
+            nrps = [t.split('_')[0] for t in top_level if t]
+            
             zip_ref.extractall("data/students")
+            
+            # Daftarkan pemetaan di manajer
+            cl_manager.register_upload(edge_id, nrps)
+            
         os.remove(UPLOAD_TEMP)
-        
-        cl_manager.update_logs(f"Menerima data (zip) dari {edge_id}")
+        cl_manager.update_logs(f"Menerima {len(nrps)} data mahasiswa dari {edge_id}")
         return {"status": "success", "filename": file.filename, "edge_id": edge_id}
     except Exception as e:
         print(f"[UPLOAD ERROR] Gagal ekstrak: {e}", flush=True)
@@ -140,6 +165,7 @@ def workflow_import(dbs: Session = Depends(db.get_db)):
     
     cl_manager.start_phase("Import Data")
     cl_manager.received_data = [] 
+    cl_manager.uploader_map = {} 
     if os.path.exists(UPLOAD_DIR): shutil.rmtree(UPLOAD_DIR)
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     
@@ -159,10 +185,18 @@ def workflow_import(dbs: Session = Depends(db.get_db)):
                 
                 existing = dbs.query(models.UserGlobal).filter(models.UserGlobal.nrp == nrp).first()
                 if not existing:
-                    # Coba deteksi edge_id dari file jika ada tracking (atau default ke client-1)
-                    # Di CL, data yang baru diupload biasanya dari client yang aktif
-                    new_student = models.UserGlobal(name=name, nrp=nrp, registered_edge_id="client-1")
+                    # Ambil edge_id dari pemetaan uploader, atau fallback ke yang pertama ada
+                    edge_id = cl_manager.uploader_map.get(nrp)
+                    if not edge_id:
+                        client = dbs.query(models.Client).first()
+                        edge_id = client.edge_id if client else None
+                    
+                    new_student = models.UserGlobal(name=name, nrp=nrp, registered_edge_id=edge_id)
                     dbs.add(new_student)
+                else:
+                    # Opsi: Perbarui registered_edge_id jika belum ada (opsional)
+                    if not existing.registered_edge_id:
+                        existing.registered_edge_id = cl_manager.uploader_map.get(nrp)
             dbs.commit()
             cl_manager.update_received_data(UPLOAD_DIR)
             
@@ -267,11 +301,12 @@ async def submit_attendance(recap: schemas.AttendanceRecapBase, dbs: Session = D
     # Menerima laporan identifikasi kehadiran dari terminal
     label = str(recap.user_id)
     parts = label.split("_", 1)
-    nrp = parts[0].strip()
+    nrp = label.split("_", 1)[0].strip()
+    print(f"[DEBUG] Submit Attendance from {recap.edge_id}: label='{label}' -> nrp='{nrp}'", flush=True)
     student = dbs.query(models.UserGlobal).filter(models.UserGlobal.nrp == nrp).first()
     if not student:
         name = parts[1].strip() if len(parts) > 1 else "Unknown"
-        student = models.UserGlobal(name=name, nrp=nrp)
+        student = models.UserGlobal(name=name, nrp=nrp, registered_edge_id=recap.edge_id)
         dbs.add(student)
         dbs.commit()
         dbs.refresh(student)
@@ -279,7 +314,7 @@ async def submit_attendance(recap: schemas.AttendanceRecapBase, dbs: Session = D
     attendance = models.AttendanceRecap(
         user_id=student.user_id, edge_id=recap.edge_id,
         confidence=recap.confidence, lecture_id=recap.lecture_id,
-        timestamp=datetime.utcnow()
+        timestamp=datetime.now(timezone(timedelta(hours=7)))
     )
     dbs.add(attendance)
     dbs.commit()

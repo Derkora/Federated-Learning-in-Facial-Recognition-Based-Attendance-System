@@ -4,15 +4,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Edge Client - Centralized Attendance</title>
+    <title>Centralized Terminal | Attendance</title>
     <link rel="stylesheet" href="/static/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono&display=swap"
+        rel="stylesheet">
 </head>
 
 <body>
     <div class="container">
-        <header>
-            <h1>Edge Attendance Project</h1>
-            <div class="terminal-badge">CLIENT: {{ client_id }}</div>
+        <header style="margin-bottom: 3rem;">
+            <h1 style="margin-bottom: 0.5rem;">Local Terminal</h1>
+            <div class="terminal-badge">ID: {{ client_id }}</div>
         </header>
 
         <main>

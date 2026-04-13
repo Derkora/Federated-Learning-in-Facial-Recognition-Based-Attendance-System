@@ -2,14 +2,19 @@ import os
 import time
 import threading
 import requests
+import torch
+import socket
 import cv2
 import numpy as np
+from collections import deque
 from PIL import Image
 from app.utils.mobilefacenet import MobileFaceNet
+from app.utils.preprocessing import image_processor, DEVICE
 from app.controllers.management import ManagementController
 from app.controllers.attendance import AttendanceController
+from app.utils.model_exporter import export_backbone_to_onnx
 
-class CentralizedClientManager:
+class ClientManager:
     # Manajer Utama Client Terpusat (Centralized)
     # Menangani proses registrasi, sinkronisasi model, dan pengunggahan dataset.
     
@@ -17,9 +22,10 @@ class CentralizedClientManager:
         self.server_url = os.getenv("CL_SERVER_ADDRESS", "http://server-cl:8080")
         self.client_id = os.getenv("HOSTNAME", "client-unknown")
         self.raw_data_path = os.getenv("RAW_DATA_PATH", "raw_data")
+        self.camera_index = int(os.getenv("CAMERA_INDEX", "0"))
         
         self.management = ManagementController(self.server_url, self.client_id)
-        self.attendance = AttendanceController(self.server_url, self.client_id)
+        self.attendance = AttendanceController(self)
         
         self.model = MobileFaceNet()
         self.reference_embeddings = {}
@@ -31,9 +37,13 @@ class CentralizedClientManager:
         self._load_local_assets()
         
         # Headless Camera Support
+        self.device = DEVICE
+        self.prediction_buffer = deque(maxlen=5)
+        self.last_face_time = 0
         self.latest_frame = None
         self.latest_result = {"matched": "Standby", "confidence": 0, "latency_ms": 0, "is_virtual": False}
         self.is_camera_running = False
+        self.threshold = 0.50
 
     def _load_version(self):
         v_path = os.path.join("app/data", "models", "model_version.txt")
@@ -54,7 +64,6 @@ class CentralizedClientManager:
         path_r = "app/model/reference_embeddings.pth"
         if os.path.exists(path_m) and os.path.exists(path_r):
             try:
-                from app.utils.image_processing import DEVICE
                 self.model.load_state_dict(torch.load(path_m, map_location=DEVICE))
                 self.model.eval()
                 self.reference_embeddings = torch.load(path_r, map_location=DEVICE)
@@ -73,8 +82,9 @@ class CentralizedClientManager:
         print(f"[CAMERA] Menjalankan loop kamera otomatis...")
         
         # Coba buka kamera asli (Cek index 0 dan 1)
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
+        # Gunakan index eksternal jika dikonfigurasi, jika tidak fallback default
+        cap = cv2.VideoCapture(self.camera_index)
+        if not cap.isOpened() and self.camera_index == 0:
             cap = cv2.VideoCapture(1)
             
         self.is_camera_running = True
@@ -117,8 +127,8 @@ class CentralizedClientManager:
                 time.sleep(5)
                 continue
             
-            # Simpan frame terbaru untuk streaming MJPEG
-            self.latest_frame = frame.copy()
+            # Simpan frame terbaru untuk streaming MJPEG (Resized untuk efisiensi RAM/Bandwidth)
+            self.latest_frame = cv2.resize(frame, (640, 480))
             
             # Lakukan pemrosesan jika model sudah siap (Inference)
             if self.has_assets:
@@ -154,7 +164,8 @@ class CentralizedClientManager:
             try:
                 # 1. Registrasi Terminal ke Server
                 if not self.is_registered:
-                    if self.management.register_client(self.client_id):
+                    ip = socket.gethostbyname(socket.gethostname())
+                    if self.management.register_client(ip):
                         self.is_registered = True
                         print(f"[OK] Client berhasil terdaftar di server.")
                     else: 
@@ -167,7 +178,13 @@ class CentralizedClientManager:
                     if res.status_code == 200:
                         server_info = res.json()
                         server_version = server_info.get("model_version", 0)
+                        server_threshold = server_info.get("inference_threshold", 0.50)
                         upload_requested = server_info.get("upload_requested", False)
+                        
+                        # Sync threshold
+                        if server_threshold != self.threshold:
+                            print(f"[SYNC] Threshold updated: {server_threshold}")
+                            self.threshold = server_threshold
                         
                         # Sinkronisasi jika versi lokal tertinggal
                         if not self.has_assets or server_version > self.current_model_version:
@@ -178,7 +195,17 @@ class CentralizedClientManager:
                                 self.reference_embeddings = refs
                                 self.current_model_version = server_version
                                 self._save_version(server_version)
-                                print(f"[OK] Model dan basis data referensi v{server_version} berhasil diperbarui.")
+                                print(f"[OK] Model v{server_version} berhasil diperbarui.")
+                                
+                                # Ekspor ke ONNX untuk inferensi yang lebih ringan (Edge Optimization)
+                                save_path = "app/model/global_model.pth"
+                                onnx_path = os.path.join("app/data", "models", "backbone.onnx")
+                                q_model = os.path.join("app/data", "models", "backbone_quantized.onnx")
+                                try:
+                                    threading.Thread(target=export_backbone_to_onnx, 
+                                                     args=(save_path, onnx_path, q_model), 
+                                                     daemon=True).start()
+                                except: pass
                             else:
                                 time.sleep(10)
                                 continue

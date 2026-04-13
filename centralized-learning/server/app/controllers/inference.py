@@ -2,7 +2,7 @@ import os
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from app.db import models, schemas
 from app.config import MODEL_PATH, REF_PATH
 
@@ -31,7 +31,7 @@ class InferenceController:
             edge_id=recap.edge_id,
             confidence=recap.confidence,
             lecture_id=recap.lecture_id,
-            timestamp=datetime.utcnow()
+            timestamp=datetime.now(timezone(timedelta(hours=7)))
         )
         dbs.add(attendance)
         dbs.commit()

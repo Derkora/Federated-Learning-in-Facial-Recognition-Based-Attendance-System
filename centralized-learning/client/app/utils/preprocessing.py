@@ -49,43 +49,23 @@ class ImageProcessor:
             if boxes is None or len(boxes) == 0:
                 return None, None, 0.0
             
-            # Gunakan penanganan manual untuk post-processing (Zero-Distortion)
-            # detect_face sekarang tetap mengembalikan tensor Square standar dari MTCNN
-            # untuk keperluan internal, tapi kita akan pakai get_face_crop untuk kualitas produksi.
             face = self.mtcnn(img, save_path=save_path)
             return face, boxes[0], probs[0]
         except Exception as e:
             print(f"Face detection error: {e}")
             return None, None, 0.0
 
-    def get_face_crop(self, img_pil):
-        """
-        Kembalikan PIL Image berisi wajah yang sudah dicrop standar (SQUARE) 
-        lalu di-resize/squash ke 96x112 (Portrait) sesuai arsitektur.
-        """
-        try:
-            boxes, _ = self.mtcnn.detect(img_pil)
-            if boxes is None or len(boxes) == 0:
-                return None
-            
-            box = boxes[0] # [x, y, x2, y2]
-            
-            # 1. MTCNN Standard Square Crop Logic (with margin)
-            # Ini menghasilkan wajah yang sedikit 'pipih' saat di-resize ke 96x112, 
-            # yang mana sesuai dengan feature distribution training model ini.
-            img_crop = img_pil.crop((box[0], box[1], box[2], box[3]))
-            
-            # 2. Squash Resize (Architectural Alignment)
-            return img_crop.resize((96, 112), Image.BILINEAR)
-        except Exception as e:
-            print(f"[PREPROCESS ERROR] {e}")
-            return None
-
     def prepare_for_model(self, face_data):
         """
         Mengonversi wajah PIL atau Tensor menjadi tensor 112x96 dengan normalisasi.
         Bentuk Keluaran: (1, 3, 112, 96)
         """
+        # Keamanan: Jika face_data adalah tuple (hasil detect_face yang belum di-unpack), ambil elemen pertama
+        if isinstance(face_data, tuple):
+            face_data = face_data[0]
+            
+        if face_data is None: return None
+
         if isinstance(face_data, torch.Tensor):
             # MTCNN dengan post_process=False mengembalikan float [0, 255]
             # Skala ke [0, 1] sebelum konversi PIL atau normalisasi apa pun

@@ -14,6 +14,7 @@ dist/
 downloads/
 videos/
 datasets/
+data/
 datasets_equal/
 client1_data/
 client2_data/

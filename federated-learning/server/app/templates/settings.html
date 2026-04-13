@@ -1,0 +1,112 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
+    <h1 style="color: var(--accent); margin: 0; font-size: 1.8rem;">Pengaturan Sistem</h1>
+    <p style="color: var(--text-muted); margin-top: 0.5rem;">Konfigurasi parameter Federated Learning dan ambang batas
+        inferensi.</p>
+</div>
+
+<div class="layout-grid">
+    <!-- Card 1: Pelatihan -->
+    <div class="glass" style="padding: 1.5rem;">
+        <h3
+            style="color: var(--accent); margin-top: 0; margin-bottom: 1.5rem; font-size: 1.2rem; display: flex; align-items: center; gap: 0.5rem;">
+            ⚙️ Parameter Pelatihan
+        </h3>
+        <div class="setting-item">
+            <label>Total Rounds</label>
+            <input type="number" id="rounds" value="{{ status.default_rounds }}" class="form-input">
+        </div>
+        <div class="setting-item">
+            <label>Local Epochs</label>
+            <input type="number" id="epochs" value="{{ status.default_epochs }}" class="form-input">
+        </div>
+        <div class="setting-item">
+            <label>Min. Clients</label>
+            <input type="number" id="min_clients" value="{{ status.default_min_clients }}" class="form-input">
+        </div>
+        <button onclick="saveSettings()" class="btn btn-primary" style="width: 100%; margin-top: 1rem;">
+            Simpan Parameter
+        </button>
+    </div>
+
+    <!-- Card 2: Inferensi -->
+    <div class="glass" style="padding: 1.5rem;">
+        <h3
+            style="color: var(--accent); margin-top: 0; margin-bottom: 1.5rem; font-size: 1.2rem; display: flex; align-items: center; gap: 0.5rem;">
+            🧠 Ambang Batas Inferensi
+        </h3>
+        <div class="setting-item">
+            <label>Recognition Threshold (0.0 - 1.0)</label>
+            <input type="number" step="0.01" id="threshold" value="{{ status.inference_threshold }}" class="form-input">
+        </div>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 1rem;">
+            Nilai lebih tinggi = Lebih ketat (Mengurangi False Positive).<br>
+            Rekomendasi: <b>0.45 - 0.55</b>
+        </p>
+        <button onclick="saveSettings()" class="btn btn-primary" style="width: 100%; margin-top: 2rem;">
+            Simpan Inferensi
+        </button>
+    </div>
+</div>
+
+<style>
+    .setting-item {
+        margin-bottom: 1.2rem;
+    }
+
+    .setting-item label {
+        display: block;
+        color: var(--text-muted);
+        font-size: 0.85rem;
+        margin-bottom: 0.5rem;
+        font-weight: 500;
+    }
+
+    .form-input {
+        width: 100%;
+        padding: 12px;
+        background: rgba(0, 0, 0, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        color: #fff;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 1rem;
+        transition: border-color 0.3s;
+    }
+
+    .form-input:focus {
+        outline: none;
+        border-color: var(--accent);
+    }
+</style>
+
+<script>
+    async function saveSettings() {
+        const data = {
+            rounds: document.getElementById('rounds').value,
+            epochs: document.getElementById('epochs').value,
+            min_clients: document.getElementById('min_clients').value,
+            threshold: document.getElementById('threshold').value
+        };
+
+        try {
+            const res = await fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            const result = await res.json();
+            if (result.status === 'success') {
+                alert('Pengaturan berhasil disimpan!');
+                location.reload();
+            } else {
+                alert('Gagal menyimpan: ' + result.message);
+            }
+        } catch (e) {
+            alert('Terjadi kesalahan: ' + e);
+        }
+    }
+</script>
+{% endblock %}

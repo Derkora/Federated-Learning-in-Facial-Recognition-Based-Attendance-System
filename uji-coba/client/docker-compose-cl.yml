@@ -1,7 +1,7 @@
 services:
   client-cl:
     build:
-      context: ../../../centralized-learning
+      context: ../../centralized-learning
       dockerfile: client/Dockerfile
     container_name: client_cl_balanced
     ports:

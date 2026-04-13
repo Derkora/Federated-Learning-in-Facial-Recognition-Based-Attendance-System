@@ -1,7 +1,7 @@
 services:
   server-cl:
     build:
-      context: ../../../centralized-learning
+      context: ../../centralized-learning
       dockerfile: server/Dockerfile
     container_name: server_cl_balanced
     ports:

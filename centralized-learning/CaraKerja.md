@@ -8,7 +8,7 @@ Sistem ini dirancang untuk mencapai identifikasi wajah dengan performa maksimal 
 Proses penyiapan data yang dilakukan di sisi terminal sebelum pengiriman ke server pusat.
 - **Laplacian Variance Selection**: Sistem memilih **50 foto tertajam** per mahasiswa untuk menghilangkan noise/blur.
 - **MTCNN Face Cropping**: Wajah dipotong secara otomatis dari frame kamera asli untuk meminimalkan noise latar belakang.
-- **112x96 Dimensional Alignment**: Wajah yang dipotong diubah ukurannya ke dimensi standar 112x96 agar sesuai dengan input arsitektur MobileFaceNet.
+- **112x96 Dimensional Alignment**: Wajah yang dipotong diubah ukurannya ke dimensi standar **112x96** agar sesuai dengan input arsitektur MobileFaceNet.
 
 ---
 
@@ -35,4 +35,4 @@ Setelah model disinkronisasi, terminal beralih ke mode pengenalan real-time:
 - **Registry Synchronization**: Terminal mengunduh "World-Knowledge" (centroid wajah) terbaru dari server pusat.
 - **Cosine Similarity Matching**: Wajah yang dideteksi di depan kamera dibandingkan dengan basis data registri menggunakan skor **Cosine Similarity**.
 - **Average Result Voting**: Menggunakan buffer frame untuk menstabilkan skor deteksi sehingga lebih handal terhadap perubahan cahaya atau pose.
-- **Threshold 0.45+**: Ambang batas minimal kemiripan untuk menentukan apakah mahasiswa dianggap "Hadir" atau "Unknown".
+- **Threshold 0.70+**: Ambang batas minimal kemiripan untuk menentukan apakah mahasiswa dianggap "Hadir" atau "Unknown". Angka ini memastikan presisi tinggi untuk lingkungan kampus.

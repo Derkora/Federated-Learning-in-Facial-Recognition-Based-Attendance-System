@@ -1,0 +1,25 @@
+# Web Framework & API
+fastapi==0.104.1
+uvicorn[standard]==0.24.0.post1
+pydantic==1.10.13
+python-multipart==0.0.6
+requests==2.31.0
+jinja2==3.1.2
+
+# Database (Local logs/Cache)
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+
+# ML & Computer Vision (CPU Only)
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.1.1+cpu
+torchvision==0.16.1+cpu
+onnxruntime==1.16.3
+onnx==1.15.0
+facenet-pytorch==2.5.3
+numpy==1.26.2
+Pillow==10.1.0
+opencv-python-headless==4.8.1.78
+
+# Misc
+cryptography==41.0.6

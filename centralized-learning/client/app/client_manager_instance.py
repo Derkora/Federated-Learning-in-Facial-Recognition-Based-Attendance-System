@@ -1,3 +1,3 @@
-from app.client import CentralizedClientManager
+from app.manager import ClientManager
 
-cl_client = CentralizedClientManager()
+cl_client = ClientManager()

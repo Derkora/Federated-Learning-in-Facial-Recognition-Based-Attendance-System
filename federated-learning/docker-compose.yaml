@@ -1,4 +1,5 @@
 services:
+  # --- SERVER FEDERATED (AGGREGATOR) ---
   server-fl:
     build: ./server
     container_name: federated_server
@@ -11,9 +12,12 @@ services:
     depends_on:
       server-fl-db:
         condition: service_healthy
+    volumes:
+      - ./server/data:/app/data
     networks:
       - flnet
 
+  # --- TERMINAL CLIENT 1 ---
   client1-fl:
     build: ./client
     container_name: federated_client1
@@ -29,9 +33,11 @@ services:
         condition: service_healthy
     volumes:
       - ../datasets/client1_data:/app/raw_data
+      - client1_app_data:/app/data
     networks:
       - flnet
 
+  # --- TERMINAL CLIENT 2 ---
   client2-fl:
     build: ./client
     container_name: federated_client2
@@ -47,11 +53,14 @@ services:
         condition: service_healthy
     volumes:
       - ../datasets/client2_data:/app/raw_data
+      - client2_app_data:/app/data
     networks:
       - flnet
 
+  # --- DATABASE SERVER ---
   server-fl-db:
-    image: postgres:15
+    image: postgres:15-alpine
+    command: postgres -c shared_buffers=64MB -c max_connections=50 -c work_mem=8MB
     environment:
       - POSTGRES_USER=admin
       - POSTGRES_PASSWORD=admin123
@@ -68,8 +77,10 @@ services:
       timeout: 5s
       retries: 5
 
+  # --- DATABASE CLIENT 1 ---
   client1-fl-db:
-    image: postgres:15
+    image: postgres:15-alpine
+    command: postgres -c shared_buffers=16MB -c max_connections=20 -c work_mem=2MB
     environment:
       - POSTGRES_USER=client
       - POSTGRES_PASSWORD=client123
@@ -84,8 +95,10 @@ services:
       timeout: 5s
       retries: 5
 
+  # --- DATABASE CLIENT 2 ---
   client2-fl-db:
-    image: postgres:15
+    image: postgres:15-alpine
+    command: postgres -c shared_buffers=16MB -c max_connections=20 -c work_mem=2MB
     environment:
       - POSTGRES_USER=client
       - POSTGRES_PASSWORD=client123
@@ -108,3 +121,5 @@ volumes:
   server_fl_data:
   client1_fl_data:
   client2_fl_data:
+  client1_app_data:
+  client2_app_data:

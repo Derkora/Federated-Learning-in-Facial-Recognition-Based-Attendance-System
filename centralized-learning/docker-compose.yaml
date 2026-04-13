@@ -1,4 +1,5 @@
 services:
+  # --- SERVER PUSAT (CENTRALIZED) ---
   server-cl:
     build: ./server
     container_name: centralized_server
@@ -10,9 +11,12 @@ services:
     depends_on:
       server-cl-db:
         condition: service_healthy
+    volumes:
+      - ./server/data:/app/data
     networks:
       - clnet
 
+  # --- TERMINAL CLIENT 1 ---
   client1-cl:
     build: ./client
     container_name: centralized_client1
@@ -27,9 +31,11 @@ services:
       - "8082:8080"
     volumes:
       - ../datasets/client1_data:/app/raw_data
+      - ./client/app/data:/app/app/data
     networks:
       - clnet
 
+  # --- TERMINAL CLIENT 2 ---
   client2-cl:
     build: ./client
     container_name: centralized_client2
@@ -44,11 +50,14 @@ services:
       - "8083:8080"
     volumes:
       - ../datasets/client2_data:/app/raw_data
+      - ./client/app/data:/app/app/data
     networks:
       - clnet
 
+  # --- DATABASE SERVER ---
   server-cl-db:
-    image: postgres:15
+    image: postgres:15-alpine
+    command: postgres -c shared_buffers=64MB -c max_connections=50 -c work_mem=8MB
     environment:
       - POSTGRES_USER=admin
       - POSTGRES_PASSWORD=admin123
@@ -65,8 +74,10 @@ services:
       timeout: 5s
       retries: 5
 
+  # --- DATABASE CLIENT 1 ---
   client1-cl-db:
-    image: postgres:15
+    image: postgres:15-alpine
+    command: postgres -c shared_buffers=16MB -c max_connections=20 -c work_mem=2MB
     environment:
       - POSTGRES_USER=client
       - POSTGRES_PASSWORD=client123
@@ -81,8 +92,10 @@ services:
       timeout: 5s
       retries: 5
 
+  # --- DATABASE CLIENT 2 ---
   client2-cl-db:
-    image: postgres:15
+    image: postgres:15-alpine
+    command: postgres -c shared_buffers=16MB -c max_connections=20 -c work_mem=2MB
     environment:
       - POSTGRES_USER=client
       - POSTGRES_PASSWORD=client123

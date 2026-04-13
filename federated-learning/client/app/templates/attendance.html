@@ -1,25 +1,30 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-    <h2 style="margin: 0;">Edge Client: {{ client_id }}</h2>
-    <span class="badge" id="model-badge">Model v{{ model_version }}</span>
-</div>
-<div style="position: relative; overflow: hidden; border-radius: 12px; background: #000;">
-    <img id="video-stream" src="/video_feed" style="width: 100%; height: auto; display: block;">
+<div class="glass" style="padding: 1.5rem; margin-bottom: 1.5rem;">
     <div
-        style="position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 4px; font-size: 0.7rem;">
-        🔴 SIARAN LANGSUNG (REMOTE) <span id="virtual-indicator" style="display:none; color:#f87171; margin-left:5px;">|
-            KAMERA VIRTUAL</span>
+        style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.8rem;">
+        <h2 style="margin: 0; font-size: 1.4rem;">Edge Client: {{ client_id }}</h2>
+        <span class="badge" id="model-badge">Model v{{ model_version }}</span>
+    </div>
+    <div
+        style="position: relative; overflow: hidden; border-radius: 12px; background: #000; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
+        <img id="video-stream" src="/video_feed" style="width: 100%; height: auto; display: block;">
+        <div
+            style="position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,0.6); padding: 6px 12px; border-radius: 6px; font-size: 0.75rem; border: 1px solid rgba(255,255,255,0.1);">
+            🔴 <span style="font-weight: 700;">LIVE</span> <span id="virtual-indicator"
+                style="display:none; color:#f87171; margin-left:5px;">| KAMERA VIRTUAL</span>
+        </div>
     </div>
 </div>
 
-<div class="result-card" id="status-card">
+<div class="result-card glass" id="status-card">
     Memindai wajah...
 </div>
+
 <button id="btn-browser-cam" class="btn"
-    style="width: 100%; margin-top: 1rem; background: rgba(255,255,255,0.05); color: var(--text-muted); border: 1px solid rgba(255,255,255,0.1); padding: 0.8rem;">
-    📷 Aktifkan Kamera Laptop
+    style="width: 100%; height: 60px; margin-top: 1rem; background: rgba(255,255,255,0.03); color: var(--text-muted); border: 1px solid rgba(255,255,255,0.08); font-size: 1rem; display: flex; align-items: center; justify-content: center; gap: 0.5rem;">
+    📷 Aktifkan Kamera Lokal
 </button>
 </div>
 
@@ -88,7 +93,7 @@
                 if (bStream) {
                     bCanvas.width = 640; bCanvas.height = 480;
                     bCanvas.getContext('2d').drawImage(bVideo, 0, 0, 640, 480);
-                    const b64 = bCanvas.toDataURL('image/jpeg', 0.6).split(',')[1];
+                    const b64 = bCanvas.toDataURL('image/jpeg', 0.4).split(',')[1];
                     try {
                         await fetch('/api/inference', {
                             method: 'POST',

@@ -66,12 +66,12 @@ async def video_feed():
     def gen_frames():
         while True:
             if cl_client.latest_frame is not None:
-                # Kompres ke JPEG untuk efisiensi bandwidth
-                ret, buffer = cv2.imencode('.jpg', cl_client.latest_frame)
+                # Kompres ke JPEG dengan kualitas rendah (Optimize bandwidth)
+                ret, buffer = cv2.imencode('.jpg', cl_client.latest_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 40])
                 frame_bytes = buffer.tobytes()
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-            time.sleep(0.2)
+            time.sleep(0.3) # Throttle FPS -> ~3 FPS
 
     return StreamingResponse(gen_frames(), media_type='multipart/x-mixed-replace; boundary=frame')
 

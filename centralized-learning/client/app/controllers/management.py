@@ -4,7 +4,8 @@ import zipfile
 import requests
 import torch
 import traceback
-from app.utils.image_processing import DEVICE
+import collections
+from app.utils.preprocessing import DEVICE
 
 MODEL_DIR = "app/model"
 DATA_DIR = os.getenv("RAW_DATA_PATH", "raw_data") + "/students"
@@ -68,7 +69,12 @@ class ManagementController:
                         if chunk: f.write(chunk)
                 
                 refs = torch.load(path_r, map_location=DEVICE)
-                return True, refs
+                
+                # --- NRP INDEXING (Sorted logic) ---
+                sorted_refs = collections.OrderedDict(sorted(refs.items()))
+                print(f"[SYNC] Referensi berhasil diurutkan berdasarkan NRP ({len(sorted_refs)} identitas).")
+                
+                return True, sorted_refs
             
             print(f"[WARN] Gagal mendapatkan referensi. HTTP: {res_r.status_code}")
             return False, None

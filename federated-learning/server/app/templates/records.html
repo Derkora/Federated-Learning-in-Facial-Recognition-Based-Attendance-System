@@ -1,54 +1,103 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div class="glass" style="padding: 1.5rem;">
-    <h2>Papan Kehadiran Hari Ini</h2>
-    <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 2rem;">Pemantauan kehadiran mahasiswa hari ini
-        secara real-time dari seluruh terminal.</p>
+<div class="glass" style="padding: 1.5rem; margin-bottom: 2rem;">
+    <h2 style="color: var(--accent); margin-top: 0; font-size: 1.4rem;">Papan Kehadiran Real-time</h2>
+    <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 2rem;">Pemantauan aktivitas presensi dari
+        seluruh terminal Edge secara langsung.</p>
+</div>
 
+<div class="glass" style="padding: 1rem; overflow: hidden;">
     <div style="overflow-x: auto;">
-        <table>
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem; text-align: left; min-width: 600px;">
             <thead>
-                <tr>
-                    <th>NRP</th>
-                    <th>Nama</th>
-                    <th>Status</th>
-                    <th>Waktu</th>
-                    <th>Confidence</th>
-                    <th>Client Asal</th>
+                <tr style="border-bottom: 2px solid var(--accent-low);">
+                    <th style="padding: 12px;">NRP</th>
+                    <th style="padding: 12px;">Nama</th>
+                    <th style="padding: 12px;">Status</th>
+                    <th style="padding: 12px;">Waktu</th>
+                    <th style="padding: 12px;">Confidence</th>
+                    <th style="padding: 12px;">Client Asal</th>
                 </tr>
             </thead>
-            <tbody>
-                {% for record in records %}
-                <tr>
-                    <td><code>{{ record.nrp }}</code></td>
-                    <td><b>{{ record.name }}</b></td>
-                    <td>
-                        {% if record.status == 'PRESENT' %}
-                        <span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #10b981;">
-                            ✅ SUDAH ABSEN
-                        </span>
-                        {% else %}
-                        <span class="badge" style="background: rgba(239, 68, 68, 0.2); color: #ef4444;">
-                            ❌ BELUM ABSEN
-                        </span>
-                        {% endif %}
-                    </td>
-                    <td>{{ record.timestamp.strftime('%H:%M:%S') if record.timestamp else '-' }}</td>
-                    <td>{{ (record.confidence * 100) | round(1) }}%</td>
-                    <td><span class="badge" style="background: rgba(79, 70, 229, 0.1); color: #818cf8;">{{
-                            record.edge_id }}</span></td>
-                </tr>
-                {% endfor %}
-                {% if not records %}
+            <tbody id="attendance-body">
                 <tr>
                     <td colspan="6" style="padding: 40px; text-align: center; color: var(--text-muted);">
-                        Belum ada data mahasiswa yang terdaftar di sistem.
+                        Memuat data kehadiran real-time...
                     </td>
                 </tr>
-                {% endif %}
             </tbody>
         </table>
     </div>
 </div>
+
+<style>
+    #attendance-body tr {
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        transition: background 0.3s;
+    }
+
+    #attendance-body tr:hover {
+        background: rgba(255, 255, 255, 0.02);
+    }
+
+    #attendance-body td {
+        padding: 12px;
+    }
+
+    .status-badge {
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-weight: bold;
+        font-size: 0.8rem;
+    }
+
+    .status-attended {
+        background: rgba(16, 185, 129, 0.2);
+        color: #10b981;
+    }
+
+    .status-pending {
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--text-muted);
+    }
+</style>
+
+<script>
+    async function updateAttendance() {
+        try {
+            const res = await fetch('/api/attendance');
+            const data = await res.json();
+            const body = document.getElementById('attendance-body');
+
+            if (data.length > 0) {
+                body.innerHTML = data.map(a => {
+                    const isAttended = a.status === 'HADIR';
+                    return `
+                        <tr>
+                            <td><code>${a.nrp}</code></td>
+                            <td><b>${a.name}</b></td>
+                            <td>
+                                <span class="status-badge ${isAttended ? 'status-attended' : 'status-pending'}">
+                                    ${isAttended ? '✅ HADIR' : 'MENUNGGU'}
+                                </span>
+                            </td>
+                            <td>${a.time}</td>
+                            <td>${a.confidence}</td>
+                            <td><span class="badge" style="background: rgba(79, 70, 229, 0.1); color: #818cf8;">${a.registered_edge_id}</span></td>
+                        </tr>
+                    `;
+                }).join('');
+            } else {
+                body.innerHTML = '<tr><td colspan="6" style="padding: 40px; text-align: center; color: var(--text-muted);">Belum ada data mahasiswa yang terdaftar di sistem.</td></tr>';
+            }
+        } catch (e) {
+            console.error("Attendance Update Error:", e);
+        }
+    }
+
+    // Initial load and 2s polling
+    updateAttendance();
+    setInterval(updateAttendance, 2000);
+</script>
 {% endblock %}
