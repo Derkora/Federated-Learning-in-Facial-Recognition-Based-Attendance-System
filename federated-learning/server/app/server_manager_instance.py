@@ -38,10 +38,11 @@ def weighted_average(metrics: list) -> dict:
 # Bagian ini menangani penggabungan bobot model dari terminal-terminal (Aggregation)
 # dan menyimpannya ke database global setelah setiap ronde selesai.
 class SaveModelStrategy(fl.server.strategy.FedAvg):
-    def __init__(self, session_id: str, manager, *args, **kwargs):
+    def __init__(self, session_id: str, manager, target_version: int, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.session_id = session_id
         self.manager = manager
+        self.target_version = target_version
 
     def aggregate_fit(self, server_round: int, results: list, failures: list):
         print(f"\n[ROUND {server_round}] Ringkasan Performa")
@@ -114,10 +115,10 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                     
                     global_model = db.query(GlobalModel).first()
                     if not global_model:
-                        global_model = GlobalModel(version=server_round, weights=weights_bytes)
+                        global_model = GlobalModel(version=self.target_version, weights=weights_bytes)
                         db.add(global_model)
                     else:
-                        global_model.version = server_round
+                        global_model.version = self.target_version
                         global_model.weights = weights_bytes
                         global_model.last_updated = datetime.utcnow()
                     
@@ -203,6 +204,55 @@ class FLServerManager:
             "unique_client_ids": [], # Pelacakan ID unik client yang berkontribusi
             "convergence_round": None
         }
+        self._load_persistence()
+
+    def _load_persistence(self):
+        """Memuat ulang status dari database untuk persistensi log & versi."""
+        print("[PERSISTENCE] Loading server state from database...")
+        db = SessionLocal()
+        try:
+            # 1. Muat Versi Model Terbaru
+            latest_model = db.query(GlobalModel).order_by(GlobalModel.last_updated.desc()).first()
+            if latest_model:
+                self.model_version = latest_model.version
+                print(f"[PERSISTENCE] Loaded Model Version: v{self.model_version}")
+
+            # 2. Muat Riwayat Ronde
+            rounds = db.query(FLRound).order_by(FLRound.timestamp.asc()).all()
+            if rounds:
+                self.metrics["round_history"] = []
+                self.metrics["unique_client_ids"] = []
+                
+                for r in rounds:
+                    try:
+                        m = json.loads(r.metrics)
+                        # Reconstruct round data
+                        # Note: clients metrics per round aren't fully stored in FLRound.metrics 
+                        # but we can reconstruct the global history.
+                        entry = {
+                            "round": r.round_number,
+                            "server": m,
+                            "clients": m.get("clients", {}) # Fallback
+                        }
+                        self.metrics["round_history"].append(entry)
+                        
+                        # Update global metrics to the latest round
+                        self.metrics["accuracy"] = m.get("accuracy", 0)
+                        self.metrics["loss"] = m.get("loss", 0)
+                        
+                        if self.metrics["convergence_round"] is None and m.get("accuracy", 0) > 0.90:
+                            self.metrics["convergence_round"] = r.round_number
+                            
+                    except Exception as e:
+                        print(f"[PERSISTENCE WARN] Failed to parse round {r.round_number}: {e}")
+
+                # 3. Update estimasi biaya/transmisi berdasarkan history yang dimuat
+                self.update_metrics({})
+                print(f"[PERSISTENCE] Loaded {len(rounds)} rounds from history.")
+        except Exception as e:
+            print(f"[PERSISTENCE ERROR] Failed to load history: {e}")
+        finally:
+            db.close()
 
     def increment_version(self):
         self.model_version += 1
@@ -385,10 +435,14 @@ class FLServerManager:
         finally:
             db.close()
 
+        # Tentukan versi target untuk sesi ini (Stabilitas Versi: v15 -> v1)
+        target_version = self.model_version + 1
+
         # Strategi pelatihan FedAvg dengan konfigurasi dinamis (mu=0.05 untuk stabilitas)
         strategy = SaveModelStrategy(
             session_id=session_id,
             manager=self,
+            target_version=target_version,
             initial_parameters=initial_parameters,
             fraction_fit=1.0,
             min_fit_clients=min_clients,
@@ -412,9 +466,13 @@ class FLServerManager:
                 config=fl.server.ServerConfig(num_rounds=rounds),
                 strategy=strategy,
             )
+            # Update versi hanya setelah seluruh ronde selesai (Successful Session)
+            self.model_version = target_version
+            self.update_logs(f"Versi Model Global stabil di v{self.model_version}")
         finally:
             self.is_running = False
             self.end_phase("Training")
+
 
 # Instansi Global
 fl_manager = FLServerManager()

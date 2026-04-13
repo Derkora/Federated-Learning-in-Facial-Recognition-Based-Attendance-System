@@ -37,6 +37,40 @@ class CentralizedServerManager:
         self.default_batch_size = TRAINING_PARAMS["batch_size"]
         self.inference_threshold = 0.50
         self.load_settings()
+        self._load_persistence()
+
+    def _load_persistence(self):
+        """Memuat ulang status dari database untuk persistensi log & versi."""
+        print("[PERSISTENCE] Loading Centralized server state...")
+        db = SessionLocal()
+        try:
+            # 1. Muat Versi Berdasarkan Jumlah Model yang Tersimpan
+            version_count = db.query(models.ModelVersion).count()
+            self.model_version = version_count
+            print(f"[PERSISTENCE] Loaded Model Version: v{self.model_version}")
+
+            # 2. Muat Riwayat Pelatihan (Rounds)
+            rounds = db.query(models.TrainingRound).order_by(models.TrainingRound.round_id.asc()).all()
+            if rounds:
+                self.metrics["epoch_history"] = []
+                for r in rounds:
+                    self.metrics["epoch_history"].append({
+                        "epoch": r.round_number,
+                        "loss": r.global_loss,
+                        "accuracy": r.global_accuracy
+                    })
+                
+                # Update metrics global ke ronde terakhir
+                self.metrics["accuracy"] = rounds[-1].global_accuracy
+                self.metrics["loss"] = rounds[-1].global_loss
+                print(f"[PERSISTENCE] Loaded {len(rounds)} training rounds.")
+                
+            # Update estimasi biaya
+            self.update_metrics({})
+        except Exception as e:
+            print(f"[PERSISTENCE ERROR] Failed to load history: {e}")
+        finally:
+            db.close()
 
     def load_settings(self):
         if os.path.exists(self.settings_path):
