@@ -20,8 +20,13 @@ class ClientManager:
     
     def __init__(self):
         self.server_url = os.getenv("CL_SERVER_ADDRESS", "http://server-cl:8080")
-        self.client_id = os.getenv("HOSTNAME", "client-unknown")
-        self.raw_data_path = os.getenv("RAW_DATA_PATH", "raw_data")
+        self.data_path = os.getenv("DATA_PATH", "/app/data")
+        os.makedirs(os.path.join(self.data_path, "models"), exist_ok=True)
+        
+        # Load or Generate Persistent Identity
+        self.client_id = self._load_identity()
+        
+        self.raw_data_path = os.getenv("RAW_DATA_PATH", "/app/raw_data")
         self.camera_index = int(os.getenv("CAMERA_INDEX", "0"))
         
         self.management = ManagementController(self.server_url, self.client_id)
@@ -45,8 +50,29 @@ class ClientManager:
         self.is_camera_running = False
         self.threshold = 0.50
 
+    def _load_identity(self):
+        """Memuat atau membuat identitas unik client yang tersimpan di volume data."""
+        id_path = os.path.join(self.data_path, "client_id.txt")
+        if os.path.exists(id_path):
+            with open(id_path, "r") as f:
+                cid = f.read().strip()
+                if cid:
+                    print(f"[IDENTITY] Loaded persistent ID: {cid}")
+                    return cid
+        
+        # Jika belum ada, gunakan HOSTNAME (Container ID) atau fallback
+        new_id = os.getenv("HOSTNAME", f"client-{int(time.time())}")
+        try:
+            with open(id_path, "w") as f:
+                f.write(new_id)
+            print(f"[IDENTITY] Registered new persistent ID: {new_id}")
+        except Exception as e:
+            print(f"[IDENTITY ERROR] Failed to save identity: {e}")
+        
+        return new_id
+
     def _load_version(self):
-        v_path = os.path.join("app/data", "models", "model_version.txt")
+        v_path = os.path.join(self.data_path, "models", "model_version.txt")
         if os.path.exists(v_path):
             with open(v_path, "r") as f:
                 try: return int(f.read().strip())
@@ -54,14 +80,14 @@ class ClientManager:
         return 0
 
     def _save_version(self, v):
-        os.makedirs("app/data/models", exist_ok=True)
-        v_path = os.path.join("app/data", "models", "model_version.txt")
+        os.makedirs(os.path.join(self.data_path, "models"), exist_ok=True)
+        v_path = os.path.join(self.data_path, "models", "model_version.txt")
         with open(v_path, "w") as f:
             f.write(str(v))
 
     def _load_local_assets(self):
-        path_m = "app/model/global_model.pth"
-        path_r = "app/model/reference_embeddings.pth"
+        path_m = "/app/app/model/global_model.pth"
+        path_r = "/app/app/model/reference_embeddings.pth"
         if os.path.exists(path_m) and os.path.exists(path_r):
             try:
                 self.model.load_state_dict(torch.load(path_m, map_location=DEVICE))
@@ -79,12 +105,26 @@ class ClientManager:
 
     def _camera_loop(self):
         # Loop kamera mandiri (Headless Mode)
-        print(f"[CAMERA] Menjalankan loop kamera otomatis...")
+        cam_idx = self.camera_index
+        cam_width = int(os.getenv("CAMERA_WIDTH", 1280))
+        cam_height = int(os.getenv("CAMERA_HEIGHT", 720))
+        cam_format = os.getenv("CAMERA_FORMAT", "MJPG").upper()
+
+        print(f"[CAMERA] Mencoba membuka kamera hardware (Index: {cam_idx}, {cam_width}x{cam_height})...")
+        cap = cv2.VideoCapture(cam_idx)
         
-        # Coba buka kamera asli (Cek index 0 dan 1)
-        # Gunakan index eksternal jika dikonfigurasi, jika tidak fallback default
-        cap = cv2.VideoCapture(self.camera_index)
-        if not cap.isOpened() and self.camera_index == 0:
+        # Optimasi Jetson/Raspi: Paksa format MJPG jika dikonfigurasi (lebih ringan dari YUYV)
+        if cam_format == "MJPG":
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam_width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_height)
+        
+        # Beri waktu hardware inisialisasi
+        time.sleep(1)
+        
+        if not cap.isOpened() and cam_idx == 0:
+            print(f"[CAMERA WARN] Gagal akses hardware pada index 0. Mencoba index 1...")
             cap = cv2.VideoCapture(1)
             
         self.is_camera_running = True
@@ -198,12 +238,14 @@ class ClientManager:
                                 print(f"[OK] Model v{server_version} berhasil diperbarui.")
                                 
                                 # Ekspor ke ONNX untuk inferensi yang lebih ringan (Edge Optimization)
-                                save_path = "app/model/global_model.pth"
-                                onnx_path = os.path.join("app/data", "models", "backbone.onnx")
-                                q_model = os.path.join("app/data", "models", "backbone_quantized.onnx")
+                                save_path = "/app/app/model/global_model.pth"
+                                onnx_dir = os.path.join(self.data_path, "models")
+                                onnx_file = os.path.join(onnx_dir, "backbone.onnx")
+                                q_file = os.path.join(onnx_dir, "backbone_quantized.onnx")
                                 try:
+                                    os.makedirs(onnx_dir, exist_ok=True)
                                     threading.Thread(target=export_backbone_to_onnx, 
-                                                     args=(save_path, onnx_path, q_model), 
+                                                     args=(save_path, onnx_file, q_file), 
                                                      daemon=True).start()
                                 except: pass
                             else:

@@ -24,7 +24,7 @@ class ImageProcessor:
                 margin=20, 
                 keep_all=False, 
                 device=DEVICE, 
-                post_process=False 
+                post_process=True 
             )
         return self._mtcnn
 
@@ -83,22 +83,15 @@ class ImageProcessor:
 
     def prepare_for_model(self, face_data):
         """
-        Mengonversi wajah PIL atau Tensor menjadi tensor 112x96 dengan normalisasi.
-        Bentuk Keluaran: (1, 3, 112, 96)
+        Mengonversi output MTCNN (Tensor [-1, 1]) menjadi tensor 112x96 sesuai pola PRE-CL.
         """
-        if isinstance(face_data, torch.Tensor):
-            # MTCNN dengan post_process=False mengembalikan float [0, 255]
-            # Skala ke [0, 1] sebelum konversi PIL atau normalisasi apa pun
-            if face_data.max() > 1.0:
-                face_tensor = face_data.float() / 255.0
-            else:
-                face_tensor = face_data.float()
+        if face_data is None: return None
 
-            # Pastikan bentuk 112x96 (H, W)
-            if face_tensor.shape[1:] != (112, 96):
-                img_pil = TF.to_pil_image(face_tensor)
-                img_resized = img_pil.resize((96, 112), Image.BILINEAR)
-                face_tensor = TF.to_tensor(img_resized)
+        if isinstance(face_data, torch.Tensor):
+            # Pola PRE-CL: Kembalikan ke PIL [0, 255] baru re-normalize agar kernel (112, 96) pas
+            face_img = TF.to_pil_image((face_data * 0.5 + 0.5).clamp(0, 1))
+            img_resized = face_img.resize((96, 112), Image.BILINEAR)
+            face_tensor = TF.to_tensor(img_resized)
         else:
             # Asumsikan Input PIL
             img_resized = face_data.resize((96, 112), Image.BILINEAR)

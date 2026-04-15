@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from .db.db import SessionLocal
 from .db import models
+from .db.models import Client
 from .config import ECONOMICS, TRAINING_PARAMS
 
 class CentralizedServerManager:
@@ -35,7 +36,7 @@ class CentralizedServerManager:
         # Default dari config
         self.default_epochs = TRAINING_PARAMS["total_epochs"]
         self.default_batch_size = TRAINING_PARAMS["batch_size"]
-        self.inference_threshold = 0.50
+        self.inference_threshold = 0.60
         self.load_settings()
         self._load_persistence()
 
@@ -165,8 +166,19 @@ class CentralizedServerManager:
         cost_per_kwh = ECONOMICS["compute_cost_per_kwh"] # Rp 1.444,70
         self.metrics["compute_cost_idr"] = round(energy_kwh * cost_per_kwh, 2)
 
-    def get_status(self):
+    def get_status(self, db=None):
         # Mengembalikan status lengkap server untuk dashboard UI
+        active_clients = []
+        if db:
+            clients = db.query(models.Client).all()
+            for c in clients:
+                active_clients.append({
+                    "id": c.edge_id,
+                    "ip": c.ip_address,
+                    "status": (c.status or "offline").upper(),
+                    "last_seen": c.last_seen.strftime("%H:%M:%S") if c.last_seen else "-"
+                })
+
         return {
             "is_running": self.is_running,
             "current_phase": self.current_phase,
@@ -178,5 +190,6 @@ class CentralizedServerManager:
             "default_epochs": self.default_epochs,
             "default_batch_size": self.default_batch_size,
             "inference_threshold": self.inference_threshold,
-            "uptime": int(time.time() - self.start_time) if self.start_time > 0 else 0
+            "uptime": int(time.time() - self.start_time) if self.start_time > 0 else 0,
+            "active_clients": active_clients
         }

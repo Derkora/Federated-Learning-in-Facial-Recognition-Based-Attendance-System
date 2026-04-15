@@ -8,20 +8,20 @@ import io
 import numpy as np
 import math
 from datetime import datetime, timedelta, timezone
-from fastapi import FastAPI, Request, Depends, HTTPException, BackgroundTasks
+from fastapi import FastAPI, Request, Depends, HTTPException, BackgroundTasks, Body
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
+from typing import List, Dict, Any
 
 from app.db.db import engine, get_db, Base
 from app.db.models import FLSession, FLRound, GlobalModel, Client, UserGlobal, AttendanceRecap
+Base.metadata.create_all(bind=engine)
+
 from app.server_manager_instance import fl_manager
 from app.controllers.fl_controller import FLController
 from app.config import REGISTRY_PATH, BN_PATH
-
-# Inisialisasi Database Server
-Base.metadata.create_all(bind=engine)
 
 # Konfigurasi Aplikasi FastAPI
 app = FastAPI(title="Federated Learning Server Dashboard")
@@ -173,6 +173,8 @@ async def get_training_status():
         "current_phase": fl_manager.current_phase,
         "is_running": fl_manager.is_running,
         "active_session_id": fl_manager.session_id,
+        "model_version": fl_manager.model_version,
+        "inference_threshold": fl_manager.inference_threshold,
         "current_logs": fl_manager.current_logs[-10:]
     }
 
@@ -257,8 +259,9 @@ async def get_global_identities(db: Session = Depends(get_db)):
 
 # Sinkronisasi Hasil Presensi dari Terminal
 @app.post("/api/attendance/sync")
-async def sync_attendance(records: list, db: Session = Depends(get_db)):
+async def sync_attendance(records: List[Dict[str, Any]] = Body(...), db: Session = Depends(get_db)):
     new_records = 0
+    print(f"[RECAP] Menerima {len(records)} data presensi dari terminal.")
     for rec in records:
         nrp = rec['user_id']
         user = db.query(UserGlobal).filter_by(nrp=nrp).first()

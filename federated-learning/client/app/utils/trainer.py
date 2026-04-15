@@ -369,8 +369,11 @@ class LocalTrainer:
         centroids = {}
         for nrp, embs in temp_embeddings.items():
             if embs:
-                stack = torch.cat(embs, dim=0)
+                # Gunakan subset (maks 50) untuk rata-rata yang stabil
+                subset = embs[:50]
+                stack = torch.cat(subset, dim=0)
                 centroid = torch.mean(stack, dim=0)
+                # Normalisasi L2 eksplisit agar konsisten dengan hypersphere ArcFace
                 centroid = F.normalize(centroid.unsqueeze(0), p=2, dim=1)
                 centroids[nrp] = centroid.cpu().numpy()[0]
         return centroids

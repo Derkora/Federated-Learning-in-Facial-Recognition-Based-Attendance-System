@@ -22,6 +22,7 @@ class AttendanceController:
     
     def __init__(self, fl_manager):
         self.fl_manager = fl_manager
+        self._last_version_loaded = -1 # Melacak versi model yang aktif di session
 
     async def process_inference(self, image_b64: str, db: Session, background_tasks):
         start_time = time.time()
@@ -41,8 +42,13 @@ class AttendanceController:
         input_np = input_tensor.cpu().numpy()
         
         # ONNX akan diaktifkan kembali hanya setelah export ulang setelah training selesai.
-        onnx_path = os.path.join(self.fl_manager.data_path, "models", "backbone_quantized.onnx")
-        torch_path = os.path.join(self.fl_manager.data_path, "models", "backbone.pth")
+        # PRIORITAS: backbone.onnx (FP32) untuk menjaga akurasi (~0.8 similarity)
+        onnx_dir = os.path.join(self.fl_manager.data_path, "models")
+        onnx_path = os.path.join(onnx_dir, "backbone.onnx")
+        torch_path = os.path.join(onnx_dir, "backbone.pth")
+        
+        if not os.path.exists(onnx_path):
+            onnx_path = os.path.join(onnx_dir, "backbone_quantized.onnx")
         
         # Gunakan ONNX HANYA jika backbone.pth juga ada DAN versi ONNX sinkron
         onnx_is_fresh = (
@@ -51,16 +57,23 @@ class AttendanceController:
             os.path.getmtime(onnx_path) >= os.path.getmtime(torch_path)
         )
         
+        current_v = getattr(self.fl_manager, 'model_version', 0)
+
         if onnx_is_fresh:
+            # --- PROTEKSI SINKRONISASI: Reload session jika versi berubah ---
+            if current_v != self._last_version_loaded:
+                if hasattr(self, 'ort_session'):
+                    print(f"[SYNC-FL] Reloading ONNX session for Version {current_v}...")
+                    del self.ort_session
+                self._last_version_loaded = current_v
+
             try:
                 if not hasattr(self, 'ort_session'):
                     self.ort_session = ort.InferenceSession(onnx_path, providers=['CPUExecutionProvider'])
                 
                 outputs = self.ort_session.run(None, {'input': input_np})
-                query_embedding = outputs[0][0]
-                norm = np.linalg.norm(query_embedding)
-                query_embedding = query_embedding / (norm + 1e-6)
-                query_embedding_tensor = torch.from_numpy(query_embedding).unsqueeze(0)
+                query_embedding_tensor = torch.from_numpy(outputs[0][0]).view(1, -1)
+                query_embedding_tensor = torch.nn.functional.normalize(query_embedding_tensor, p=2, dim=1)
             except Exception as e:
                 print(f"[ONNX ERROR] Fallback to Torch: {e}")
                 if hasattr(self, 'ort_session'): del self.ort_session
@@ -97,14 +110,13 @@ class AttendanceController:
         mean_embedding = mean_embedding_tensor.cpu().numpy()[0]
         
         # Log diagnostik (sekali per batch saja)
-        print(f"[INFER] Query norm={float(mean_embedding_tensor.norm()):.3f} buf_size={len(self.fl_manager.prediction_buffer)} refs={len(local_refs)}")
+        query_norm = float(mean_embedding_tensor.norm())
+        print(f"[INFER-FL] Model v{current_v} | Norm: {query_norm:.2f} | Buf: {len(self.fl_manager.prediction_buffer)} | Refs: {len(local_refs)}")
         
         # Pencocokan identitas dengan threshold produksi
         user_id, confidence = identify_user_globally(mean_embedding, local_refs, threshold=self.fl_manager.inference_threshold)
         
         # Pencatatan Absensi
-        # Jika mahasiswa dikenali, data akan disimpan di database lokal dan dikirim ke server.
-        # Jika mahasiswa berasal dari terminal lain, entri placeholder akan dibuat otomatis.
         if user_id != "Unknown":
             user_name = self._ensure_user_and_get_name(user_id, db)
             
@@ -121,7 +133,10 @@ class AttendanceController:
                 sync_record_to_server, 
                 user_id, user_name, float(confidence), os.getenv("HOSTNAME", "client-1")
             )
-            print(f"[OK] Absensi Berhasil: {user_id} ({confidence:.2f})")
+            print(f"[OK] Terdeteksi (Voted): {user_id} (Sim: {confidence:.4f})")
+        else:
+            if confidence > 0.1: # Log lebih rendah untuk riset
+                print(f"[DEBUG-FL] Model v{current_v} | Match: Unknown | Sim: {confidence:.4f} | Thres: {self.fl_manager.inference_threshold}")
             
         latency = int((time.time() - start_time) * 1000)
         return {

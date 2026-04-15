@@ -1,16 +1,15 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div class="layout-grid">
-    <!-- LEFT COLUMN: Status & Terminal -->
+<div style="margin-bottom: 2rem;">
     <div class="glass" style="padding: 2.5rem;">
         <div
             style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2.5rem; flex-wrap: wrap; gap: 1rem;">
             <div>
-                <h1 style="color: var(--accent); margin: 0; font-size: 1.8rem;">Centralized Dashboard</h1>
+                <h1 style="color: var(--accent); margin: 0; font-size: 1.8rem;">Control Dashboard</h1>
                 <p id="status-phase" style="color: var(--text-muted); font-weight: 500;">Status: Standby</p>
             </div>
-            <button id="btn-lifecycle" class="btn btn-primary" onclick="startTraining()"
+            <button id="btn-start" class="btn btn-primary" onclick="startTraining()"
                 style="padding: 1rem 2rem; font-size: 1.1rem; border-radius: 8px;" {{ 'disabled' if status.is_running
                 }}>
                 {{ "SEDANG BERJALAN..." if status.is_running else "Mulai" }}
@@ -26,6 +25,18 @@
             [INFO] Menunggu sinyal mulai untuk memproses data dari client...
             {% endif %}
         </div>
+    </div>
+</div>
+
+<!-- CLIENT MONITORING SECTION -->
+<div class="glass" style="padding: 2rem;">
+    <h3
+        style="color: var(--accent); margin-top: 0; margin-bottom: 1.5rem; font-size: 1.2rem; display: flex; align-items: center; gap: 0.5rem;">
+        🖥️ Terminal Terhubung
+    </h3>
+    <div id="active-terminals"
+        style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 1rem;">
+        <p style="color: var(--text-muted);">Menunggu data terminal...</p>
     </div>
 </div>
 
@@ -55,7 +66,7 @@
     async function startTraining() {
         if (!confirm("Mulai siklus pelatihan penuh (Impor -> Pra-proses -> Latih -> Ekspor)?")) return;
 
-        const btn = document.getElementById('btn-lifecycle');
+        const btn = document.getElementById('btn-start');
         btn.disabled = true;
 
         startPolling();
@@ -102,13 +113,34 @@
             phaseEl.innerText = "Status: " + (status.is_running ? "Sedang Berjalan (" + phaseText + ")" : "Standby");
             phaseEl.style.color = (status.is_running) ? 'var(--accent)' : 'var(--text-muted)';
 
-            const btn = document.getElementById('btn-lifecycle');
+            const btn = document.getElementById('btn-start');
             if (btn) {
                 btn.disabled = status.is_running;
                 btn.innerText = status.is_running ? "SEDANG BERJALAN..." : "Mulai";
             }
 
-            // Persistence of polling if busy
+            // 3. Update Active Terminals
+            const terminalContainer = document.getElementById('active-terminals');
+            if (status.active_clients && status.active_clients.length > 0) {
+                terminalContainer.innerHTML = status.active_clients.map(client => `
+                    <div class="glass" style="padding: 1rem; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                            <span style="font-weight: 600; color: #fff;">${client.id}</span>
+                            <span class="badge ${client.status === 'ONLINE' ? 'badge-success' : 'badge-danger'}" style="font-size: 0.7rem;">
+                                ${client.status}
+                            </span>
+                        </div>
+                        <div style="font-size: 0.8rem; color: var(--text-muted);">
+                            IP: ${client.ip}<br>
+                            Terakhir: ${client.last_seen}
+                        </div>
+                    </div>
+                `).join('');
+            } else {
+                terminalContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 0.9rem;">Tidak ada terminal yang terdaftar.</p>';
+            }
+
+            // 4. Polling Management
             if (status.is_running && !pollInterval) startPolling();
             if (!status.is_running && pollInterval) stopPolling();
 

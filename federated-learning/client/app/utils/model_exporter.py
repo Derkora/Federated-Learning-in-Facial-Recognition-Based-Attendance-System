@@ -45,19 +45,12 @@ def export_backbone_to_onnx(model, save_dir, device="cpu"):
         dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}}
     )
 
-    # Kuantisasi Dinamis (Sangat efektif untuk CPU Edge)
-    print(f"[ONNX] Quantizing to {quantized_path}...")
-    try:
-        quantize_dynamic(
-            onnx_path,
-            quantized_path,
-            weight_type=QuantType.QUInt8 
-        )
-        print("[ONNX] Quantization complete.")
-        result = quantized_path
-    except Exception as e:
-        print(f"[ONNX ERROR] Quantization failed: {e}")
-        result = onnx_path
+    # Kuantisasi Dinamis dimatikan untuk presisi embedding
+    print(f"[ONNX] Skip quantization to preserve accuracy.")
+    if os.path.exists(quantized_path):
+        try: os.remove(quantized_path)
+        except: pass
+    result = onnx_path
     
     # Bebaskan model PyTorch dari RAM setelah ekspor selesai
     import gc

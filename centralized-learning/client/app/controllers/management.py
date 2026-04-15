@@ -7,10 +7,10 @@ import traceback
 import collections
 from app.utils.preprocessing import DEVICE
 
-MODEL_DIR = "app/model"
-DATA_DIR = os.getenv("RAW_DATA_PATH", "raw_data") + "/students"
+MODEL_DIR = "/app/app/model"
+DATA_DIR = os.getenv("RAW_DATA_PATH", "/app/raw_data") + "/students"
 os.makedirs(MODEL_DIR, exist_ok=True)
-os.makedirs("data", exist_ok=True)
+os.makedirs("/app/data", exist_ok=True)
 
 class ManagementController:
     # Kontroler untuk manajemen aset (model/referensi) dan pengunggahan dataset.
@@ -87,8 +87,11 @@ class ManagementController:
         if not os.path.exists(DATA_DIR) or not os.listdir(DATA_DIR):
             return False, "Data tidak ditemukan."
         
-        zip_path = "data/upload.zip"
+        zip_path = "/app/data/upload.zip"
         try:
+            # Pastikan direktori tujuan ada
+            os.makedirs(os.path.dirname(zip_path), exist_ok=True)
+            
             # Hitung statistik dataset sebelum dikemas
             folder_count = 0
             file_count = 0
@@ -96,7 +99,7 @@ class ManagementController:
                 folder_count += len(dirs)
                 file_count += len(files)
             
-            print(f"[INFO] Mengemas {file_count} gambar dari {folder_count} mahasiswa.")
+            print(f"[INFO] Mengemas {file_count} gambar dari {folder_count} mahasiswa (Path: {zip_path}).")
 
             if file_count == 0:
                 return False, "Tidak ada gambar untuk diunggah."
@@ -104,8 +107,9 @@ class ManagementController:
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
                 for root, dirs, files in os.walk(DATA_DIR):
                     for file in files:
-                        zipf.write(os.path.join(root, file), 
-                                   os.path.relpath(os.path.join(root, file), DATA_DIR))
+                        full_path = os.path.join(root, file)
+                        rel_path = os.path.relpath(full_path, DATA_DIR)
+                        zipf.write(full_path, rel_path)
             
             with open(zip_path, 'rb') as f:
                 res = requests.post(

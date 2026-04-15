@@ -2,9 +2,9 @@
 
 {% block content %}
 <div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
-    <h1 style="color: var(--accent); margin: 0; font-size: 1.8rem;">Hasil Evaluasi Federated</h1>
+    <h1 style="color: var(--accent); margin: 0; font-size: 1.8rem;">Hasil Evaluasi Performa</h1>
     <p style="color: var(--text-muted); margin-top: 0.5rem;">Analisis performa model global dan kontribusi tiap
-        terminal.</p>
+        terminal (Federated).</p>
 </div>
 
 <!-- Table 1: Global Server Aggregation -->
@@ -12,7 +12,7 @@
     <div
         style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
         <h2 style="color: var(--accent); margin: 0; font-size: 1.3rem;">1. Performa Agregasi Global</h2>
-        <button class="btn btn-primary" onclick="copyTable('server-table')">Salin</button>
+        <button class="btn btn-primary" onclick="copyTable('server-table')">Salin Tabel</button>
     </div>
     <div style="overflow-x: auto;">
         <table id="server-table" class="result-table">
@@ -109,8 +109,8 @@
                 <tr>
                     <td rowspan="2"><b>Transmisi Data</b></td>
                     <td>Total Bandwidth (Model + Registry)</td>
-                    <td>{{ status.metrics.backbone_sync_mb + status.metrics.registry_sync_mb }} MB</td>
-                    <td rowspan="2">Rp {{ status.metrics.transmission_cost_idr }}</td>
+                    <td>{{ (status.metrics.backbone_sync_mb + status.metrics.registry_sync_mb) | round(2) }} MB</td>
+                    <td rowspan="2">Rp {{ "%.2f"|format(status.metrics.transmission_cost_idr|float) }}</td>
                 </tr>
                 <tr>
                     <td>Estimasi Total Bandwidth (Transmisi)</td>
@@ -119,8 +119,8 @@
                 <tr>
                     <td rowspan="2"><b>Konsumsi Daya</b></td>
                     <td>Energi Terpakai (Total Sistem)</td>
-                    <td>{{ status.metrics.compute_energy_kwh }} kWh</td>
-                    <td rowspan="2">Rp {{ status.metrics.compute_cost_idr }}</td>
+                    <td>{{ "%.6f"|format(status.metrics.compute_energy_kwh|float) }} kWh</td>
+                    <td rowspan="2">Rp {{ "%.2f"|format(status.metrics.compute_cost_idr|float) }}</td>
                 </tr>
                 <tr>
                     <td>Total Waktu Pelatihan</td>

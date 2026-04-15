@@ -7,7 +7,7 @@ import numpy as np
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from app.db.db import SessionLocal
-from app.db.models import FLRound, GlobalModel, UserGlobal, AttendanceRecap
+from app.db.models import FLRound, GlobalModel, UserGlobal, AttendanceRecap, Client
 from app.utils.mobilefacenet import MobileFaceNet
 from app.config import ECONOMICS, TRAINING_PARAMS, FALLBACK_MODEL_PATH
 
@@ -118,7 +118,6 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                         global_model = GlobalModel(version=self.target_version, weights=weights_bytes)
                         db.add(global_model)
                     else:
-                        global_model.version = self.target_version
                         global_model.weights = weights_bytes
                         global_model.last_updated = datetime.utcnow()
                     
@@ -193,7 +192,7 @@ class FLServerManager:
         self.ready_clients = set() 
         self.received_data = []
         self.discovery_clients = set()
-        self.inference_threshold = 0.5
+        self.inference_threshold = 0.60
         self.metrics = {
             "accuracy": 0, "loss": 0, 
             "backbone_sync_mb": 0, "registry_sync_mb": 0,
@@ -347,8 +346,17 @@ class FLServerManager:
 
     def get_status(self, db=None):
         attendance_count = 0
+        active_clients = []
         if db:
             attendance_count = db.query(AttendanceRecap).count()
+            clients = db.query(Client).all()
+            for c in clients:
+                active_clients.append({
+                    "id": c.edge_id,
+                    "ip": c.ip_address,
+                    "status": (c.status or "offline").upper(),
+                    "last_seen": c.last_seen.strftime("%H:%M:%S") if c.last_seen else "-"
+                })
             
         return {
             "is_running": self.is_running,
@@ -363,7 +371,8 @@ class FLServerManager:
             "default_min_clients": self.default_min_clients,
             "inference_threshold": self.inference_threshold,
             "attendance_count": attendance_count,
-            "uptime": int(datetime.now().timestamp() - self.start_time) if self.start_time > 0 else 0
+            "uptime": int(datetime.now().timestamp() - self.start_time) if self.start_time > 0 else 0,
+            "active_clients": active_clients
         }
 
     def ensure_model_seeded(self, db):
@@ -466,9 +475,25 @@ class FLServerManager:
                 config=fl.server.ServerConfig(num_rounds=rounds),
                 strategy=strategy,
             )
-            # Update versi hanya setelah seluruh ronde selesai (Successful Session)
+            # Update versi di Database dan Manager hanya setelah seluruh ronde sukses
             self.model_version = target_version
-            self.update_logs(f"Versi Model Global stabil di v{self.model_version}")
+            
+            # Persistensi Versi ke Database GlobalModel
+            db_final = SessionLocal()
+            try:
+                global_model = db_final.query(GlobalModel).first()
+                if global_model:
+                    global_model.version = target_version
+                    global_model.last_updated = datetime.utcnow()
+                    db_final.commit()
+                    print(f"[OK] Database GlobalModel updated to Version v{target_version}")
+            except Exception as db_err:
+                print(f"[ERROR] Gagal finalisasi versi di DB: {db_err}")
+                db_final.rollback()
+            finally:
+                db_final.close()
+                
+            self.update_logs(f"Siklus Pelatihan Selesai. Versi Model Global naik ke v{self.model_version}")
         finally:
             self.is_running = False
             self.end_phase("Training")

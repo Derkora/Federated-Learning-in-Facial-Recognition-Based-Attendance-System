@@ -94,4 +94,4 @@ def startup_event():
     cl_client.start_background_tasks()
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=8080)

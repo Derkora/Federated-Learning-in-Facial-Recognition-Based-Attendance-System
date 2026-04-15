@@ -2,8 +2,9 @@
 
 {% block content %}
 <div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
-    <h1 style="color: var(--accent); margin: 0; font-size: 1.8rem;">Hasil Evaluasi Terpusat</h1>
-    <p style="color: var(--text-muted); margin-top: 0.5rem;">Performansi model global yang dilatih di server pusat.</p>
+    <h1 style="color: var(--accent); margin: 0; font-size: 1.8rem;">Hasil Evaluasi Performa</h1>
+    <p style="color: var(--text-muted); margin-top: 0.5rem;">Analisis performa model global yang dilatih di server pusat
+        (Centralized).</p>
 </div>
 
 <!-- Table 1: Global Performance -->
@@ -11,7 +12,7 @@
     <div
         style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
         <h2 style="color: var(--accent); margin: 0; font-size: 1.3rem;">1. Performa Pelatihan</h2>
-        <button class="btn btn-primary" onclick="copyTable('training-table')">Salin</button>
+        <button class="btn btn-primary" onclick="copyTable('training-table')">Salin Tabel</button>
     </div>
     <div style="overflow-x: auto;">
         <table id="training-table" class="result-table">
@@ -27,8 +28,8 @@
                 {% for h in status.metrics.epoch_history %}
                 <tr>
                     <td>{{ h.epoch }}</td>
-                    <td>{{ h.loss }}</td>
-                    <td>{{ h.accuracy }}%</td>
+                    <td>{{ "%.4f"|format(h.loss|float) }}</td>
+                    <td>{{ "%.2f"|format(h.accuracy|float) }}%</td>
                 </tr>
                 {% endfor %}
                 {% else %}
@@ -61,18 +62,18 @@
                 <tr>
                     <td rowspan="2"><b>Transmisi Data</b></td>
                     <td>Total Bandwidth (Gambar + Model)</td>
-                    <td>{{ status.metrics.upload_volume_mb + status.metrics.download_volume_mb }} MB</td>
-                    <td rowspan="2">Rp {{ status.metrics.transmission_cost_idr }}</td>
+                    <td>{{ "%.2f"|format(status.metrics.upload_volume_mb + status.metrics.download_volume_mb) }} MB</td>
+                    <td rowspan="2">Rp {{ "%.2f"|format(status.metrics.transmission_cost_idr|float) }}</td>
                 </tr>
                 <tr>
                     <td>Estimasi Total Bandwidth (Transmisi)</td>
-                    <td>{{ (status.metrics.upload_volume_mb + status.metrics.download_volume_mb) | round(2) }} MB</td>
+                    <td>{{ "%.2f"|format(status.metrics.upload_volume_mb + status.metrics.download_volume_mb) }} MB</td>
                 </tr>
                 <tr>
                     <td rowspan="2"><b>Konsumsi Daya</b></td>
                     <td>Energi Terpakai (Total Sistem)</td>
-                    <td>{{ status.metrics.compute_energy_kwh }} kWh</td>
-                    <td rowspan="2">Rp {{ status.metrics.compute_cost_idr }}</td>
+                    <td>{{ "%.6f"|format(status.metrics.compute_energy_kwh|float) }} kWh</td>
+                    <td rowspan="2">Rp {{ "%.2f"|format(status.metrics.compute_cost_idr|float) }}</td>
                 </tr>
                 <tr>
                     <td>Durasi Pelatihan</td>

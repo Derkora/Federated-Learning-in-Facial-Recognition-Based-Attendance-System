@@ -24,13 +24,10 @@ services:
     ports:
       - "8082:8080"
     environment:
-      DATABASE_URL: postgresql://client:client123@client1-fl-db:5432/fl_client
+      DATABASE_URL: sqlite:////app/data/client.db
       SERVER_API_URL: http://server-fl:8080
       FL_SERVER_ADDRESS: server-fl:8085
       PYTHONUNBUFFERED: 1
-    depends_on:
-      client1-fl-db:
-        condition: service_healthy
     volumes:
       - ../datasets/client1_data:/app/raw_data
       - client1_app_data:/app/data
@@ -44,13 +41,10 @@ services:
     ports:
       - "8083:8080"
     environment:
-      DATABASE_URL: postgresql://client:client123@client2-fl-db:5432/fl_client
+      DATABASE_URL: sqlite:////app/data/client.db
       SERVER_API_URL: http://server-fl:8080
       FL_SERVER_ADDRESS: server-fl:8085
       PYTHONUNBUFFERED: 1
-    depends_on:
-      client2-fl-db:
-        condition: service_healthy
     volumes:
       - ../datasets/client2_data:/app/raw_data
       - client2_app_data:/app/data
@@ -77,49 +71,11 @@ services:
       timeout: 5s
       retries: 5
 
-  # --- DATABASE CLIENT 1 ---
-  client1-fl-db:
-    image: postgres:15-alpine
-    command: postgres -c shared_buffers=16MB -c max_connections=20 -c work_mem=2MB
-    environment:
-      - POSTGRES_USER=client
-      - POSTGRES_PASSWORD=client123
-      - POSTGRES_DB=fl_client
-    volumes:
-      - client1_fl_data:/var/lib/postgresql/data
-    networks:
-      - flnet
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U client -d fl_client" ]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  # --- DATABASE CLIENT 2 ---
-  client2-fl-db:
-    image: postgres:15-alpine
-    command: postgres -c shared_buffers=16MB -c max_connections=20 -c work_mem=2MB
-    environment:
-      - POSTGRES_USER=client
-      - POSTGRES_PASSWORD=client123
-      - POSTGRES_DB=fl_client
-    volumes:
-      - client2_fl_data:/var/lib/postgresql/data
-    networks:
-      - flnet
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U client -d fl_client" ]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
 networks:
   flnet:
     driver: bridge
 
 volumes:
   server_fl_data:
-  client1_fl_data:
-  client2_fl_data:
   client1_app_data:
   client2_app_data:

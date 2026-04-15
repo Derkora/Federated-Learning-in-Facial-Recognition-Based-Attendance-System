@@ -26,8 +26,11 @@ class FaceHandler:
                 face_img = self.final_resize(face_img)
                 face_img.save(dst_path)
                 return True
+            else:
+                # Log jika tidak ditemukan wajah guna diagnostik riset
+                print(f"[FaceHandler] Skip: Tidak ditemukan wajah pada {os.path.basename(img_path)}")
         except Exception as e:
-            print(f"[FaceHandler] Error processing {img_path}: {e}")
+            print(f"[FaceHandler] ERROR pada {os.path.basename(img_path)}: {e}")
         return False
 
     def get_embedding(self, model, img_pil):

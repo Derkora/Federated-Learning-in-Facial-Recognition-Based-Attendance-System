@@ -41,13 +41,12 @@ def export_backbone_to_onnx(torch_path, onnx_path, quantized_path=None):
     print(f"[OK] Model ONNX CL berhasil disimpan.")
     
     if quantized_path:
-        print(f"[*] Melakukan kuantisasi dinamis (uint8) ke {quantized_path}...")
-        quantize_dynamic(
-            onnx_path,
-            quantized_path,
-            weight_type=QuantType.QUInt8 
-        )
-        print(f"[OK] Model ONNX CL terkuantisasi berhasil disimpan.")
+        # Kuantisasi dinamis (uint8) dimatikan sementara untuk menjaga presensi embedding (~0.8 sim)
+        # Model quantized seringkali merusak pemisahan fitur pada dimensi tinggi.
+        print(f"[*] Info: Kuantisasi dinamis dilewati untuk menjaga akurasi.")
+        if os.path.exists(quantized_path):
+            try: os.remove(quantized_path)
+            except: pass
 
 if __name__ == "__main__":
     # Path default untuk data model di CL Client

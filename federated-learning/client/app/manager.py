@@ -90,7 +90,9 @@ class FLClientManager:
 
         self.fl_server_address = os.getenv("FL_SERVER_ADDRESS", "server-fl:8085")
         self.server_api_url = os.getenv("SERVER_API_URL", "http://server-fl:8080")
-        self.client_id = os.getenv("HOSTNAME", "client-1")
+        
+        # Load or Generate Persistent Identity
+        self.client_id = self._load_identity()
         
         self.client = FaceRecognitionClient(
             self.backbone, self.head, 
@@ -112,15 +114,37 @@ class FLClientManager:
         self.last_face_time = 0
         
         # Dukungan Kamera Headless
+        self.camera_index = int(os.getenv("CAMERA_INDEX", 0))
         self.latest_frame = None
         self.latest_result = {"matched": "Standby", "confidence": 0, "latency_ms": 0, "is_virtual": False}
         self.is_camera_running = False
         
         # Ambang Batas Inferensi (Dinamis dari Server)
-        self.inference_threshold = 0.5
+        self.inference_threshold = 0.60
         
         # Inisialisasi model inferensi
         self._reload_inference_models()
+
+    def _load_identity(self):
+        """Memuat atau membuat identitas unik client yang tersimpan di volume data."""
+        id_path = os.path.join(self.data_path, "client_id.txt")
+        if os.path.exists(id_path):
+            with open(id_path, "r") as f:
+                cid = f.read().strip()
+                if cid:
+                    print(f"[IDENTITY] Loaded persistent ID: {cid}")
+                    return cid
+        
+        # Jika belum ada, gunakan HOSTNAME (Container ID) atau fallback
+        new_id = os.getenv("HOSTNAME", f"client-{int(time.time())}")
+        try:
+            with open(id_path, "w") as f:
+                f.write(new_id)
+            print(f"[IDENTITY] Registered new persistent ID: {new_id}")
+        except Exception as e:
+            print(f"[IDENTITY ERROR] Failed to save identity: {e}")
+        
+        return new_id
 
     def _sync_global_identities(self):
         """
@@ -270,9 +294,26 @@ class FLClientManager:
 
     def _camera_loop(self):
         # Loop kamera mandiri (Headless Mode)
-        print(f"[CAMERA] Menjalankan loop kamera otomatis (FL)...")
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
+        cam_idx = self.camera_index
+        cam_width = int(os.getenv("CAMERA_WIDTH", 1280))
+        cam_height = int(os.getenv("CAMERA_HEIGHT", 720))
+        cam_format = os.getenv("CAMERA_FORMAT", "MJPG").upper()
+
+        print(f"[CAMERA] Menjalankan loop kamera otomatis (FL) pada index {cam_idx}...")
+        cap = cv2.VideoCapture(cam_idx)
+        
+        # Optimasi Jetson/Raspi: Paksa format MJPG jika didukung (lebih ringan dari YUYV)
+        if cam_format == "MJPG":
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam_width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_height)
+        
+        # Beri waktu hardware inisialisasi
+        time.sleep(1)
+
+        if not cap.isOpened() and cam_idx == 0:
+            print(f"[CAMERA WARN] Gagal akses hardware pada index 0. Mencoba index 1...")
             cap = cv2.VideoCapture(1)
             
         self.is_camera_running = True

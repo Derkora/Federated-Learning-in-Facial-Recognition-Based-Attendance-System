@@ -12,15 +12,16 @@ import uvicorn
 import zipfile
 
 from app.db import models, db, schemas, crud
-from app.controllers.student import student_controller
-from app.controllers.training import training_controller
-from app.controllers.inference import inference_controller
-from app.server_manager_instance import cl_manager
+models.Base.metadata.create_all(bind=db.engine)
+
 from app.utils.mobilefacenet import MobileFaceNet
 from app.config import (
     MODEL_PATH, REF_PATH, UPLOAD_DIR, TRAINING_PARAMS
 )
-models.Base.metadata.create_all(bind=db.engine)
+from app.server_manager_instance import cl_manager
+from app.controllers.student import student_controller
+from app.controllers.training import training_controller
+from app.controllers.inference import inference_controller
 
 if not os.path.exists(os.path.dirname(MODEL_PATH)): os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
 if not os.path.exists(MODEL_PATH):
@@ -37,8 +38,8 @@ templates = Jinja2Templates(directory="app/templates")
 
 # Dashboard Utama
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request):
-    status = cl_manager.get_status()
+async def dashboard(request: Request, dbs: Session = Depends(db.get_db)):
+    status = cl_manager.get_status(db=dbs)
     return templates.TemplateResponse("index.html", {"request": request, "title": "Dashboard", "status": status})
 
 # Halaman Rekapitulasi Presensi
@@ -69,8 +70,8 @@ async def update_settings(data: dict):
 
 # API Status Sistem
 @app.get("/api/status")
-async def get_status():
-    return cl_manager.get_status()
+async def get_status(dbs: Session = Depends(db.get_db)):
+    return cl_manager.get_status(db=dbs)
 
 # API Hasil Pelatihan (Metrik)
 @app.get("/api/results")
@@ -127,16 +128,14 @@ async def register_client(client_data: schemas.ClientBase, request: Request, dbs
 # Menerima Unggahan Dataset Bulk (ZIP) dari Terminal
 @app.post("/upload-bulk-zip")
 async def upload_bulk_zip(file: UploadFile = File(...)):
-    print(f"[UPLOAD] Menerima dataset bulk: {file.filename}", flush=True)
-    UPLOAD_TEMP = "data/upload.zip"
+    edge_id = file.filename.split("_")[0]
+    UPLOAD_TEMP = f"data/upload_{edge_id}_{int(time.time())}.zip"
     os.makedirs("data", exist_ok=True)
     
     with open(UPLOAD_TEMP, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
         
     try:
-        edge_id = file.filename.split("_")[0]
-        
         with zipfile.ZipFile(UPLOAD_TEMP, 'r') as zip_ref:
             # Dapatkan daftar folder (NRP) sebelum diekstrak untuk pemetaan
             names = zip_ref.namelist()
@@ -148,6 +147,7 @@ async def upload_bulk_zip(file: UploadFile = File(...)):
             
             # Daftarkan pemetaan di manajer
             cl_manager.register_upload(edge_id, nrps)
+            print(f"[EXTRACT] Berhasil mengekstrak {len(nrps)} folder mahasiswa: {', '.join(nrps[:5])}...", flush=True)
             
         os.remove(UPLOAD_TEMP)
         cl_manager.update_logs(f"Menerima {len(nrps)} data mahasiswa dari {edge_id}")

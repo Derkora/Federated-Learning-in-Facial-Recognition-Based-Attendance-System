@@ -7,34 +7,22 @@ services:
     ports:
       - "8081:8080"
     environment:
-      - DATABASE_URL=postgresql://client:client123@client-fl-db-balanced:5432/fl_client
+      - DATABASE_URL=sqlite:////app/data/client.db
       - SERVER_API_URL=http://${SERVER_IP}:8080
       - FL_SERVER_ADDRESS=${SERVER_IP}:8085
       - PYTHONUNBUFFERED=1
       - HOSTNAME=${CLIENT_ID:-terminal-1}
-    depends_on:
-      client-fl-db-balanced:
-        condition: service_healthy
+      - CAMERA_INDEX=0
+      - CAMERA_FORMAT=MJPG
+      - CAMERA_WIDTH=1280
+      - CAMERA_HEIGHT=720
+    devices:
+      - /dev/video0:/dev/video0
+    group_add:
+      - video
     volumes:
       - ./data:/app/data
       - ${RAW_DATA_PATH_CLIENT}:/app/raw_data/students
-    networks:
-      - fl-network
-
-  client-fl-db-balanced:
-    image: postgres:15
-    container_name: db_client_fl_balanced
-    environment:
-      - POSTGRES_USER=client
-      - POSTGRES_PASSWORD=client123
-      - POSTGRES_DB=fl_client
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U client -d fl_client" ]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    volumes:
-      - ./data/db:/var/lib/postgresql/data
     networks:
       - fl-network
 

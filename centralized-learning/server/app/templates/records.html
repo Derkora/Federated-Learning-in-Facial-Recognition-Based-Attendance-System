@@ -2,9 +2,9 @@
 
 {% block content %}
 <div class="glass" style="padding: 1.5rem; margin-bottom: 2rem;">
-    <h2 style="color: var(--accent); margin-top: 0; font-size: 1.4rem;">Data Mahasiswa Terpusat</h2>
-    <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 2rem;">Pemantauan aktivitas presensi real-time
-        dari seluruh terminal (Centralized Method).</p>
+    <h2 style="color: var(--accent); margin-top: 0; font-size: 1.4rem;">Papan Kehadiran Real-time</h2>
+    <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 2rem;">Pemantauan aktivitas presensi dari
+        seluruh terminal secara langsung (Centralized).</p>
 </div>
 
 <div style="overflow-x: auto;">
@@ -21,7 +21,7 @@
         </thead>
         <tbody id="attendance-body">
             <tr>
-                <td colspan="5" style="padding: 40px; text-align: center; color: var(--text-muted);">
+                <td colspan="6" style="padding: 40px; text-align: center; color: var(--text-muted);">
                     Memuat data kehadiran real-time...
                 </td>
             </tr>
@@ -82,13 +82,13 @@
                                 </span>
                             </td>
                             <td>${a.time}</td>
-                            <td>${a.confidence}</td>
+                            <td>${parseFloat(a.confidence).toFixed(2)}</td>
                             <td><span class="badge" style="background: rgba(79, 70, 229, 0.1); color: #818cf8;">${a.registered_edge_id}</span></td>
                         </tr>
                     `;
                 }).join('');
             } else {
-                body.innerHTML = '<tr><td colspan="5" style="padding: 40px; text-align: center; color: var(--text-muted);">Belum ada mahasiswa terdaftar. Jalankan "Import Data" di dashboard terlebih dahulu.</td></tr>';
+                body.innerHTML = '<tr><td colspan="6" style="padding: 40px; text-align: center; color: var(--text-muted);">Belum ada data mahasiswa yang terdaftar di sistem.</td></tr>';
             }
         } catch (e) {
             console.error("Attendance Update Error:", e);

@@ -117,11 +117,17 @@ class TrainingController:
                 dst = os.path.join(PROCESSED_DATA, nrp_folder)
                 os.makedirs(dst, exist_ok=True)
                 
-                # Seleksi berbasis Blur Detection (Laplacian) - Pilih Top 50 terbaik
+                # Seleksi berbasis Blur Detection (Laplacian) - Pertahankan kualitas tapi gunakan lebih banyak data
                 all_images = [f for f in os.listdir(src) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
-                scored_images = sorted([(img, self.get_blur_score(os.path.join(src, img))) for img in all_images], 
-                                     key=lambda x: x[1], reverse=True)
-                top_images = [img[0] for img in scored_images[:50]]
+                scored_images = [(img, self.get_blur_score(os.path.join(src, img))) for img in all_images]
+                
+                # Gunakan threshold tajam alih-alih hard-limit (misal threshold 40 dari face_utils)
+                top_images = [img for img, score in scored_images if score > 30]
+                
+                # Jika terlalu sedikit yang tajam, ambil setidaknya top 20
+                if len(top_images) < 20:
+                    scored_images.sort(key=lambda x: x[1], reverse=True)
+                    top_images = [img[0] for img in scored_images[:20]]
                 
                 msg = f"Memproses {len(top_images)} wajah terbaik untuk {nrp_folder} ({i+1}/{total_folders})"
                 print(f"[FASE 2] {msg}", flush=True)
@@ -263,11 +269,46 @@ class TrainingController:
                     p = os.path.join(PROCESSED_DATA, nrp)
                     if not os.path.isdir(p): continue
                     all_files = sorted(os.listdir(p))
-                    # Gunakan 5 gambar pertama untuk membuat rata-rata embedding referensi (Centroid)
-                    train_files = all_files[:5]
+                    # Gunakan 50 gambar terbaik untuk rata-rata yang lebih stabil (Hardened)
+                    train_files = all_files[:50]
                     
-                    embs = [face_handler.get_embedding(model, Image.open(os.path.join(p, f)).convert('RGB')) for f in train_files]
-                    if embs: ref_db[nrp] = torch.mean(torch.stack(embs), dim=0)
+                    embs = []
+                    for f in train_files:
+                        try:
+                            img_p = Image.open(os.path.join(p, f)).convert('RGB')
+                            emb = face_handler.get_embedding(model, img_p)
+                            embs.append(emb)
+                        except: continue
+                        
+                    if embs:
+                        # Rata-rata 50 gambar dan RE-NORMALISASI ke unit vector (PENTING untuk ArcFace)
+                        centroid = torch.mean(torch.stack(embs), dim=0)
+                        centroid = torch.nn.functional.normalize(centroid, p=2, dim=1)
+                        ref_db[nrp] = centroid.cpu()
+
+                # --- SELF-TEST: Verifikasi integritas embedding pada server ---
+                print("[INFO] Menjalankan self-test pada server...", flush=True)
+                test_results = []
+                for nrp, centroid in ref_db.items():
+                    p = os.path.join(PROCESSED_DATA, nrp)
+                    if not os.path.isdir(p): continue
+                    
+                    files = sorted(os.listdir(p))
+                    if not files: continue
+                    
+                    # Test dengan gambar pertama (seharusnya similarity sangat tinggi, >0.9)
+                    first_img = files[0]
+                    img_p = Image.open(os.path.join(p, first_img)).convert('RGB')
+                    test_emb = face_handler.get_embedding(model, img_p).cpu()
+                    
+                    # Cosine Similarity (Keduanya unit vector, dot product = cos_sim)
+                    # Pastikan shape (1, 128) -> (128,) untuk dot product yang benar
+                    sim = torch.sum(test_emb.view(-1) * centroid.view(-1)).item()
+                    test_results.append(sim)
+                    print(f"  > [SELF-TEST] nrp: {nrp} | Sim: {sim:.4f} | Embedding Norm: {test_emb.norm():.2f}")
+                
+                avg_self_sim = sum(test_results) / len(test_results) if test_results else 0
+                print(f"[OK] Self-test selesai. Rata-rata similarity internal: {avg_self_sim:.4f}")
             
             torch.save(ref_db, f"{MODEL_DIR}/reference_embeddings.pth")
             

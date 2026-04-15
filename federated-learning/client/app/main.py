@@ -42,8 +42,7 @@ app.include_router(management_router)
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     # Cek apakah ada index.html (Modern) atau attendance.html (Legacy)
-    template_name = "index.html" if os.path.exists("app/templates/index.html") else "attendance.html"
-    return templates.TemplateResponse(template_name, {
+    return templates.TemplateResponse("attendance.html", {
         "request": request,
         "client_id": fl_manager.client_id,
         "model_version": fl_manager.model_version,

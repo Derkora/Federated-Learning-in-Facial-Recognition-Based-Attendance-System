@@ -44,6 +44,7 @@ Jika Anda ingin menguji sistem terpusat (Centralized):
 ---
 
 ## Catatan Penting
-*   **Wipe Data**: Untuk mengulang eksperimen dari nol, hapus folder `data/` di masing-masing direktori `server/` atau `client/`.
+*   **Wipe Data**: Untuk mengulang eksperimen dari nol, hapus folder `data/` di masing-masing direktori `server/` atau `client/` (termasuk file `client.db` untuk skenario FL).
+*   **RAM Optimization**: Client kini menggunakan SQLite (FL) atau tanpa database lokal (CL), sehingga lebih ringan untuk dijalankan di perangkat dengan RAM terbatas.
 *   **Network**: Kedua perangkat HARUS berada dalam satu jaringan WiFi/LAN yang sama.
 *   **Port**: Jika dijalankan di satu laptop yang sama, pastikan tidak ada konflik port (disarankan menggunakan perangkat terpisah sesuai skenario Tugas Akhir).

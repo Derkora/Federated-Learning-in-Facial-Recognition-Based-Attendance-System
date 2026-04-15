@@ -4,7 +4,7 @@
 <div class="glass" style="padding: 1.5rem; margin-bottom: 2rem;">
     <h2 style="color: var(--accent); margin-top: 0; font-size: 1.4rem;">Papan Kehadiran Real-time</h2>
     <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 2rem;">Pemantauan aktivitas presensi dari
-        seluruh terminal Edge secara langsung.</p>
+        seluruh terminal secara langsung (Federated).</p>
 </div>
 
 <div class="glass" style="padding: 1rem; overflow: hidden;">
@@ -83,7 +83,7 @@
                                 </span>
                             </td>
                             <td>${a.time}</td>
-                            <td>${a.confidence}</td>
+                            <td>${parseFloat(a.confidence).toFixed(2)}</td>
                             <td><span class="badge" style="background: rgba(79, 70, 229, 0.1); color: #818cf8;">${a.registered_edge_id}</span></td>
                         </tr>
                     `;
