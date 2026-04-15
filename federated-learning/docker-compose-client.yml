@@ -1,15 +1,15 @@
 services:
   client-fl:
     build:
-      context: ../../federated-learning
-      dockerfile: client/Dockerfile
+      context: ./client
+      dockerfile: Dockerfile
     container_name: client_fl_balanced
     ports:
       - "8081:8080"
     environment:
       - DATABASE_URL=sqlite:////app/data/client.db
-      - SERVER_API_URL=http://${SERVER_IP}:8080
-      - FL_SERVER_ADDRESS=${SERVER_IP}:8085
+      - SERVER_API_URL=http://${SERVER_IP:-127.0.0.1}:8080
+      - FL_SERVER_ADDRESS=${SERVER_IP:-127.0.0.1}:8085
       - PYTHONUNBUFFERED=1
       - HOSTNAME=${CLIENT_ID:-terminal-1}
       - CAMERA_INDEX=0
@@ -21,8 +21,8 @@ services:
     group_add:
       - video
     volumes:
-      - ./data:/app/data
-      - ${RAW_DATA_PATH_CLIENT}:/app/raw_data/students
+      - ./client/data:/app/data
+      - ${RAW_DATA_PATH_CLIENT:-./client/raw_data/students}:/app/raw_data/students
     networks:
       - fl-network
 

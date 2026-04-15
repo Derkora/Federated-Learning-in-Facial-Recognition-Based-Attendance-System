@@ -27,28 +27,31 @@ Akses layanan di:
 
 ## Cara Deployment (Production / Edge Devices)
 
-Untuk deployment di perangkat terpisah (misal: 1 Server PC, 2 Jetson Nano/Raspberry Pi), gunakan file konfigurasi di folder `deployment/`.
+Untuk deployment di perangkat terpisah (misal: 1 Server PC, 2 Jetson Nano/Raspberry Pi), gunakan file Docker Compose yang tersedia di root folder ini.
 
 ### 1. Server Device
-Copy folder `server/` dan `deployment/docker-compose-server.yaml` ke perangkat server.
+Salin folder `/server` dan file `docker-compose-server.yml` ke perangkat server.
 
 ```bash
 # Jalankan Server
-docker-compose -f deployment/docker-compose-server.yaml up --build -d
+docker compose -f docker-compose-server.yml up --build -d
 ```
-- Server akan berjalan di Port **8080** (API) dan **8085** (Flower).
+- Server akan berjalan di Port **8081** (Dashboard/API) dan **8085** (Flower Aggregator).
+- Dashboard dapat diakses di `http://localhost:8081`.
 
 ### 2. Client Devices (Edge)
-Copy folder `client/` dan `deployment/docker-compose-clientX.yaml` ke perangkat edge.
+Salin folder `/client` dan file `docker-compose-client.yml` ke perangkat edge.
 
 ```bash
-# Jalankan Client 1
-docker-compose -f deployment/docker-compose-client1.yaml up --build -d
+# Jalankan Client
+docker compose -f docker-compose-client.yml up --build -d
 ```
+- Client akan mencoba melakukan registrasi ke IP Server yang dikonfigurasi di file `.env`.
 
 ---
 
 ## Struktur Folder
 - `/server`: Kode backend Server (FastAPI + Flower Server Strategy).
 - `/client`: Kode Edge Client (FastAPI + Flower Client + Face Recognition Pipeline).
-- `/deployment`: Konfigurasi Docker Compose terpisah untuk deployment fisik.
+- `docker-compose-server.yml`: Konfigurasi deployment untuk server Federated pusat.
+- `docker-compose-client.yml`: Konfigurasi deployment untuk terminal Federated.

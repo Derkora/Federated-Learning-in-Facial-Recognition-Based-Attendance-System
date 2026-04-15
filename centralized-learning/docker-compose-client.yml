@@ -1,13 +1,13 @@
 services:
   client-cl:
     build:
-      context: ../../centralized-learning
-      dockerfile: client/Dockerfile
+      context: ./client
+      dockerfile: Dockerfile
     container_name: client_cl_balanced
     ports:
       - "8081:8080"
     environment:
-      - CL_SERVER_ADDRESS=http://${SERVER_IP}:8081
+      - CL_SERVER_ADDRESS=http://${SERVER_IP:-127.0.0.1}:8081
       - PYTHONUNBUFFERED=1
       - HOSTNAME=${CLIENT_ID:-terminal-1}
       - CAMERA_INDEX=0
@@ -19,8 +19,8 @@ services:
     group_add:
       - video
     volumes:
-      - ./data:/app/data
-      - ${RAW_DATA_PATH_CLIENT}:/app/raw_data/students
+      - ./client/data:/app/data
+      - ${RAW_DATA_PATH_CLIENT:-./client/raw_data/students}:/app/raw_data/students
     networks:
       - cl-network
 
