@@ -19,11 +19,13 @@ class AttendanceController:
     def recognize_and_submit(self, img_pil, model, reference_embeddings):
         # Melakukan inferensi wajah dengan Temporal Voting (Buffer Rata-rata)
         threshold = self.manager.threshold
+        # 1. Detection & Zero-Distortion Crop
+        # Kita menggunakan get_face_crop yang mengembalikan PIL image 96x112 (Portrait)
+        # langsung dari cropping kotak asli MTCNN, menghindari distorsi square-to-portrait.
+        face_pil = image_processor.get_face_crop(img_pil)
         
-        
-        face, box, prob = image_processor.detect_face(img_pil)
-        if face is not None:
-            face_tensor = image_processor.prepare_for_model(face)
+        if face_pil is not None:
+            face_tensor = image_processor.prepare_for_model(face_pil)
             input_np = face_tensor.cpu().numpy()
             
             # Mendapatkan versi model saat ini dari manager
@@ -66,12 +68,12 @@ class AttendanceController:
                 except Exception as e:
                     print(f"[ONNX ERROR] CL Fallback: {e}")
                     with torch.no_grad():
-                        query_emb_tensor = F.normalize(model(face_tensor))
+                        query_emb_tensor = F.normalize(model(face_tensor), p=2, dim=1)
             else:
                 if current_v != self._last_version_loaded:
                     print(f"[DEBUG] Using PyTorch model. Input shape: {face_tensor.shape}")
                 with torch.no_grad():
-                    query_emb_tensor = F.normalize(model(face_tensor))
+                    query_emb_tensor = F.normalize(model(face_tensor), p=2, dim=1)
             
             # Pastikan dimensi query_emb_tensor adalah (1, 128)
             query_emb_tensor = query_emb_tensor.view(1, -1)

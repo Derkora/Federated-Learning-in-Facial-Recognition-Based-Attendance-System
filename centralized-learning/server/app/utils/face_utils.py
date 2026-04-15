@@ -17,17 +17,26 @@ class FaceHandler:
         ])
 
     def detect_and_save(self, img_path, dst_path):
-        """Detect face and save processed image."""
+        """
+        Deteksi wajah dan simpan hasil crop Portrait (96x112) tanpa distorsi.
+        """
         try:
             img = Image.open(img_path).convert('RGB')
-            face = self.mtcnn(img)
-            if face is not None:
-                face_img = T.ToPILImage()(face * 0.5 + 0.5)
-                face_img = self.final_resize(face_img)
+            boxes, _ = self.mtcnn.detect(img)
+            
+            if boxes is not None and len(boxes) > 0:
+                box = boxes[0] # [x1, y1, x2, y2]
+                
+                # Manual Crop (Mencegah Squash 112x112 ke 96x112)
+                x1, y1 = max(0, int(box[0])), max(0, int(box[1]))
+                x2, y2 = min(img.width, int(box[2])), min(img.height, int(box[3]))
+                
+                face_img = img.crop((x1, y1, x2, y2))
+                # Resize Portrait 96x112 (Architectural consistency)
+                face_img = face_img.resize((96, 112), Image.BILINEAR)
                 face_img.save(dst_path)
                 return True
             else:
-                # Log jika tidak ditemukan wajah guna diagnostik riset
                 print(f"[FaceHandler] Skip: Tidak ditemukan wajah pada {os.path.basename(img_path)}")
         except Exception as e:
             print(f"[FaceHandler] ERROR pada {os.path.basename(img_path)}: {e}")

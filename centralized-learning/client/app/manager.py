@@ -48,7 +48,7 @@ class ClientManager:
         self.latest_frame = None
         self.latest_result = {"matched": "Standby", "confidence": 0, "latency_ms": 0, "is_virtual": False}
         self.is_camera_running = False
-        self.threshold = 0.50
+        self.threshold = 0.60
 
     def _load_identity(self):
         """Memuat atau membuat identitas unik client yang tersimpan di volume data."""
