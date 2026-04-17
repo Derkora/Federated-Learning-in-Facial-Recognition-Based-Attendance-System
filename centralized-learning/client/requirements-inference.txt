@@ -6,14 +6,13 @@ python-multipart==0.0.6
 requests==2.31.0
 jinja2==3.1.2
 
-# Database (Local logs/Cache)
+# Database
 sqlalchemy==2.0.23
 psycopg2-binary==2.9.9
 
-# ML & Computer Vision (CPU Only)
---extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.1.1+cpu
-torchvision==0.16.1+cpu
+# ML & Computer Vision (Disesuaikan untuk ARM64)
+torch==2.1.1
+torchvision==0.16.1
 onnxruntime==1.16.3
 onnx==1.15.0
 facenet-pytorch==2.5.3
