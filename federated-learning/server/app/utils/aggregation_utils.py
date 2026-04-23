@@ -1,5 +1,7 @@
 import os
 import torch
+import tempfile
+import shutil
 import numpy as np
 from collections import defaultdict
 
@@ -38,8 +40,6 @@ def aggregate_and_save_registry_assets(log_func):
         log_func("[OK] File global_bn_combined.pth berhasil dibuat.")
         
         # 2. Agregasi Centroids (Fitur Wajah Unik)
-        # Jika satu mahasiswa terdaftar di lebih dari satu terminal, fitur wajahnya akan dirata-ratakan
-        # menjadi satu entri global yang lebih akurat.
         nrp_centroids_list = defaultdict(list)
         for client_id, sub in all_submissions.items():
             for nrp, vec in sub['centroids'].items():
@@ -52,11 +52,22 @@ def aggregate_and_save_registry_assets(log_func):
                 avg_vec = torch.mean(stack, dim=0)
             else:
                 avg_vec = vecs[0]
-            # Normalisasi ulang untuk memastikan kemiripan kosinus (Cosine Similarity) yang valid
             all_centroids[nrp] = torch.nn.functional.normalize(avg_vec.unsqueeze(0), p=2, dim=1).squeeze(0)
                 
-        torch.save(all_centroids, "data/global_embedding_registry.pth")
-        log_func(f"[OK] File global_embedding_registry.pth berhasil dibuat ({len(all_centroids)} identitas).")
+        # ATOMIC WRITE: Preserve consistency
+        os.makedirs("data", exist_ok=True)
+        
+        # Save BN
+        with tempfile.NamedTemporaryFile(delete=False, dir="data") as tmp:
+            torch.save(global_bn, tmp.name)
+            shutil.move(tmp.name, "data/global_bn_combined.pth")
+            
+        # Save Registry
+        with tempfile.NamedTemporaryFile(delete=False, dir="data") as tmp:
+            torch.save(all_centroids, tmp.name)
+            shutil.move(tmp.name, "data/global_embedding_registry.pth")
+            
+        log_func(f"[OK] Agregasi Asset Selesai ({len(all_centroids)} identitas).")
         
     except Exception as e:
         log_func(f"[ERROR] Gagal melakukan agregasi: {e}")

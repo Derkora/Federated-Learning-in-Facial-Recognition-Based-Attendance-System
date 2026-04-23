@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .mobilefacenet import ArcMarginProduct
+from .mobilefacenet import MobileFaceNet, ArcMarginProduct
 from torch.utils.data import DataLoader, Dataset
 import torchvision.transforms as transforms
 from PIL import Image
@@ -125,8 +125,8 @@ class FaceDataset(Dataset):
 class LocalTrainer:
     def __init__(self, backbone, head, device="cpu", data_path="/app/data"):
         self.device = device if isinstance(device, torch.device) else torch.device(device)
-        self.backbone = backbone.to(self.device)
-        self.head = head.to(self.device)
+        self.backbone = backbone.to(self.device) if backbone is not None else None
+        self.head = head.to(self.device) if head is not None else None
         self.data_path = data_path
         self.nrp_to_idx = {} 
         
@@ -147,9 +147,13 @@ class LocalTrainer:
         ])
 
     def train(self, epochs=5, lr=0.0001, round_num=0, global_embeddings=None, label_map=None, mu=0.05, lam=0.1):
+        if self.backbone is None or self.head is None:
+             print("[TRAINER] Model belum terinisialisasi..")
+             return 0.0, 0.0, 0, []
+
         dataset = FaceDataset(self.data_path, global_embeddings=global_embeddings, transform=self.transform, mode="train", label_map=label_map)
         if len(dataset) < 2:
-            print(f"[TRAINER] Data too small ({len(dataset)}) for training. Skipping round.")
+            print(f"[TRAINER] Data terlalu kecil ({len(dataset)}) untuk training. Melewati round.")
             return 0.0, 0.0, len(dataset), []
             
         if dataset.num_classes > 0 and dataset.num_classes != self.head.weight.shape[0]:
@@ -172,7 +176,7 @@ class LocalTrainer:
         
         criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
-        print(f"[TRAINER] Round {round_num}: Training {len(dataset)} samples for {epochs} epochs")
+        print(f"[TRAINER] Round {round_num}: Training {len(dataset)} data untuk {epochs} epochs")
         total_loss, correct, total = 0.0, 0, 0
         epoch_history = []
         
@@ -210,10 +214,10 @@ class LocalTrainer:
                 loss = ce_loss + prox_loss
                 
                 if torch.isnan(loss):
-                    print(f"[ERROR] NaN loss detected. Rolling back weights...")
+                    print(f"[ERROR] NaN loss terdeteksi...")
                     self.backbone.load_state_dict(backbone_snapshot)
                     self.head.load_state_dict(head_snapshot)
-                    raise TrainingNaNError(f"NaN loss at Round {round_num}")
+                    raise TrainingNaNError(f"NaN loss di Round {round_num}")
 
                 loss.backward()
                 optimizer.step()
@@ -238,6 +242,9 @@ class LocalTrainer:
         return avg_loss, accuracy, total, epoch_history
 
     def evaluate(self, global_embeddings=None, label_map=None):
+        if self.backbone is None or self.head is None:
+             return 0.0, 0.0, 0
+             
         dataset = FaceDataset(self.data_path, global_embeddings=global_embeddings, transform=self.val_transform, mode="val", label_map=label_map)
         if len(dataset) < 2: return 0.0, 0.0, len(dataset)
             
@@ -250,6 +257,13 @@ class LocalTrainer:
         with torch.no_grad():
             for imgs, embs, labels, is_embedding in dataloader:
                 imgs, embs, labels = imgs.to(self.device), embs.to(self.device), labels.to(self.device)
+                
+                # Defensive check: skip if labels are out of bounds for head weight
+                max_label = labels.max().item()
+                if max_label >= self.head.weight.shape[0]:
+                    print(f"[TRAINER WARNING] Eval labels ({max_label}) out of head bounds ({self.head.weight.shape[0]}). Skipping batch.")
+                    continue
+
                 features = torch.zeros((labels.size(0), self.head.weight.shape[1]), device=self.device)
                 img_mask, emb_mask = ~is_embedding, is_embedding
                 
@@ -282,8 +296,19 @@ class LocalTrainer:
         """Mengekspansi head klasifikasi sambil mempertahankan bobot yang sudah terlatih."""
         old_head = self.head
         old_nrp_to_idx = self.nrp_to_idx
-        new_head = ArcMarginProduct(old_head.weight.shape[1], new_num_classes).to(self.device)
         
+        embedding_size = 128 # Default for MobileFaceNet
+        if old_head is not None:
+            embedding_size = old_head.weight.shape[1]
+            
+        new_head = ArcMarginProduct(embedding_size, new_num_classes).to(self.device)
+        
+        if old_head is None:
+            print(f"[TRAINER] New Head Created: {new_num_classes} classes (initial/lazy)")
+            self.head = new_head
+            self.nrp_to_idx = new_nrp_to_idx
+            return new_head
+
         copied_count = 0
         with torch.no_grad():
             for nrp, new_idx in new_nrp_to_idx.items():
@@ -307,6 +332,7 @@ class LocalTrainer:
         return any(x in name for x in ['weight', 'bias'])
 
     def get_backbone_parameters(self, personalized=True):
+        if self.backbone is None: return []
         state_dict = self.backbone.state_dict()
         if personalized:
             shared_keys = [k for k in state_dict.keys() if self._is_shared_param(k)]
@@ -318,12 +344,18 @@ class LocalTrainer:
         return [state_dict[k].cpu().numpy().copy() for k in shared_keys]
 
     def get_bn_parameters(self):
+        if self.backbone is None: return {}
         state_dict = self.backbone.state_dict()
         bn_keys = [k for k in state_dict.keys() if any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked'])]
         print(f"[TRAINER] Extracting {len(bn_keys)} BN parameters.")
         return {k: state_dict[k].cpu().numpy().copy() for k in bn_keys}
 
     def set_backbone_parameters(self, parameters, personalized=True):
+        if self.backbone is None:
+            print("[TRAINER] Backbone is None, initializing new MobileFaceNet...")
+            self.backbone = MobileFaceNet().to(self.device)
+            self.backbone.eval()
+            
         state_dict = self.backbone.state_dict()
         if personalized:
             shared_keys = [k for k in state_dict.keys() if self._is_shared_param(k)]
@@ -346,6 +378,7 @@ class LocalTrainer:
         self.backbone.load_state_dict(new_state_dict, strict=False)
 
     def calculate_centroids(self, label_map=None):
+        if self.backbone is None: return {}
         dataset = FaceDataset(self.data_path, transform=self.val_transform, mode="train", label_map=label_map)
         if len(dataset) == 0: return {}
         dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=hybrid_collate)

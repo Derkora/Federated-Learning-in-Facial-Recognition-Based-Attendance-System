@@ -12,9 +12,8 @@ from app.utils.mobilefacenet import MobileFaceNet
 from app.utils.preprocessing import image_processor, DEVICE
 from app.controllers.management import ManagementController
 from app.controllers.attendance import AttendanceController
-from app.utils.model_exporter import export_backbone_to_onnx
 
-class ClientManager:
+class CLClientManager:
     # Manajer Utama Client Terpusat (Centralized)
     # Menangani proses registrasi, sinkronisasi model, dan pengunggahan dataset.
     
@@ -23,7 +22,7 @@ class ClientManager:
         self.data_path = os.getenv("DATA_PATH", "/app/data")
         os.makedirs(os.path.join(self.data_path, "models"), exist_ok=True)
         
-        # Load or Generate Persistent Identity
+        # Muat atau Buat Identitas Persisten
         self.client_id = self._load_identity()
         
         self.raw_data_path = os.getenv("RAW_DATA_PATH", "/app/raw_data")
@@ -32,18 +31,20 @@ class ClientManager:
         self.management = ManagementController(self.server_url, self.client_id)
         self.attendance = AttendanceController(self)
         
-        self.model = MobileFaceNet()
+        self.model = None 
         self.reference_embeddings = {}
         self.is_registered = False
         self.has_assets = False
+        self.is_training_phase = False # Guard untuk manajemen sumber daya
         self.current_model_version = self._load_version()
         
-        # Load local assets if available
-        self._load_local_assets()
+        # Muat aset lokal jika tersedia
+        if not self.model and os.path.exists("/app/app/model/global_model.pth"):
+             self._ensure_models_loaded()
         
-        # Headless Camera Support
+        # Pengaturan Kamera
         self.device = DEVICE
-        self.prediction_buffer = deque(maxlen=5)
+        self.prediction_buffer = deque(maxlen=10)
         self.last_face_time = 0
         self.latest_frame = None
         self.latest_result = {"matched": "Standby", "confidence": 0, "latency_ms": 0, "is_virtual": False}
@@ -57,7 +58,7 @@ class ClientManager:
             with open(id_path, "r") as f:
                 cid = f.read().strip()
                 if cid:
-                    print(f"[IDENTITY] Loaded persistent ID: {cid}")
+                    print(f"[IDENTITY] Memuat ID persisten: {cid}")
                     return cid
         
         # Jika belum ada, gunakan HOSTNAME (Container ID) atau fallback
@@ -65,9 +66,9 @@ class ClientManager:
         try:
             with open(id_path, "w") as f:
                 f.write(new_id)
-            print(f"[IDENTITY] Registered new persistent ID: {new_id}")
+            print(f"[IDENTITY] Mendaftarkan ID persisten baru: {new_id}")
         except Exception as e:
-            print(f"[IDENTITY ERROR] Failed to save identity: {e}")
+            print(f"[ERROR] Gagal menyimpan identitas: {e}")
         
         return new_id
 
@@ -85,25 +86,34 @@ class ClientManager:
         with open(v_path, "w") as f:
             f.write(str(v))
 
-    def _load_local_assets(self):
+    def _ensure_models_loaded(self):
+        """Memuat model hanya saat dibutuhkan (Lazy Loading) untuk menghemat RAM startup."""
+        if self.model is not None:
+            return True
+            
         path_m = "/app/app/model/global_model.pth"
         path_r = "/app/app/model/reference_embeddings.pth"
+        
         if os.path.exists(path_m) and os.path.exists(path_r):
             try:
+                print(f"[INFO] Memuat MobileFaceNet pada {DEVICE} (Lazy Loading)...")
+                self.model = MobileFaceNet().to(DEVICE)
                 self.model.load_state_dict(torch.load(path_m, map_location=DEVICE))
                 self.model.eval()
                 self.reference_embeddings = torch.load(path_r, map_location=DEVICE)
                 self.has_assets = True
-                print(f"[INIT] Loaded local model v{self.current_model_version} and references.")
+                print(f"[SUCCESS] Model v{self.current_model_version} siap digunakan.")
+                return True
             except Exception as e:
-                print(f"[INIT ERROR] Failed to load local assets: {e}")
+                print(f"[ERROR] Gagal memuat model (Lazy Loading): {e}")
+        return False
 
     def start_background_tasks(self):
         # Menjalankan loop sinkronisasi dan kamera di thread latar belakang
-        threading.Thread(target=self._background_sync, daemon=True).start()
-        threading.Thread(target=self._camera_loop, daemon=True).start()
+        threading.Thread(target=self.run_background_sync, daemon=True).start()
+        threading.Thread(target=self.run_camera_loop, daemon=True).start()
 
-    def _camera_loop(self):
+    def run_camera_loop(self):
         # Loop kamera mandiri (Headless Mode)
         cam_idx = self.camera_index
         cam_width = int(os.getenv("CAMERA_WIDTH", 1280))
@@ -124,7 +134,7 @@ class ClientManager:
         time.sleep(1)
         
         if not cap.isOpened() and cam_idx == 0:
-            print(f"[CAMERA WARN] Gagal akses hardware pada index 0. Mencoba index 1...")
+            print(f"[CAMERA] Gagal akses hardware pada index 0. Mencoba index 1...")
             cap = cv2.VideoCapture(1)
             
         self.is_camera_running = True
@@ -140,7 +150,7 @@ class ClientManager:
             if not virtual_mode:
                 ret, frame = cap.read()
                 if not ret:
-                    print("[CAMERA ERROR] Gagal akses hardware. Beralih ke VIRTUAL CAMERA mode.")
+                    print("[ERROR] Gagal akses hardware. Beralih ke mode VIRTUAL CAMERA.")
                     virtual_mode = True
                     # Scan for virtual images
                     root_dir = os.path.join(self.raw_data_path, "students")
@@ -150,7 +160,7 @@ class ClientManager:
                                 if f.lower().endswith(('.jpg', '.jpeg', '.png')):
                                     virtual_images.append(os.path.join(root, f))
                     if not virtual_images:
-                        print("[VIRTUAL ERROR] Tidak ada dataset lokal untuk simulasi.")
+                        print("[ERROR] Tidak ada dataset lokal untuk simulasi.")
             
             if virtual_mode and virtual_images:
                 img_path = virtual_images[virtual_idx]
@@ -163,22 +173,32 @@ class ClientManager:
                 time.sleep(1.0) # Lambatkan simulasi agar tidak spam
             
             if not ret:
-                if not virtual_mode: print("[CAMERA ERROR] Gagal membaca frame dari kamera. Cek mapping device /dev/video0.")
+                if not virtual_mode: print("[ERROR] Gagal membaca frame dari kamera. Periksa /dev/video0.")
                 time.sleep(5)
                 continue
             
+            # Update status training untuk mematikan beban kerja berat
+            if self.is_training_phase:
+                self.latest_result["matched"] = "TRAINING..."
+                time.sleep(2)
+                continue
+
+            # Inisialisasi model hanya jika diperlukan dan aset tersedia
+            if not self.model and self.has_assets:
+                self._ensure_models_loaded()
+
             # Simpan frame terbaru untuk streaming MJPEG (Resized untuk efisiensi RAM/Bandwidth)
             self.latest_frame = cv2.resize(frame, (640, 480))
             
             # Lakukan pemrosesan jika model sudah siap (Inference)
-            if self.has_assets:
+            if self.model:
                 start_time = time.time()
                 try:
                     # Konversi ke PIL Image
                     img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     img_pil = Image.fromarray(img_rgb)
                     
-                    matched, confidence = self.attendance.recognize_and_submit(
+                    matched, confidence = self.attendance.process_inference(
                         img_pil, self.model, self.reference_embeddings
                     )
                     
@@ -190,14 +210,14 @@ class ClientManager:
                         "is_virtual": virtual_mode
                     }
                 except Exception as e:
-                    print(f"[CAMERA ERROR] Pemrosesan gagal: {e}")
+                    print(f"[ERROR] Pemrosesan kamera gagal: {e}")
             
             # Beri jeda agar tidak memakan CPU terlalu tinggi (FPS ~2-5 cukup untuk presensi)
             if not virtual_mode: time.sleep(0.5)
         
         cap.release()
 
-    def _background_sync(self):
+    def run_background_sync(self):
         # Loop utama untuk memastikan terminal selalu sinkron dengan server
         print(f"[INFO] Memulai sinkronisasi latar belakang ({self.client_id}).")
         while True:
@@ -207,7 +227,7 @@ class ClientManager:
                     ip = socket.gethostbyname(socket.gethostname())
                     if self.management.register_client(ip):
                         self.is_registered = True
-                        print(f"[OK] Client berhasil terdaftar di server.")
+                        print(f"[SUCCESS] Client berhasil terdaftar pada server.")
                     else: 
                         time.sleep(5)
                         continue
@@ -221,51 +241,50 @@ class ClientManager:
                         server_threshold = server_info.get("inference_threshold", 0.50)
                         upload_requested = server_info.get("upload_requested", False)
                         
-                        # Sync threshold
+                        # Sinkronisasi threshold
                         if server_threshold != self.threshold:
-                            print(f"[SYNC] Threshold updated: {server_threshold}")
+                            print(f"[INFO] Threshold diperbarui: {server_threshold}")
                             self.threshold = server_threshold
                         
                         # Sinkronisasi jika versi lokal tertinggal
                         if not self.has_assets or server_version > self.current_model_version:
                             print(f"[INFO] Sinkronisasi model (Lokal: v{self.current_model_version}, Server: v{server_version}).")
+                            
+                            # Pastikan model sudah terinisialisasi (Lazy Load Guard)
+                            if self.model is None:
+                                self._ensure_models_loaded()
+                                if self.model is None:
+                                    print("[INFO] Inisialisasi model MobileFaceNet dasar untuk sinkronisasi...")
+                                    self.model = MobileFaceNet().to(DEVICE)
+                                    
                             success, refs = self.management.sync_assets(self.model)
                             if success:
                                 self.has_assets = True
                                 self.reference_embeddings = refs
                                 self.current_model_version = server_version
                                 self._save_version(server_version)
-                                print(f"[OK] Model v{server_version} berhasil diperbarui.")
-                                
-                                # Ekspor ke ONNX untuk inferensi yang lebih ringan (Edge Optimization)
-                                save_path = "/app/app/model/global_model.pth"
-                                onnx_dir = os.path.join(self.data_path, "models")
-                                onnx_file = os.path.join(onnx_dir, "backbone.onnx")
-                                q_file = os.path.join(onnx_dir, "backbone_quantized.onnx")
-                                try:
-                                    os.makedirs(onnx_dir, exist_ok=True)
-                                    threading.Thread(target=export_backbone_to_onnx, 
-                                                     args=(save_path, onnx_file, q_file), 
-                                                     daemon=True).start()
-                                except: pass
+                                print(f"[SUCCESS] Model v{server_version} berhasil diperbarui.")
                             else:
                                 time.sleep(10)
                                 continue
                         
                         # 3. Menangani Permintaan Pengunggahan Dataset
                         if upload_requested:
-                            print(f"[INFO] Server meminta unggah data dataset.")
+                            self.is_training_phase = True # Masuk mode hemat daya
+                            print(f"[INFO] Server meminta unggah dataset.")
                             success, msg = self.management.package_and_upload()
                             if success:
-                                print(f"[OK] Unggah data berhasil. Menunggu proses training selesai...")
+                                print(f"[SUCCESS] Unggah dataset berhasil. Menunggu proses pelatihan selesai...")
                                 time.sleep(60) # Beri jeda lebih lama jika baru saja mengunggah
                             else:
-                                print(f"[ERROR] Gagal unggah data: {msg}")
+                                print(f"[ERROR] Gagal mengunggah dataset: {msg}")
+                        else:
+                            self.is_training_phase = False # Kembali ke mode normal
 
                 except Exception as e:
                     print(f"[ERROR] Gagal komunikasi dengan server (Ping/Sync): {e}")
 
             except Exception as e:
-                print(f"[ERROR] Terjadi kesalahan pada loop latar belakang: {e}")
+                print(f"[ERROR] Terjadi kesalahan fatal pada loop latar belakang: {e}")
 
             time.sleep(5)

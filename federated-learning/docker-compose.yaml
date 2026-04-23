@@ -13,7 +13,7 @@ services:
       server-fl-db:
         condition: service_healthy
     volumes:
-      - ./server/data:/app/data
+      - fl-server:/app/data
     networks:
       - flnet
 
@@ -30,7 +30,7 @@ services:
       PYTHONUNBUFFERED: 1
     volumes:
       - ../datasets/client1_data:/app/raw_data
-      - client1_app_data:/app/data
+      - fl-client-1:/app/data
     networks:
       - flnet
 
@@ -47,7 +47,7 @@ services:
       PYTHONUNBUFFERED: 1
     volumes:
       - ../datasets/client2_data:/app/raw_data
-      - client2_app_data:/app/data
+      - fl-client-2:/app/data
     networks:
       - flnet
 
@@ -62,7 +62,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - server_fl_data:/var/lib/postgresql/data
+      - fl-db:/var/lib/postgresql/data
     networks:
       - flnet
     healthcheck:
@@ -76,6 +76,7 @@ networks:
     driver: bridge
 
 volumes:
-  server_fl_data:
-  client1_app_data:
-  client2_app_data:
+  fl-server:
+  fl-db:
+  fl-client-1:
+  fl-client-2:

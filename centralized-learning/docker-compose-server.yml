@@ -15,7 +15,7 @@ services:
       server-cl-db-balanced:
         condition: service_healthy
     volumes:
-      - ./server/data:/app/data
+      - cl-server:/app/data
 
   server-cl-db-balanced:
     image: postgres:15
@@ -30,10 +30,14 @@ services:
       timeout: 5s
       retries: 5
     volumes:
-      - ./server/data/db:/var/lib/postgresql/data
+      - cl-db:/var/lib/postgresql/data
     networks:
       - cl-network
 
 networks:
   cl-network:
     driver: bridge
+
+volumes:
+  cl-server:
+  cl-db:

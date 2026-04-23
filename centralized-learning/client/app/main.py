@@ -43,7 +43,7 @@ async def api_inference(data: dict):
         cl_client.latest_frame = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
         
         # Proses pengenalan wajah melalui controller attendance
-        matched, confidence = cl_client.attendance.recognize_and_submit(
+        matched, confidence = cl_client.attendance.process_inference(
             img_pil, cl_client.model, cl_client.reference_embeddings
         )
         
@@ -83,14 +83,14 @@ async def get_latest_result():
 # API Permintaan Data dari Server
 @app.post("/api/request-data")
 async def request_data():
-    print(f"[INFO] Server meminta unggah data dataset.")
+    print(f"[INFO] Server meminta unggah dataset.")
     success, msg = cl_client.management.package_and_upload()
     return {"status": "success" if success else "error", "message": msg}
 
 # Event saat Startup
 @app.on_event("startup")
 def startup_event():
-    print(f"[STARTUP] Inisialisasi Client: {cl_client.client_id}", flush=True)
+    print(f"[INIT] Inisialisasi Client: {cl_client.client_id}", flush=True)
     cl_client.start_background_tasks()
 
 if __name__ == "__main__":

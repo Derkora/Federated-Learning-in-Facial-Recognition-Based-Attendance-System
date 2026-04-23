@@ -1,3 +1,3 @@
-from app.manager import ClientManager
+from app.manager import CLClientManager
 
-cl_client = ClientManager()
+cl_client = CLClientManager()

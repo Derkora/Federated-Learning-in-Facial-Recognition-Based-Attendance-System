@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements-inference.txt .
-RUN pip install --user --no-cache-dir -r requirements-inference.txt
+RUN pip install --user --no-cache-dir -r requirements-inference.txt --extra-index-url https://download.pytorch.org/whl/cpu
 RUN find /root/.local -name "*.so" -exec patchelf --clear-execstack {} +
 
 # Tahap 2: Runner 

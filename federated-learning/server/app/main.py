@@ -103,7 +103,7 @@ async def reset_fl_state():
     fl_manager.registry_submissions.clear()
     fl_manager.ready_clients.clear()
     fl_manager.discovery_clients.clear()
-    fl_manager.update_logs("[OK] Status server telah di-reset secara manual.")
+    fl_manager.update_logs("[INFO] Status server telah di-reset secara manual.")
     return {"status": "reset_ok"}
 
 # Pendaftaran Terminal (Client) Baru
@@ -233,7 +233,7 @@ async def receive_registry_assets(data: dict, db: Session = Depends(get_db)):
     with open(os.path.join(submission_dir, f"{client_id}_assets.pth"), "wb") as f:
         torch.save(fl_manager.registry_submissions[client_id], f)
     
-    fl_manager.update_logs(f"[OK] Menerima aset fitur wajah (Centroids) dari {client_id}")
+    fl_manager.update_logs(f"[SUCCESS] Menerima aset fitur wajah (Centroids) dari {client_id}")
     return {"status": "received"}
 
 # --- DASHBOARD DATA & SINKRONISASI ---
@@ -270,7 +270,9 @@ async def sync_attendance(records: List[Dict[str, Any]] = Body(...), db: Session
         ts = datetime.fromisoformat(rec['timestamp'])
         exists = db.query(AttendanceRecap).filter_by(user_id=user.user_id, timestamp=ts).first()
         if not exists:
-            new_item = AttendanceRecap(user_id=user.user_id, edge_id=rec['client_id'], timestamp=ts, confidence=rec['confidence'])
+            conf = rec.get('confidence', 0.0)
+            print(f"[DEBUG] Sync Attendance | Client: {rec['client_id']} | NRP: {nrp} | Sim: {conf:.4f}")
+            new_item = AttendanceRecap(user_id=user.user_id, edge_id=rec['client_id'], timestamp=ts, confidence=conf)
             db.add(new_item)
             new_records += 1
     db.commit()
@@ -286,7 +288,7 @@ async def update_settings(data: dict):
         if 'min_clients' in data: fl_manager.default_min_clients = int(data['min_clients'])
         if 'threshold' in data: fl_manager.inference_threshold = float(data['threshold'])
         
-        fl_manager.update_logs("[OK] Pengaturan sistem diperbarui secara dinamis.")
+        fl_manager.update_logs("[SUCCESS] Pengaturan sistem diperbarui secara dinamis.")
         return {"status": "success"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -339,7 +341,7 @@ async def get_fl_status(session_id: str, db: Session = Depends(get_db)):
 
 @app.on_event("startup")
 def startup_event():
-    print(f"[STARTUP] Federated Learning Server Initialized", flush=True)
+    print(f"[INIT] Server Federated Learning telah siap.", flush=True)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8080)

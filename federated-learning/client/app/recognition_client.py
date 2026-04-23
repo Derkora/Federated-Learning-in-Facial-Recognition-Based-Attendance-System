@@ -33,7 +33,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         self.trainer = LocalTrainer(self.model, self.head, device=self.device, data_path=processed_path)
         
         head_path = os.path.join(self.data_path, "models", "local_head.pth")
-        if os.path.exists(head_path):
+        if os.path.exists(head_path) and self.head is not None:
             try:
                 print(f"Loading local classifier head from {head_path}...")
                 self.head.load_state_dict(torch.load(head_path, map_location=self.device))
@@ -46,6 +46,9 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         return self.trainer.get_backbone_parameters(personalized=True)
 
     def fit(self, parameters, config):
+        if hasattr(self, 'fl_manager'):
+            self.fl_manager._ensure_models_loaded()
+            
         rnd = config.get("round", 0)
         print(f"FL Fit [Round {rnd}]: Receiving {len(parameters)} parameters...")
         
@@ -107,14 +110,13 @@ class FaceRecognitionClient(fl.client.NumPyClient):
             import traceback; traceback.print_exc()
             status = "TrainingError"
 
-        # Simpan checkpoint lokal
+        # Simpan checkpoint lokal (Tanpa merubah nomor versi global di disk)
         try:
             model_dir = os.path.join(self.data_path, "models")
             os.makedirs(model_dir, exist_ok=True)
             torch.save(self.model.state_dict(), os.path.join(model_dir, "backbone.pth"))
             torch.save(self.trainer.head.state_dict(), os.path.join(model_dir, "local_head.pth"))
-            with open(os.path.join(model_dir, "model_version.txt"), "w") as f:
-                f.write(str(rnd))
+            # model_version.txt jangan diupdate di sini, biarkan manager yang menangani di akhir siklus
         except Exception as e:
             print(f"[CLIENT] Checkpoint save failed: {e}")
 
@@ -145,6 +147,9 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         }
 
     def evaluate(self, parameters, config):
+        if hasattr(self, 'fl_manager'):
+            self.fl_manager._ensure_models_loaded()
+            
         try:
             self.trainer.set_backbone_parameters(parameters, personalized=True)
         except Exception as e:
@@ -158,7 +163,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
             loss, accuracy, num_samples = 0.0, 0.0, 0
 
         gc.collect()
-        return float(loss), num_samples, {"accuracy": float(accuracy)}
+        return float(loss), num_samples, {"accuracy": float(accuracy), "loss": float(loss)}
 
 def start_fl_client(server_address, model, head, data_path="/app/data", device="cpu"):
     client = FaceRecognitionClient(model, head, data_path, device)

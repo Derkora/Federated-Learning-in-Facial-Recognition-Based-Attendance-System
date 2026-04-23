@@ -2,13 +2,12 @@ import requests
 import time 
 import torch
 import torch.nn.functional as F
-import onnxruntime as ort
 import numpy as np
 import os
 from app.utils.preprocessing import image_processor, DEVICE
 
 class AttendanceController:
-    # Kontroler untuk proses Pengenalan Wajah dan Pelaporan Presensi.
+    # Kontroler untuk proses Pengenalan Wajah dan Pelaporan Presensi (Optimasi Edge: No ONNX)
     
     def __init__(self, manager):
         self.manager = manager
@@ -16,64 +15,32 @@ class AttendanceController:
         self.client_id = manager.client_id
         self._last_version_loaded = -1 # Melacak versi model yang sedang aktif di session
 
-    def recognize_and_submit(self, img_pil, model, reference_embeddings):
+    def process_inference(self, img_pil, model, reference_embeddings):
         # Melakukan inferensi wajah dengan Temporal Voting (Buffer Rata-rata)
         threshold = self.manager.threshold
-        # 1. Detection & Zero-Distortion Crop
-        # Kita menggunakan get_face_crop yang mengembalikan PIL image 96x112 (Portrait)
-        # langsung dari cropping kotak asli MTCNN, menghindari distorsi square-to-portrait.
-        face_pil = image_processor.get_face_crop(img_pil)
         
-        if face_pil is not None:
-            face_tensor = image_processor.prepare_for_model(face_pil)
-            input_np = face_tensor.cpu().numpy()
+        # 1. Deteksi & MTCNN Square Crop (dengan margin 20px)
+        face_tensor, _, _ = image_processor.detect_face(img_pil)
+        
+        if face_tensor is not None:
+            # prepare_for_model menangani squash 112x112 ke 96x112 dan normalisasi [-1, 1]
+            face_tensor_ready = image_processor.prepare_for_model(face_tensor)
             
             # Mendapatkan versi model saat ini dari manager
             current_v = getattr(self.manager, 'current_model_version', 0)
             
-            # Gunakan ONNX jika tersedia. Prioritaskan FP32 untuk akurasi (~0.8 sim).
-            onnx_dir = os.path.join(self.manager.data_path, "models")
-            onnx_path = os.path.join(onnx_dir, "backbone.onnx")
-            
-            # Fallback ke quantized jika versi FP32 belum ada (legacy/compatibility)
-            if not os.path.exists(onnx_path):
-                onnx_path = os.path.join(onnx_dir, "backbone_quantized.onnx")
-            
-            # --- PROTEKSI SINKRONISASI: Reload session jika versi berubah atau file berubah ---
-            if current_v != self._last_version_loaded:
-                if hasattr(self, 'ort_session'):
-                    print(f"[SYNC] Reloading ONNX session for Model v{current_v}...")
-                    del self.ort_session
-                self._last_version_loaded = current_v
-
-            if os.path.exists(onnx_path):
-                try:
-                    if not hasattr(self, 'ort_session'):
-                        print(f"[DEBUG] Initializing ONNX session from {onnx_path}")
-                        self.ort_session = ort.InferenceSession(onnx_path, providers=['CPUExecutionProvider'])
-                    
-                    # Log Input Info (hanya saat awal muat/ganti versi)
-                    if current_v != self._last_version_loaded:
-                        print(f"[DEBUG] Input Shape: {input_np.shape} | Range: [{input_np.min():.2f}, {input_np.max():.2f}]")
-
-                    outputs = self.ort_session.run(None, {'input': input_np})
-                    
-                    # Log Output Info
-                    if current_v != self._last_version_loaded:
-                        print(f"[DEBUG] Raw Output Shape: {outputs[0].shape}")
-
-                    query_emb_tensor = torch.from_numpy(outputs[0][0]).view(1, -1).to(DEVICE)
-                    # PURE TORCH NORMALIZE
-                    query_emb_tensor = F.normalize(query_emb_tensor, p=2, dim=1)
-                except Exception as e:
-                    print(f"[ONNX ERROR] CL Fallback: {e}")
-                    with torch.no_grad():
-                        query_emb_tensor = F.normalize(model(face_tensor), p=2, dim=1)
-            else:
+            # --- INFERENSI PURE PYTORCH (Optimasi Edge) ---
+            try:
                 if current_v != self._last_version_loaded:
-                    print(f"[DEBUG] Using PyTorch model. Input shape: {face_tensor.shape}")
+                    print(f"[DEBUG] Menggunakan model PyTorch v{current_v}. Input: {face_tensor_ready.shape}")
+                    self._last_version_loaded = current_v
+                
                 with torch.no_grad():
-                    query_emb_tensor = F.normalize(model(face_tensor), p=2, dim=1)
+                    # MobileFaceNet mengharapkan (1, 3, 112, 96)
+                    query_emb_tensor = F.normalize(model(face_tensor_ready), p=2, dim=1)
+            except Exception as e:
+                print(f"[ERROR] Kegagalan inferensi: {e}")
+                return "Unknown", 0
             
             # Pastikan dimensi query_emb_tensor adalah (1, 128)
             query_emb_tensor = query_emb_tensor.view(1, -1)
@@ -102,19 +69,14 @@ class AttendanceController:
                 if sim > max_sim:
                     max_sim, best_match = sim, nrp
             
-            # Mendapatkan versi model saat ini untuk konteks log
-            m_ver = current_v
-
             if max_sim > threshold:
-                print(f"[OK] {best_match} (Sim: {max_sim:.4f}) [Model: v{m_ver}]")
+                print(f"[SUCCESS] {best_match} (Sim: {max_sim:.4f}) [Model: v{current_v}]")
                 nrp_only = best_match.split("_")[0] if "_" in best_match else best_match
                 self.submit_attendance(nrp_only, max_sim)
                 return nrp_only, max_sim
             else:
-                # Log lebih detail untuk riset
                 if max_sim > 0.1:
-                    query_norm = float(mean_emb_tensor.norm())
-                    print(f"[DEBUG] Model v{m_ver} | Match: {best_match} | Sim: {max_sim:.4f} | Norm: {query_norm:.2f} | Thres: {threshold}")
+                    print(f"[DEBUG] Model v{current_v} | Terbaik: {best_match} | Sim: {max_sim:.4f} | Thres: {threshold}")
                 
         return "Unknown", 0
 
@@ -129,6 +91,6 @@ class AttendanceController:
             }
             res = requests.post(f"{self.server_url}/submit-attendance", json=payload, timeout=5)
             if res.status_code == 200:
-                print(f"[OK] Presensi berhasil dikirim untuk: {user_id}")
+                print(f"[SUCCESS] Presensi berhasil dikirim untuk: {user_id}")
         except Exception as e:
             print(f"[ERROR] Gagal mengirim presensi ke server: {e}")

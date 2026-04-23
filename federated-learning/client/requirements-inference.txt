@@ -13,8 +13,6 @@ psycopg2-binary==2.9.9
 # ML & Computer Vision (Disesuaikan untuk ARM64)
 torch==2.1.1
 torchvision==0.16.1
-onnxruntime==1.16.3
-onnx==1.15.0
 facenet-pytorch==2.5.3
 numpy==1.26.2
 Pillow==10.1.0
@@ -22,3 +20,4 @@ opencv-python-headless==4.8.1.78
 
 # Misc
 cryptography==41.0.6
+flwr==1.7.0

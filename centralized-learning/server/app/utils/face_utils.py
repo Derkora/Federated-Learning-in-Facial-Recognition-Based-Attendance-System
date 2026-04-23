@@ -27,15 +27,19 @@ class FaceHandler:
             if boxes is not None and len(boxes) > 0:
                 box = boxes[0] # [x1, y1, x2, y2]
                 
-                # Manual Crop (Mencegah Squash 112x112 ke 96x112)
-                x1, y1 = max(0, int(box[0])), max(0, int(box[1]))
-                x2, y2 = min(img.width, int(box[2])), min(img.height, int(box[3]))
+                # Gunakan MTCNN internal crop yang menyertakan margin 20px
+                # post_process=True (di __init__) sudah menangani normalisasi dasar
+                face_tensor = self.mtcnn(img, save_path=dst_path)
                 
-                face_img = img.crop((x1, y1, x2, y2))
-                # Resize Portrait 96x112 (Architectural consistency)
-                face_img = face_img.resize((96, 112), Image.BILINEAR)
-                face_img.save(dst_path)
-                return True
+                if face_tensor is not None:
+                    # MTCNN secara default mengembalikan (112, 112)
+                    # Kita bisa opsional me-resize fisik filenya ke (96, 112) jika ingin 
+                    # benar-benar identik, tapi model akan me-resize ulang di training loader.
+                    # Untuk konsistensi visual di disk, kita buka dan resize kembali.
+                    face_img_saved = Image.open(dst_path)
+                    face_img_saved = face_img_saved.resize((96, 112), Image.BILINEAR)
+                    face_img_saved.save(dst_path)
+                    return True
             else:
                 print(f"[FaceHandler] Skip: Tidak ditemukan wajah pada {os.path.basename(img_path)}")
         except Exception as e:

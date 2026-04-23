@@ -14,7 +14,7 @@ services:
       server-fl-db-balanced:
         condition: service_healthy
     volumes:
-      - ./server/data:/app/data
+      - fl-server:/app/data
     networks:
       - fl-network
 
@@ -31,10 +31,14 @@ services:
       timeout: 5s
       retries: 5
     volumes:
-      - ./server/data/db:/var/lib/postgresql/data
+      - fl-db:/var/lib/postgresql/data
     networks:
       - fl-network
 
 networks:
   fl-network:
     driver: bridge
+
+volumes:
+  fl-server:
+  fl-db:

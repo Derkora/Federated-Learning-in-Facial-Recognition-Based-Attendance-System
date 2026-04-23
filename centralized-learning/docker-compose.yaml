@@ -12,7 +12,7 @@ services:
       server-cl-db:
         condition: service_healthy
     volumes:
-      - ./server/data:/app/data
+      - cl-server:/app/data
     networks:
       - clnet
 
@@ -27,7 +27,7 @@ services:
       PYTHONUNBUFFERED: 1
     volumes:
       - ../datasets/client1_data:/app/raw_data
-      - client1_app_data:/app/data
+      - cl-client-1:/app/data
     networks:
       - clnet
 
@@ -42,7 +42,7 @@ services:
       PYTHONUNBUFFERED: 1
     volumes:
       - ../datasets/client2_data:/app/raw_data
-      - client2_app_data:/app/data
+      - cl-client-2:/app/data
     networks:
       - clnet
 
@@ -57,7 +57,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - server_cl_data:/var/lib/postgresql/data
+      - cl-db:/var/lib/postgresql/data
     networks:
       - clnet
     healthcheck:
@@ -72,6 +72,7 @@ networks:
     driver: bridge
 
 volumes:
-  server_cl_data:
-  client1_app_data:
-  client2_app_data:
+  cl-server:
+  cl-db:
+  cl-client-1:
+  cl-client-2:

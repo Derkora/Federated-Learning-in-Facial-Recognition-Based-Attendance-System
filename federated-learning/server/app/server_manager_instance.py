@@ -3,6 +3,8 @@ import os
 import io
 import torch
 import json
+import tempfile
+import shutil
 import numpy as np
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
@@ -14,7 +16,7 @@ from app.config import ECONOMICS, TRAINING_PARAMS, FALLBACK_MODEL_PATH
 # Fungsi rata-rata tertimbang untuk metrik
 def weighted_average(metrics: list) -> dict:
     # Fungsi agregasi metrik dari seluruh terminal (Client)
-    print(f"[METRICS] Aggregating {len(metrics)} client results...")
+    print(f"[INFO] Mengagregasi hasil dari {len(metrics)} terminal...")
     examples = [m[0] for m in metrics]
     total_examples = sum(examples)
     if total_examples == 0: 
@@ -28,10 +30,12 @@ def weighted_average(metrics: list) -> dict:
             "val_accuracy": sum([m[1].get("val_accuracy", 0.0) * m[0] for m in metrics]) / total_examples,
             "val_loss": sum([m[1].get("val_loss", 0.0) * m[0] for m in metrics]) / total_examples,
         }
-        print(f"[METRICS] Aggregated: {aggregated}")
+        # Filter 0.0 values untuk log yang lebih bersih
+        clean_metrics = {k: round(v, 4) for k, v in aggregated.items() if v != 0 or k == "accuracy"}
+        print(f"[INFO] Hasil agregasi: {clean_metrics}")
         return aggregated
     except Exception as e:
-        print(f"[METRICS ERROR] Failed to aggregate: {e}")
+        print(f"[ERROR] Gagal mengagregasi metrik: {e}")
         return {}
 
 # Strategi Penyimpanan Model Federated
@@ -45,9 +49,9 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
         self.target_version = target_version
 
     def aggregate_fit(self, server_round: int, results: list, failures: list):
-        print(f"\n[ROUND {server_round}] Ringkasan Performa")
+        print(f"\n[INFO] Ronde {server_round} | Ringkasan Performa")
         if failures:
-            print(f"[WARN] Ronde {server_round} mendapati {len(failures)} kegagalan client.")
+            print(f"[WARNING] Ronde {server_round} mendapati {len(failures)} kegagalan client.")
 
         # Laporan masing-masing terminal
         for i, (client_proxy, fit_res) in enumerate(results):
@@ -62,13 +66,13 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
         valid_results = [(cp, fr) for cp, fr in results if fr.num_examples > 0]
         
         if not valid_results:
-            print(f"[WARN] Ronde {server_round} tidak memiliki data valid untuk diagregasi.")
+            print(f"[WARNING] Ronde {server_round} tidak memiliki data valid untuk diagregasi.")
             return None, {}
 
         aggregated_parameters, aggregated_metrics = super().aggregate_fit(server_round, valid_results, failures)
 
         if aggregated_parameters is not None:
-            print(f"[OK] Agregasi Ronde {server_round} Selesai: Akurasi Gabungan: {aggregated_metrics.get('accuracy', 0):.4f}")
+            print(f"[SUCCESS] Agregasi ronde {server_round} selesai. Akurasi: {aggregated_metrics.get('accuracy', 0):.4f}")
             try:
                 params_np = fl.common.parameters_to_ndarrays(aggregated_parameters)
                 final_loss = aggregated_metrics.get("loss", 0.0)
@@ -85,7 +89,7 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                     for k, v in zip(shared_keys, params_np):
                         sd[k] = torch.from_numpy(v.copy())
                 else:
-                    print(f"[WARN] Key mismatch during saving: {len(params_np)} params vs {len(shared_keys)} keys.")
+                    print(f"[WARNING] Ketidakcocokan kunci saat menyimpan: {len(params_np)} params vs {len(shared_keys)} keys.")
 
                 # 2. MERGE GLOBAL BN (Jika tersedia dari fase registry sebelumnya)
                 bn_path = "data/global_bn_combined.pth"
@@ -93,9 +97,9 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                     try:
                         bn_params = torch.load(bn_path, map_location="cpu")
                         sd.update(bn_params)
-                        print(f"[ROUND {server_round}] Merged Global BN stats into backbone.")
+                        print(f"[INFO] Ronde {server_round}: Statistik BN global digabungkan ke backbone.")
                     except Exception as bn_err:
-                        print(f"[ROUND {server_round} WARN] Serializing BN failed: {bn_err}")
+                        print(f"[WARNING] Ronde {server_round}: Gagal serialisasi BN: {bn_err}")
 
                 # Simpan hasil ke database
                 db = SessionLocal()
@@ -115,9 +119,11 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                     
                     global_model = db.query(GlobalModel).first()
                     if not global_model:
-                        global_model = GlobalModel(version=self.target_version, weights=weights_bytes)
+                        # Seeding awal jika belum ada
+                        global_model = GlobalModel(version=0, weights=weights_bytes)
                         db.add(global_model)
                     else:
+                        # Update bobot saja, versi dibiarkan tetap (akan diupdate di akhir training)
                         global_model.weights = weights_bytes
                         global_model.last_updated = datetime.utcnow()
                     
@@ -126,8 +132,25 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                     # Simpan salinan file fisik untuk backup & ONNX export stability
                     try:
                         os.makedirs("data", exist_ok=True)
-                        torch.save(sd, "data/backbone.pth")
-                    except: pass
+                        # Simpan versi murni (Shared Keys Only) untuk referensi internal jika perlu
+                        torch.save(sd, "data/backbone_pure.pth")
+                        
+                        # Gabungkan BN jika sudah ada dari fase sebelumnya untuk konsistensi download client
+                        bn_path = "data/global_bn_combined.pth"
+                        if os.path.exists(bn_path):
+                            try:
+                                bn_params = torch.load(bn_path, map_location="cpu")
+                                sd.update(bn_params)
+                                print("[INFO] Backbone global kini diperkuat dengan statistik BN.")
+                            except: pass
+                            
+                        # ATOMIC WRITE
+                        with tempfile.NamedTemporaryFile(delete=False, dir="data") as tmp:
+                            torch.save(sd, tmp.name)
+                            shutil.move(tmp.name, "data/backbone.pth")
+                            
+                    except Exception as e:
+                        print(f"[ERROR] Gagal menyimpan file model: {e}")
                         
                 except Exception as e:
                     print(f"[ERROR] Gagal menyimpan ronde {server_round} ke DB: {e}")
@@ -255,6 +278,22 @@ class FLServerManager:
 
     def increment_version(self):
         self.model_version += 1
+        
+        # Persistensi ke Database
+        db = SessionLocal()
+        try:
+            global_model = db.query(GlobalModel).first()
+            if global_model:
+                global_model.version = self.model_version
+                global_model.last_updated = datetime.utcnow()
+                db.commit()
+                print(f"[PERSISTENCE] GlobalModel DB updated to v{self.model_version}")
+        except Exception as e:
+            print(f"[ERROR] Failed to persist version increment: {e}")
+            db.rollback()
+        finally:
+            db.close()
+
         self.update_logs(f"Versi Model Global naik ke v{self.model_version}")
         self.discovery_clients = set() 
         self.received_data = [] 
@@ -399,7 +438,7 @@ class FLServerManager:
                 new_model = GlobalModel(version=0, weights=buf.getvalue())
                 db.add(new_model)
                 db.commit()
-                print("[OK] GlobalModel berhasil diinisialisasi.")
+                print("[SUCCESS] GlobalModel berhasil diinisialisasi.")
             except Exception as e:
                 print(f"[ERROR] Gagal inisialisasi GlobalModel: {e}")
                 db.rollback()
@@ -475,25 +514,10 @@ class FLServerManager:
                 config=fl.server.ServerConfig(num_rounds=rounds),
                 strategy=strategy,
             )
-            # Update versi di Database dan Manager hanya setelah seluruh ronde sukses
-            self.model_version = target_version
+            # NOTE: Versi tidak diupdate di sini agar siklus (Training + Registry) dianggap 1 kenaikan.
+            # Versi akan diupdate oleh FLController melalui increment_version()
             
-            # Persistensi Versi ke Database GlobalModel
-            db_final = SessionLocal()
-            try:
-                global_model = db_final.query(GlobalModel).first()
-                if global_model:
-                    global_model.version = target_version
-                    global_model.last_updated = datetime.utcnow()
-                    db_final.commit()
-                    print(f"[OK] Database GlobalModel updated to Version v{target_version}")
-            except Exception as db_err:
-                print(f"[ERROR] Gagal finalisasi versi di DB: {db_err}")
-                db_final.rollback()
-            finally:
-                db_final.close()
-                
-            self.update_logs(f"Siklus Pelatihan Selesai. Versi Model Global naik ke v{self.model_version}")
+            self.update_logs(f"Pelatihan Federated ronde terakhir selesai.")
         finally:
             self.is_running = False
             self.end_phase("Training")

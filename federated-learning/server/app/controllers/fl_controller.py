@@ -122,9 +122,9 @@ class FLController:
             self._log("Fase 3: Menggabungkan fitur wajah (Centroids) secara global...")
             
             if self._wait_for_registry_submissions(len(self.fl_manager.ready_clients), timeout=300):
-                self._log("[OK] Semua data fitur wajah telah diterima.")
+                self._log("[SUCCESS] Semua data fitur wajah telah diterima.")
             else:
-                self._log("[WARN] Batas waktu habis, memproses data fitur yang tersedia.")
+                self._log("[WARNING] Batas waktu habis, memproses data fitur yang tersedia.")
             
             self._aggregate_registry_logic()
             
@@ -171,7 +171,7 @@ class FLController:
             
             self.fl_manager.increment_version()
             self.fl_manager.start_phase("Completed")
-            self._log("[OK] Seluruh siklus Pembelajaran Terfederasi selesai.")
+            self._log("[SUCCESS] Seluruh siklus Pembelajaran Terfederasi selesai.")
 
         except Exception as e:
             self._log(f"[ERROR] Kesalahan pada orkestrasi: {e}")

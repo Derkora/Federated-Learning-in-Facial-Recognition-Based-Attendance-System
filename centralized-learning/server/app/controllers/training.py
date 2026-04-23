@@ -46,9 +46,9 @@ class TrainingController:
 
     def fetch_data(self, wait_timeout=600, expected_clients=None):
         # Tahap 1: Sinkronisasi dan Menunggu Unggahan Data dari Terminal
-        print(f"[FASE 1] Memulai pemantauan unggahan data di {UPLOAD_DIR}...", flush=True)
+        print(f"[INFO] Memulai pemantauan unggahan data di {UPLOAD_DIR}...", flush=True)
         if expected_clients:
-            print(f"[FASE 1] Menunggu data dari minimal {expected_clients} terminal.", flush=True)
+            print(f"[INFO] Menunggu data dari minimal {expected_clients} terminal.", flush=True)
             
         start_time = time.time()
         last_img_count = -1
@@ -79,11 +79,11 @@ class TrainingController:
                             cl_manager.update_logs(msg)
                             break
                         else:
-                            print(f"[FASE 1] Menunggu kestabilan data... ({int(STABILIZATION_TIME - elapsed_stable)} detik lagi)", flush=True)
+                            print(f"[INFO] Menunggu kestabilan data... ({int(STABILIZATION_TIME - elapsed_stable)} detik lagi)", flush=True)
                 else:
-                    print(f"[FASE 1] Menunggu unggahan pertama... (Durasi: {int(time.time() - start_time)} detik)", flush=True)
+                    print(f"[INFO] Menunggu unggahan pertama... (Durasi: {int(time.time() - start_time)} detik)", flush=True)
             except Exception as e:
-                print(f"[FASE 1] Kesalahan saat pengecekan: {e}", flush=True)
+                print(f"[ERROR] Kesalahan saat pengecekan: {e}", flush=True)
             
             time.sleep(5)
         
@@ -105,7 +105,7 @@ class TrainingController:
     def preprocess_and_balance(self):
         # Tahap 2: Penyelarasan Wajah (MTCNN) dan Seleksi Kualitas (Laplacian)
         try:
-            print("[FASE 2] Memulai Tahap Pra-pemrosesan & Seleksi Kualitas...", flush=True)
+            print("[INFO] Memulai tahap pra-pemrosesan dan seleksi kualitas...", flush=True)
             if os.path.exists(PROCESSED_DATA): shutil.rmtree(PROCESSED_DATA)
             os.makedirs(PROCESSED_DATA, exist_ok=True)
             
@@ -117,20 +117,15 @@ class TrainingController:
                 dst = os.path.join(PROCESSED_DATA, nrp_folder)
                 os.makedirs(dst, exist_ok=True)
                 
-                # Seleksi berbasis Blur Detection (Laplacian) - Pertahankan kualitas tapi gunakan lebih banyak data
+                # Seleksi berbasis Blur Detection (Laplacian) - Ambil Top 50 Tertajam
                 all_images = [f for f in os.listdir(src) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
-                scored_images = [(img, self.get_blur_score(os.path.join(src, img))) for img in all_images]
+                scored_images = sorted([(img, self.get_blur_score(os.path.join(src, img))) for img in all_images], key=lambda x: x[1], reverse=True)
                 
-                # Gunakan threshold tajam alih-alih hard-limit (misal threshold 40 dari face_utils)
-                top_images = [img for img, score in scored_images if score > 30]
-                
-                # Jika terlalu sedikit yang tajam, ambil setidaknya top 20
-                if len(top_images) < 20:
-                    scored_images.sort(key=lambda x: x[1], reverse=True)
-                    top_images = [img[0] for img in scored_images[:20]]
+                # Ambil maksimal 50 gambar terbaik
+                top_images = [img[0] for img in scored_images[:50]]
                 
                 msg = f"Memproses {len(top_images)} wajah terbaik untuk {nrp_folder} ({i+1}/{total_folders})"
-                print(f"[FASE 2] {msg}", flush=True)
+                print(f"[INFO] {msg}", flush=True)
                 cl_manager.update_logs(msg)
                 
                 for img_name in top_images:
@@ -169,7 +164,7 @@ class TrainingController:
             except: pass
 
         try:
-            print(f"[FASE 3] Memulai Pelatihan dengan Augmentasi Dinamis ({epochs} epoch)...", flush=True)
+            print(f"[INFO] Memulai pelatihan dengan augmentasi dinamis ({epochs} epoch)...", flush=True)
             transform = transforms.Compose([
                 transforms.Resize((112, 96)),
                 transforms.RandomHorizontalFlip(),
@@ -179,10 +174,17 @@ class TrainingController:
                 transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
                 transforms.RandomErasing(p=0.1)
             ])
-            train_dataset = datasets.ImageFolder(PROCESSED_DATA, transform=transform)
-            num_classes = len(train_dataset.classes)
+            full_dataset = datasets.ImageFolder(PROCESSED_DATA, transform=transform)
+            num_classes = len(full_dataset.classes)
+            
+            # Split 80/20 untuk training & validation (Menyelaraskan dengan FL)
+            train_size = int(0.8 * len(full_dataset))
+            val_size = len(full_dataset) - train_size
+            train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
+            
             batch_size = cl_manager.default_batch_size
             train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+            val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
             
             model = MobileFaceNet().to(DEVICE)
             if os.path.exists(PRETRAINED_PATH):
@@ -224,14 +226,36 @@ class TrainingController:
                     total += label.size(0)
                     correct += (pred == label).sum().item()
                 
+                # 5. Validation Loop (Menyelaraskan dengan metrik FL)
+                model.eval()
+                val_correct, val_total, val_loss = 0, 0, 0.0
+                with torch.no_grad():
+                    for img, label in val_loader:
+                        img, label = img.to(DEVICE), label.to(DEVICE)
+                        output = metric_fc(model(img), label)
+                        loss = criterion(output, label)
+                        val_loss += loss.item()
+                        _, pred = torch.max(output.data, 1)
+                        val_total += label.size(0)
+                        val_correct += (pred == label).sum().item()
+                
+                val_acc = round(100 * val_correct / val_total, 2)
+                val_avg_loss = round(val_loss / len(val_loader), 4)
+                
                 epoch_acc = round(100 * correct / total, 2)
                 avg_loss = round(total_loss / len(train_loader), 4)
-                epoch_history.append({"epoch": epoch + 1, "loss": avg_loss, "accuracy": epoch_acc})
+                epoch_history.append({
+                    "epoch": epoch + 1, 
+                    "loss": avg_loss, 
+                    "accuracy": epoch_acc,
+                    "val_loss": val_avg_loss,
+                    "val_accuracy": val_acc
+                })
                 
-                msg = f"Epoch {epoch+1}/{epochs} | LR: {current_lr:.1e} | Loss: {avg_loss} | Acc: {epoch_acc}%"
-                print(f"[FASE 3] {msg}", flush=True)
+                msg = f"Epoch {epoch+1}/{epochs} | Acc: {epoch_acc}% | Val Acc: {val_acc}% | Loss: {avg_loss}"
+                print(f"[INFO] {msg}", flush=True)
                 cl_manager.update_logs(msg)
-                final_acc = epoch_acc
+                final_acc = val_acc 
             
             torch.save(model.state_dict(), MODEL_PATH)
             cl_manager.update_logs("Pelatihan selesai. Model berhasil disimpan.")
@@ -258,7 +282,7 @@ class TrainingController:
     def generate_reference_and_eval(self):
         # Tahap 4: Pembuatan Basis Data Referensi Wajah dan Evaluasi Transmisi
         try:
-            print("[FASE 4] Menghasilkan basis data referensi dan menghitung volume transmisi...", flush=True)
+            print("[INFO] Menghasilkan basis data referensi dan menghitung volume transmisi...", flush=True)
             model = MobileFaceNet().to(DEVICE)
             model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
             model.eval()

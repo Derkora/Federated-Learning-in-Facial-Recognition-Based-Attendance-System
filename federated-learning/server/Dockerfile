@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements-train.txt .
-RUN pip install --user --no-cache-dir -r requirements-train.txt
+RUN pip install --user --no-cache-dir -r requirements-train.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Tahap 2: Runner
 FROM python:3.10-slim

@@ -113,7 +113,7 @@ async def health_check():
 @app.post("/register-client", response_model=schemas.ClientResponse)
 async def register_client(client_data: schemas.ClientBase, request: Request, dbs: Session = Depends(db.get_db)):
     client_ip = request.client.host
-    print(f"[REG] Mendaftarkan terminal {client_data.edge_id} dari {client_ip}", flush=True)
+    print(f"[INFO] Mendaftarkan terminal {client_data.edge_id} dari {client_ip}", flush=True)
     existing = dbs.query(models.Client).filter(models.Client.edge_id == client_data.edge_id).first()
     if existing:
         existing.last_seen = datetime.now(timezone(timedelta(hours=7)))
@@ -147,7 +147,7 @@ async def upload_bulk_zip(file: UploadFile = File(...)):
             
             # Daftarkan pemetaan di manajer
             cl_manager.register_upload(edge_id, nrps)
-            print(f"[EXTRACT] Berhasil mengekstrak {len(nrps)} folder mahasiswa: {', '.join(nrps[:5])}...", flush=True)
+            print(f"[SUCCESS] Berhasil mengekstrak {len(nrps)} folder mahasiswa.", flush=True)
             
         os.remove(UPLOAD_TEMP)
         cl_manager.update_logs(f"Menerima {len(nrps)} data mahasiswa dari {edge_id}")
@@ -302,7 +302,7 @@ async def submit_attendance(recap: schemas.AttendanceRecapBase, dbs: Session = D
     label = str(recap.user_id)
     parts = label.split("_", 1)
     nrp = label.split("_", 1)[0].strip()
-    print(f"[DEBUG] Submit Attendance from {recap.edge_id}: label='{label}' -> nrp='{nrp}'", flush=True)
+    print(f"[DEBUG] Submit Attendance | Client: {recap.edge_id} | NRP: {nrp} | Sim: {recap.confidence:.4f}", flush=True)
     student = dbs.query(models.UserGlobal).filter(models.UserGlobal.nrp == nrp).first()
     if not student:
         name = parts[1].strip() if len(parts) > 1 else "Unknown"
