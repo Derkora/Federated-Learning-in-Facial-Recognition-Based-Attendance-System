@@ -6,6 +6,7 @@ import torch
 import socket
 import cv2
 import numpy as np
+import gc
 from collections import deque
 from PIL import Image
 from app.utils.mobilefacenet import MobileFaceNet
@@ -38,9 +39,9 @@ class CLClientManager:
         self.is_training_phase = False # Guard untuk manajemen sumber daya
         self.current_model_version = self._load_version()
         
-        # Muat aset lokal jika tersedia
-        if not self.model and os.path.exists("/app/app/model/global_model.pth"):
-             self._ensure_models_loaded()
+        # EAGER LOADING: Muat model ke RAM segera saat inisialisasi
+        print("[INIT] Memulai Eager Loading model...")
+        self._reload_inference_models(force_reload=True)
         
         # Pengaturan Kamera
         self.device = DEVICE
@@ -86,27 +87,58 @@ class CLClientManager:
         with open(v_path, "w") as f:
             f.write(str(v))
 
-    def _ensure_models_loaded(self):
-        """Memuat model hanya saat dibutuhkan (Lazy Loading) untuk menghemat RAM startup."""
-        if self.model is not None:
+    def _ensure_models_loaded(self, force_reload=False):
+        """Menjamin instance model tersedia di RAM (Tanpa paksa reload dari disk jika sudah ada)."""
+        if self.model is not None and not force_reload:
             return True
             
-        path_m = "/app/app/model/global_model.pth"
-        path_r = "/app/app/model/reference_embeddings.pth"
+        path_m = os.path.join(self.data_path, "models", "global_model.pth")
+        path_r = os.path.join(self.data_path, "models", "reference_embeddings.pth")
         
+        # 1. Inisialisasi instance objek jika belum ada
+        if self.model is None:
+            self.model = MobileFaceNet().to(DEVICE)
+            self.model.eval()
+
+        # 2. Muat dari disk jika diminta atau jika RAM belum terisi bobot
         if os.path.exists(path_m) and os.path.exists(path_r):
             try:
-                print(f"[INFO] Memuat MobileFaceNet pada {DEVICE} (Lazy Loading)...")
-                self.model = MobileFaceNet().to(DEVICE)
                 self.model.load_state_dict(torch.load(path_m, map_location=DEVICE))
                 self.model.eval()
                 self.reference_embeddings = torch.load(path_r, map_location=DEVICE)
                 self.has_assets = True
-                print(f"[SUCCESS] Model v{self.current_model_version} siap digunakan.")
                 return True
             except Exception as e:
-                print(f"[ERROR] Gagal memuat model (Lazy Loading): {e}")
+                print(f"[ERROR] Gagal memuat bobot model dari disk: {e}")
         return False
+
+    def _reload_inference_models(self, force_reload=False):
+        """EAGER LOAD: Memuat ulang model ke RAM secara thread-safe."""
+        try:
+            if not force_reload and self.has_assets:
+                return
+
+            # 1. Muat ke variabel lokal
+            new_model = MobileFaceNet().to(DEVICE).eval()
+            new_refs = {}
+            
+            path_m = os.path.join(self.data_path, "models", "global_model.pth")
+            path_r = os.path.join(self.data_path, "models", "reference_embeddings.pth")
+
+            if os.path.exists(path_m):
+                new_model.load_state_dict(torch.load(path_m, map_location=DEVICE))
+            if os.path.exists(path_r):
+                new_refs = torch.load(path_r, map_location=DEVICE)
+
+            # 2. ATOMIC SWAP
+            self.model = new_model
+            self.reference_embeddings = new_refs
+            self.has_assets = True
+            
+            gc.collect()
+            print(f"[EAGER LOAD] Model CL v{self.current_model_version} Loaded into RAM")
+        except Exception as e:
+            print(f"[CRITICAL] Reload model CL gagal: {e}")
 
     def start_background_tasks(self):
         # Menjalankan loop sinkronisasi dan kamera di thread latar belakang
@@ -183,9 +215,9 @@ class CLClientManager:
                 time.sleep(2)
                 continue
 
-            # Inisialisasi model hanya jika diperlukan dan aset tersedia
+            # Eager load sudah menjamin model terisi di RAM
             if not self.model and self.has_assets:
-                self._ensure_models_loaded()
+                self._reload_inference_models(force_reload=False)
 
             # Simpan frame terbaru untuk streaming MJPEG (Resized untuk efisiensi RAM/Bandwidth)
             self.latest_frame = cv2.resize(frame, (640, 480))
@@ -263,7 +295,8 @@ class CLClientManager:
                                 self.reference_embeddings = refs
                                 self.current_model_version = server_version
                                 self._save_version(server_version)
-                                print(f"[SUCCESS] Model v{server_version} berhasil diperbarui.")
+                                # EAGER RELOAD: Pastikan model terbaru masuk RAM
+                                self._reload_inference_models(force_reload=True)
                             else:
                                 time.sleep(10)
                                 continue

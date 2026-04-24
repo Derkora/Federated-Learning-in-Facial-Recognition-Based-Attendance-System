@@ -128,6 +128,9 @@ class FLController:
             
             self._aggregate_registry_logic()
             
+            # [INCREMENT VERSION] Naikkan versi SETELAH registry selesai agar sinkron dengan client
+            self.fl_manager.increment_version()
+            
             # 1. Hitung Real Volume Transmisi
             num_clients = len(self.fl_manager.ready_clients)
             
@@ -169,9 +172,11 @@ class FLController:
                 "total_round_time_s": round(time.time() - self.fl_manager.start_time, 2)
             })
             
-            self.fl_manager.increment_version()
             self.fl_manager.start_phase("Completed")
             self._log("[SUCCESS] Seluruh siklus Pembelajaran Terfederasi selesai.")
+            
+            # Beri jeda agar heartbeat client sempat menangkap fase 'Completed'
+            time.sleep(5)
 
         except Exception as e:
             self._log(f"[ERROR] Kesalahan pada orkestrasi: {e}")

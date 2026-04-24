@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .mobilefacenet import MobileFaceNet, ArcMarginProduct
+from .preprocessing import image_processor
 from torch.utils.data import DataLoader, Dataset
 import torchvision.transforms as transforms
 from PIL import Image
@@ -70,41 +71,66 @@ class FaceDataset(Dataset):
 
         # Penyelarasan Data: Ikuti label_map global secara ketat jika tersedia
         print(f"[DATASET] Processing local folders for {len(local_nrps)} users...")
+        
+        
         for nrp in local_nrps:
             if label_map and nrp not in self.nrp_to_idx:
                 print(f"  [SKIP] {nrp}: Not in global label map.")
                 continue
                 
             folder_path = os.path.join(data_root, nrp)
-            paths = sorted([
-                os.path.join(folder_path, f)
-                for f in os.listdir(folder_path)
-                if f.lower().endswith(('.jpg', '.jpeg', '.png'))
-            ]) if os.path.exists(folder_path) else []
             idx = self.nrp_to_idx[nrp]
             
-            if len(paths) == 0:
-                print(f"  [WARN] {nrp}: No images found in {folder_path}")
-                continue
-            
-            # Pembagian 80/20 sesuai preferensi pengguna (Split Normal)
-            split_idx = int(0.8 * len(paths))
+            # FUNCTIONAL PARITY WITH PRE: Gunakan seleksi wajah tertajam (Top 50)
             if mode == "train":
-                selected = paths[:split_idx]
+                # Pilih wajah terbaik untuk training
+                # Jika folder berisi banyak gambar, kita ambil Top 50 saja
+                selected_filenames = image_processor.select_best_faces(folder_path, n=50)
+                selected = [os.path.join(folder_path, f) for f in selected_filenames]
+                
+                # Split 80/20 dari selected paths
+                split_idx = int(0.8 * len(selected))
+                selected = selected[:split_idx]
             else:
-                selected = paths[split_idx:]
+                # Untuk validasi, kita tetap ambil semua gambar yang tersisa setelah training
+                # Tapi untuk kesederhanaan, kita ambil 20% terakhir dari Top 50 atau sisa gambar
+                all_paths = sorted([
+                    os.path.join(folder_path, f)
+                    for f in os.listdir(folder_path)
+                    if f.lower().endswith(('.jpg', '.jpeg', '.png'))
+                ]) if os.path.exists(folder_path) else []
+                
+                selected_train_filenames = image_processor.select_best_faces(folder_path, n=50)
+                selected_train = [os.path.join(folder_path, f) for f in selected_train_filenames]
+                selected = [p for p in all_paths if p not in selected_train]
+                
+                # Jika tidak ada sisa, ambil 20% terakhir dari selected_train
+                if not selected:
+                    split_idx = int(0.8 * len(selected_train))
+                    selected = selected_train[split_idx:]
+            
+            if len(selected) == 0:
+                print(f"  [WARN] {nrp}: No viable images found.")
+                continue
             
             for p in selected:
                 self.samples.append({"type": "image", "path": p, "label": idx})
                 self.class_counts[idx] += 1
             
+            print(f"  [OK] {nrp}: {len(selected)} samples selected ({mode}).")
             print(f"  [OK] {nrp}: Loaded {len(selected)} {mode} images.")
 
         # Tambahkan sampel embedding global (Berbagi Pengetahuan / Knowledge Sharing)
         if global_embeddings:
             for item in global_embeddings:
                 idx = self.nrp_to_idx[item['nrp']]
-                self.samples.append({"type": "embedding", "data": item['embedding'], "label": idx})
+                # Pastikan L2 Normalized (Penting agar tidak mengotor gradien PyTorch murni)
+                emb_tensor = item['embedding']
+                if emb_tensor.dim() == 1:
+                    emb_tensor = emb_tensor.unsqueeze(0)
+                emb_normalized = torch.nn.functional.normalize(emb_tensor, p=2, dim=1).squeeze(0)
+                
+                self.samples.append({"type": "embedding", "data": emb_normalized, "label": idx})
                 self.class_counts[idx] += 1
 
     def __len__(self):
@@ -136,6 +162,7 @@ class LocalTrainer:
             transforms.RandomRotation(degrees=15),
             transforms.ColorJitter(brightness=0.2, contrast=0.2), 
             transforms.ToTensor(),
+            # Normalisasi MobileFaceNet (Standard): (x - 127.5) / 127.5
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
             transforms.RandomErasing(p=0.1)
         ])
@@ -143,6 +170,7 @@ class LocalTrainer:
         self.val_transform = transforms.Compose([
             transforms.Resize((112, 96), interpolation=InterpolationMode.BILINEAR), 
             transforms.ToTensor(),
+            # Normalisasi MobileFaceNet (Standard): (x - 127.5) / 127.5
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ])
 

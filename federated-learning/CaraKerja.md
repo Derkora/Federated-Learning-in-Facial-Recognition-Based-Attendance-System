@@ -1,29 +1,29 @@
-# Cara Kerja Sistem: Federated Face Attendance 
+# Cara Kerja Sistem: Federated Face Attendance
 
-Sistem ini dirancang untuk mencapai identifikasi wajah yang stabil dengan tingkat kepercayaan (confidence) tinggi melalui kolaborasi antar perangkat tanpa memindahkan data mentah mahasiswa ke server.
+Sistem ini dirancang untuk mencapai identifikasi wajah yang stabil dengan tingkat kepercayaan tinggi melalui kolaborasi antar perangkat tanpa memindahkan data mentah mahasiswa ke server.
 
 ## Tahap 1: Data Engineering & Mandatory Preprocessing
-Sebelum training, sistem memastikan "bahan bakar" model bersih dan proporsional melalui standar pemrosesan lokal.
-- **Laplacian Variance Selection**: Sistem memilih **50 foto tertajam** per mahasiswa untuk menghilangkan noise/blur.
-- **MTCNN Face Cropping**: Wajah dipotong secara presisi dari frame asli. Ini menghilangkan 90% background noise.
-- **112x96 Dimensional Alignment**: Hasil potongan wajah (crop) di-resize ke dimensi **112x96**. Ini adalah langkah **WAJIB** agar sinkron dengan input arsitektur MobileFaceNet.
+Sistem memastikan kualitas data lokal sebelum masuk ke fase pelatihan.
+- **Multi-Trial Face Detection**: Sistem melakukan percobaan deteksi wajah hingga 5 kali per identitas. Jika deteksi gagal, sistem menggunakan gambar alternatif dengan tingkat ketajaman (Laplacian Variance) tertinggi berikutnya.
+- **MTCNN Face Cropping**: Wajah dipotong secara presisi dengan margin tertentu untuk menghilangkan porsi latar belakang yang tidak relevan.
+- **112x96 Dimensional Alignment**: Hasil potongan wajah diubah ukurannya ke dimensi **112x96** (Portrait). Standarisasi dimensi ini sangat krusial agar sinkron dengan input arsitektur MobileFaceNet.
 
 ## Tahap 2: Inisialisasi Arsitektur (pFedFace - Hybrid)
-Struktur ini memisahkan komponen global yang bersifat kolaboratif dan komponen lokal yang bersifat unik.
-- **Global Backbone (MobileFaceNet)**: Ekstraktor fitur universal (128-dim). Satu-satunya bagian yang dikirim ke server untuk agregasi FedAvg/FedProx.
-- **Global BN Merging**: Server menggabungkan statistik Batch Normalization dari seluruh terminal menjadi satu set statistik global untuk meningkatkan stabilitas inferensi.
-- **Local Head (ArcMargin Product)**: Menggunakan $s=32.0$ dan $m=0.50$. Sistem kini memiliki fitur **Weight Preservation** yang menjaga bobot identitas lama saat ada pendaftaran mahasiswa baru.
+Struktur ini memisahkan pengetahuan global dan identitas lokal.
+- **Global Backbone (MobileFaceNet)**: Ekstraktor fitur universal yang dikirim ke server untuk agregasi menggunakan algoritma FedProx.
+- **Global BN Merging**: Server menggabungkan statistik Batch Normalization dari seluruh terminal. Statistik ini kemudian digunakan oleh semua terminal untuk menstabilkan ekstraksi fitur.
+- **Local Head (ArcMargin Product)**: Komponen lokal yang menyimpan pengetahuan spesifik tentang identitas mahasiswa di terminal tersebut, dilengkapi fitur Weight Preservation untuk menjaga data lama.
 
-## Tahap 3: Siklus Federated (Dynamic Barrier Sync)
-Sistem berjalan dalam 4 fase linear yang diawasi oleh Server secara ketat:
-1.  **Fase Discovery**: Pendaftaran ID Mahasiswa ke Global Map server dan sinkronisasi identitas (NRP + Nama).
-2.  **Fase Preprocessing**: Ekstraksi wajah (Crop -> Resize) secara serentak di semua terminal.
-3.  **Fase Training (Flower)**: Pelatihan paralel menggunakan FedProx ($\mu=0.05$). Terminal kini melakukan **Knowledge Sharing** dengan menyertakan centroid wajah mahasiswa dari terminal lain dalam dataset pelatihan lokal.
-4.  **Fase Registry Generation**: Pembuatan database identitas universal berbasis "World-Knowledge" global model yang sudah digabungkan dengan Global BN.
+## Tahap 3: Siklus Federated & Registry Generation
+Sistem berjalan dalam fase terkoordinasi untuk membangun "World-Knowledge" yang aman:
+1.  **Phase Discovery**: Pendaftaran ID Mahasiswa ke Global Map di server untuk sinkronisasi NRP dan Nama.
+2.  **Phase Preprocessing**: Ekstraksi wajah secara lokal di semua terminal secara serentak.
+3.  **Phase Training (Flower)**: Pelatihan paralel menggunakan FedProx ($\mu=0.05$). Terminal melakukan Knowledge Sharing dengan menyertakan centroid wajah mahasiswa dari terminal lain.
+4.  **Phase Registry Generation**: Pembuatan database identitas universal. Statistik **Global BN disinkronkan terlebih dahulu** sebelum perhitungan centroid dilakukan untuk mencegah drift fitur.
 
-## Tahap 4: Inferensi & High-Fidelity Registry
-Setelah training selesai, sistem siap melakukan absensi dengan tingkat kepercayaan sangat tinggi.
-- **Unified Brain Sync**: Setiap terminal mendownload bobot backbone global yang sudah di-merge dengan Global BN, serta Registry identitas terbaru.
-- **Double Normalization**: Centroid dihitung dan dicocokkan menggunakan normalisasi L2 ganda untuk akurasi maksimal.
-- **Temporal Voting (Buffer = 10)**: Merata-ratakan hasil deteksi dari beberapa frame terakhir untuk menstabilkan skor similarity.
-- **Threshold 0.70+**: Berkat optimasi pipeline, ambang batas kini ditingkatkan ke **0.70** untuk memastikan presisi tinggi dan meminimalkan kesalahan identifikasi (False Positives).
+## Tahap 4: Inferensi & Auto-Sync
+Setelah pelatihan, sistem siap digunakan untuk absensi real-time:
+- **Automatic Version Sync**: Background heartbeat secara otomatis mendeteksi jika ada versi model baru di server (berdasarkan database PostgreSQL).
+- **Proactive Registry Refresh**: Terminal secara otomatis melakukan refresh embedding lokal jika mendeteksi lonjakan versi model global, memastikan biometric data selalu selaras dengan backbone terbaru.
+- **Threshold 0.60+**: Ambang batas ditingkatkan menjadi **0.60** guna memastikan presisi tinggi dan meminimalkan False Positives.
+- **Temporal Voting**: Hasil deteksi dirata-ratakan dari buffer 10 frame untuk stabilitas prediksi.

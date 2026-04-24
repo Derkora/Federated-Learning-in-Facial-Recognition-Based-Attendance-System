@@ -71,7 +71,6 @@ class MobileFaceNet(nn.Module):
 
         self.linear7 = ConvBlock(512, 512, (7, 6), 1, 0, dw=True, linear=True)
 
-        # UPDATE DI SINI: Gunakan variabel embedding_size, bukan hardcode 128
         self.linear1 = ConvBlock(512, embedding_size, 1, 1, 0, linear=True)
 
         for m in self.modules():
@@ -105,7 +104,7 @@ class MobileFaceNet(nn.Module):
         return x
 
 class ArcMarginProduct(nn.Module):
-    def __init__(self, in_features, out_features, s=32.0, m=0.50):
+    def __init__(self, in_features, out_features, s=32.0, m=0.5):
         super(ArcMarginProduct, self).__init__()
         self.weight = nn.Parameter(torch.FloatTensor(out_features, in_features))
         nn.init.xavier_uniform_(self.weight)

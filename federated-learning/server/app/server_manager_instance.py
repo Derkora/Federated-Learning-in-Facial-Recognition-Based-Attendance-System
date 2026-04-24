@@ -120,11 +120,12 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                     global_model = db.query(GlobalModel).first()
                     if not global_model:
                         # Seeding awal jika belum ada
-                        global_model = GlobalModel(version=0, weights=weights_bytes)
+                        global_model = GlobalModel(version=self.manager.model_version, weights=weights_bytes)
                         db.add(global_model)
                     else:
-                        # Update bobot saja, versi dibiarkan tetap (akan diupdate di akhir training)
+                        # Update bobot DAN Versi (Sinkron dengan manager jika ronde terakhir)
                         global_model.weights = weights_bytes
+                        global_model.version = self.manager.model_version
                         global_model.last_updated = datetime.utcnow()
                     
                     db.commit()
@@ -204,8 +205,8 @@ class FLServerManager:
         self.start_time = 0
         self.current_logs = []
         self.model_version = 0
-        self.default_rounds = 15
-        self.default_epochs = 3
+        self.default_rounds = TRAINING_PARAMS["total_rounds"]
+        self.default_epochs = TRAINING_PARAMS["epochs_per_round"]
         self.default_min_clients = 2
         self.default_lr = 1e-4
         self.default_mu = 0.05
@@ -215,7 +216,7 @@ class FLServerManager:
         self.ready_clients = set() 
         self.received_data = []
         self.discovery_clients = set()
-        self.inference_threshold = 0.60
+        self.inference_threshold = 0.50
         self.metrics = {
             "accuracy": 0, "loss": 0, 
             "backbone_sync_mb": 0, "registry_sync_mb": 0,
@@ -425,20 +426,31 @@ class FLServerManager:
             try:
                 model = MobileFaceNet()
                 loaded = torch.load(fallback_path, map_location="cpu")
+                # Seeding harus konsisten dengan get_parameters (Hanya shared keys)
                 current_sd = model.state_dict()
+                shared_keys = [k for k in current_sd.keys() if 
+                               not any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked'])
+                               and any(x in k.lower() for x in ['weight', 'bias'])]
+                
                 weights_np = []
+                match_count = 0
                 if isinstance(loaded, dict):
-                    for key in current_sd.keys():
-                        if key in loaded: weights_np.append(loaded[key].cpu().numpy())
-                        else: weights_np.append(current_sd[key].cpu().numpy())
-                else: weights_np = loaded
+                    for key in shared_keys:
+                        if key in loaded: 
+                            weights_np.append(loaded[key].cpu().numpy())
+                            match_count += 1
+                        else: 
+                            weights_np.append(current_sd[key].cpu().numpy())
+                    print(f"[SUCCESS] GlobalModel seeded dengan {len(weights_np)} parameters ({match_count} weights cocok dari file).")
+                else: 
+                    weights_np = loaded
+                    print(f"[SUCCESS] GlobalModel seeded dengan list parameters mentah.")
                 
                 buf = io.BytesIO()
                 torch.save(weights_np, buf)
                 new_model = GlobalModel(version=0, weights=buf.getvalue())
                 db.add(new_model)
                 db.commit()
-                print("[SUCCESS] GlobalModel berhasil diinisialisasi.")
             except Exception as e:
                 print(f"[ERROR] Gagal inisialisasi GlobalModel: {e}")
                 db.rollback()
@@ -452,9 +464,10 @@ class FLServerManager:
         finally:
             db.close()
 
-    def start_training(self, session_id: str, rounds: int = 20, min_clients: int = 2):
+    def start_training(self, session_id: str, rounds: int = 10, min_clients: int = 2):
         self.session_id = session_id
         self.is_running = True
+        self.default_rounds = rounds  # Track ronde untuk triggering increment versi
         self.start_phase("Training")
         self.update_logs(f"Pelatihan Federated dimulai: {rounds} ronde, {min_clients} client.")
         

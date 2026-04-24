@@ -94,6 +94,11 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         status = "Skipped"
 
         try:
+            if hasattr(self, 'fl_manager'):
+                total_rounds = config.get("total_rounds", 10)
+                self.fl_manager.fl_round = rnd
+                self.fl_manager.fl_status = f"Training: Ronde {rnd}/{total_rounds}"
+            
             loss, accuracy, num_samples, epoch_history = self.trainer.train(
                 epochs=epochs, lr=lr, round_num=rnd,
                 global_embeddings=global_embs,
@@ -120,12 +125,9 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         except Exception as e:
             print(f"[CLIENT] Checkpoint save failed: {e}")
 
-        # Reload model untuk inferensi (non-fatal)
-        try:
-            if hasattr(self, 'fl_manager'):
-                self.fl_manager._reload_inference_models()
+        # model_version.txt jangan diupdate di sini, biarkan manager yang menangani di akhir siklus
         except Exception as e:
-            print(f"[CLIENT] Reload inference models failed (non-fatal): {e}")
+            print(f"[CLIENT] Checkpoint save failed: {e}")
 
         # Evaluasi validasi (non-fatal)
         val_loss, val_accuracy = 0.0, 0.0
@@ -134,8 +136,10 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         except Exception as e:
             print(f"[CLIENT] Evaluate failed (non-fatal): {e}")
 
+        # Memory Cleanup (Jetson specialized)
+        del global_embs
         gc.collect()
-        
+            
         return self.trainer.get_backbone_parameters(personalized=True), num_samples, {
             "loss": float(loss),
             "accuracy": float(accuracy),

@@ -237,12 +237,12 @@ def workflow_train(epochs: int = TRAINING_PARAMS["total_epochs"]):
 
 # Tahap 4: Ekspor Model & Evaluasi Akhir
 @app.post("/workflow/export")
-def workflow_export():
+def workflow_export(dbs: Session = Depends(db.get_db)):
     if cl_manager.is_running: raise HTTPException(400, "Server sedang sibuk")
     cl_manager.start_phase("Export & Eval")
     print("[INFO] Memulai tahap ekspor dan evaluasi model...", flush=True)
     try:
-        res = training_controller.generate_reference_and_eval()
+        res = training_controller.generate_reference_and_eval(dbs=dbs)
         if res['status'] == 'success':
             cl_manager.increment_version()
             cl_manager.update_metrics({
@@ -269,7 +269,7 @@ def workflow_full_lifecycle(dbs: Session = Depends(db.get_db)):
         res_train = workflow_train()
         if res_train.get('status') != 'success': return res_train
         
-        res_export = workflow_export()
+        res_export = workflow_export(dbs=dbs)
         cl_manager.update_logs("Siklus pelatihan penuh berhasil diselesaikan.")
         return res_export
         

@@ -7,10 +7,9 @@ import traceback
 import collections
 from app.utils.preprocessing import DEVICE
 
-MODEL_DIR = "/app/app/model"
+MODEL_DIR = os.path.join(os.getenv("DATA_PATH", "/app/data"), "models")
 DATA_DIR = os.getenv("RAW_DATA_PATH", "/app/raw_data") + "/students"
 os.makedirs(MODEL_DIR, exist_ok=True)
-os.makedirs("/app/data", exist_ok=True)
 
 class ManagementController:
     # Kontroler untuk manajemen aset (model/referensi) dan pengunggahan dataset.

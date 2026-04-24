@@ -15,17 +15,17 @@ BN_PATH = os.path.join(DATA_ROOT, "global_bn_combined.pth")
 SUBMISSIONS_DIR = os.path.join(DATA_ROOT, "submissions")
 
 # Parameter Pelatihan (Penyelarasan dengan CL)
-# CL: 45 Epochs | FL: 15 Rounds x 3 Epochs = 45 Epochs
+# CL: 20 Epochs | FL: 10 Rounds x 2 Epochs = 20 Iterations
 TRAINING_PARAMS = {
-    "total_rounds": 15,
-    "epochs_per_round": 3,
+    "total_rounds": 10,
+    "epochs_per_round": 2,
     "batch_size_per_client": 16,
     "mu": 0.05,
     "label_smoothing": 0.1,
     "lr_schedule": {
-        1: 1e-4,   # Ronde 1-7
-        8: 5e-5,   # Ronde 8-12
-        13: 1e-5   # Ronde 13-15
+        1: 1e-4,   # Ronde 1-5
+        6: 5e-5,   # Ronde 6-8
+        9: 1e-5    # Ronde 9-10
     }
 }
 

@@ -4,6 +4,7 @@ import torch
 import threading
 import collections
 import requests
+import traceback
 import time
 import socket
 import io
@@ -28,8 +29,7 @@ from app.controllers.attendance import AttendanceController
 
 class FLClientManager:
     # Manajer Utama Client Federated (FL)
-    # Menangani jantung operasional client mulai dari sinkronisasi fase,
-    # manajemen model lokal, hingga alur kamera (inference).
+    # Menangani inti operasional client: sinkronisasi fase, manajemen model lokal, hingga alur kamera.
     def __init__(self):
         self.raw_data_path = os.getenv("RAW_DATA_PATH", "/app/raw_data")
         self.data_path = os.getenv("DATA_PATH", "/app/data")
@@ -39,11 +39,14 @@ class FLClientManager:
         os.makedirs(os.path.join(self.data_path, "processed"), exist_ok=True)
 
         self.device = torch.device("cpu")
-        self.backbone = None # Lazy loaded
-        self.head = None # Lazy loaded
+        self.backbone = None 
+        self.head = None     
+        self.inference_backbone = None 
+        self.inference_head = None     
         
         # PERSISTENSI: Tentukan ukuran head dinamis & versi
         self.save_path = os.path.join(self.data_path, "models", "backbone.pth")
+        self._models_loaded = False  # Cache flag: True berarti backbone sudah diload ke RAM, skip disk reload
         self.head_path = os.path.join(self.data_path, "models", "local_head.pth")
         self.version_path = os.path.join(self.data_path, "models", "model_version.txt")
         self.map_path = os.path.join(self.data_path, "models", "label_map.json")
@@ -88,13 +91,16 @@ class FLClientManager:
         self.client_id = self._load_identity()
         
         self.client = FaceRecognitionClient(
-            None, None, # Will be set in lazy loader
+            None, None, 
             data_path=self.data_path, 
             device=self.device
         )
         self.client.fl_manager = self
         
-        # 3. Sinkronisasi Final Status dari Persistence
+        print("[INIT] Memulai Eager Loading model...")
+        self._reload_inference_models(force_reload=True)
+        
+        # Sinkronisasi Final Status dari Persistence
         if os.path.exists(self.map_path):
             try:
                 with open(self.map_path, 'r') as f:
@@ -108,6 +114,7 @@ class FLClientManager:
         self.is_training = False
         self.current_phase = "idle"
         self.fl_status = "Online (Menunggu Instruksi)"
+        self.fl_round = 0 # Track current round
         self.last_phase = "idle"
         
         self.is_registered = False
@@ -124,7 +131,7 @@ class FLClientManager:
         self.is_camera_running = False
         
         # Ambang Batas Inferensi (Dinamis dari Server)
-        self.inference_threshold = 0.60
+        self.inference_threshold = 0.50
 
     def _load_identity(self):
         """Memuat atau membuat identitas unik client yang tersimpan di volume data."""
@@ -246,8 +253,8 @@ class FLClientManager:
             print(f"[ERROR] Gagal menerapkan bobot model: {e}")
             return False
 
-    def _ensure_models_loaded(self):
-        """Lazy loading untuk MobileFaceNet & Head (Dijamin Tidak None setelah panggil)."""
+    def _ensure_models_loaded(self, force_reload=False):
+        """Menjamin instance model tersedia di RAM (Tanpa paksa reload dari disk jika sudah ada)."""
         # 0. Selaraskan num_classes dari label map lokal (Sumber Kebenaran)
         if os.path.exists(self.map_path):
             try:
@@ -255,23 +262,14 @@ class FLClientManager:
                     self.num_classes = len(json.load(f))
             except: pass
 
-        # 1. Inisialisasi instance jika belum ada
+        # 1. Inisialisasi instance objek jika belum ada
         if self.backbone is None:
-            print(f"[INFO] Inisialisasi MobileFaceNet baru ({self.device})...")
             self.backbone = MobileFaceNet().to(self.device)
             self.backbone.eval()
             
         if self.head is None:
-            print(f"[INFO] Inisialisasi ArcMarginProduct baru ({self.device}) dengan {self.num_classes} kelas...")
             self.head = ArcMarginProduct(128, self.num_classes).to(self.device)
             self.head.eval()
-        else:
-            # Validasi ukuran head yang ada vs num_classes terbaru
-            current_head_classes = self.head.weight.shape[0]
-            if current_head_classes != self.num_classes:
-                print(f"[WARNING] Ukuran head mismatch ({current_head_classes} vs {self.num_classes}). Re-expanding...")
-                new_label_map = {nrp: idx for idx, nrp in enumerate(self.client.label_map)} if hasattr(self.client, 'label_map') and self.client.label_map else {}
-                self.head = self.client.trainer.update_head(self.num_classes, new_label_map)
 
         # 2. Sinkronisasi referensi (PENTING untuk Flower Client dan Trainer)
         if hasattr(self, 'client'):
@@ -281,54 +279,86 @@ class FLClientManager:
                 self.client.trainer.backbone = self.backbone
                 self.client.trainer.head = self.head
 
-        # 3. Coba muat dari disk jika tersedia
-        if os.path.exists(self.save_path):
-            try:
-                self.backbone.load_state_dict(torch.load(self.save_path, map_location=self.device))
-                print(f"[LAZY LOAD] Backbone loaded from disk (v{self.model_version})")
-            except Exception as e:
-                print(f"[LAZY LOAD ERROR] Backbone file corrupted or mismatch: {e}")
-                
-        if os.path.exists(self.head_path):
-            try:
-                self.head.load_state_dict(torch.load(self.head_path, map_location=self.device))
-                print(f"[LAZY LOAD] Head loaded from disk ({self.head.weight.shape[0]} classes)")
-            except RuntimeError as re:
-                if "size mismatch" in str(re):
-                    print(f"[LAZY LOAD ERROR] Size mismatch pada head file: {re}. Memaksa rekonstruksi...")
-                    # Jika mismatch, berarti file di disk lebih besar/kecil.
-                    # Kita gunakan update_head untuk menyesuaikan memori ke ukuran disk.
+        # 3. Muat dari disk jika diminta atau jika RAM belum terisi bobot
+        if not self._models_loaded or force_reload:
+            if os.path.exists(self.save_path):
+                try:
+                    self.backbone.load_state_dict(torch.load(self.save_path, map_location=self.device))
+                except Exception as e:
+                    print(f"[LOAD ERROR] Backbone file mismatch: {e}")
+                    
+            if os.path.exists(self.head_path):
+                try:
+                    self.head.load_state_dict(torch.load(self.head_path, map_location=self.device))
+                except Exception as e:
+                    # Jika mismatch, rekonstruksi lewat trainer
                     try:
                         checkpoint = torch.load(self.head_path, map_location=self.device)
                         disk_classes = checkpoint['weight'].shape[0]
-                        print(f"[INFO] Menyesuaikan self.num_classes ke {disk_classes} berdasarkan disk.")
                         self.num_classes = disk_classes
                         new_label_map = {nrp: idx for idx, nrp in enumerate(self.client.label_map)} if hasattr(self.client, 'label_map') and self.client.label_map else {}
                         self.head = self.client.trainer.update_head(self.num_classes, new_label_map)
                         self.head.load_state_dict(checkpoint)
-                        print("[SUCCESS] Head berhasil direkonstruksi dari disk.")
-                    except Exception as e2:
-                        print(f"[ERROR] Gagal memulihkan head: {e2}")
-                else:
-                    print(f"[LAZY LOAD ERROR] Head runtime error: {re}")
-            except Exception as e:
-                print(f"[LAZY LOAD ERROR] Head file corrupted: {e}")
+                    except: pass
+            
+            self._models_loaded = True
         
         return True
 
-    def _reload_inference_models(self):
-        """Memuat ulang model untuk inferensi dari checkpoint lokal terbaru."""
+    def _reload_inference_models(self, force_reload=False):
+        """EAGER LOAD: Memuat ulang model ke RAM secara thread-safe khusus untuk inferensi."""
         try:
-            self._ensure_models_loaded()
-            # Sinkronisasi dengan instance client Flower
-            if hasattr(self, 'client'):
-                self.client.model = self.backbone
-                self.client.head = self.head
-                self.client.trainer.backbone = self.backbone
-                self.client.trainer.head = self.head
-            print("[INFO] Model inferensi berhasil dimuat ulang")
+            if not force_reload and self.inference_backbone is not None:
+                return
+                
+            # 1. Muat ke variabel lokal (Aman terhadap balapan camera loop)
+            new_backbone = MobileFaceNet().to(self.device).eval()
+            new_head = None
+            if self.num_classes > 0:
+                new_head = ArcMarginProduct(128, self.num_classes).to(self.device).eval()
+            
+            if os.path.exists(self.save_path):
+                print(f"[RELOAD] Loading backbone from {self.save_path}...")
+                new_backbone.load_state_dict(torch.load(self.save_path, map_location=self.device))
+                
+                # PERSISTENCE FIX: Muat statistik BN hasil aggregasi jika ada
+                bn_path = os.path.join(self.data_path, "models", "global_bn_combined.pth")
+                if os.path.exists(bn_path):
+                    try:
+                        print(f"[RELOAD] Applying combined BN statistics from {bn_path}...")
+                        bn_params = torch.load(bn_path, map_location=self.device)
+                        new_backbone.load_state_dict(bn_params, strict=False)
+                    except Exception as e:
+                        print(f"[WARN] Gagal memuat BN stats: {e}")
+
+            if new_head is not None and os.path.exists(self.head_path):
+                try:
+                    new_head.load_state_dict(torch.load(self.head_path, map_location=self.device))
+                except: pass
+
+            # 2. ATOMIC SWAP: Update hanya model inferensi agar tidak terganggu drift training
+            self.inference_backbone = new_backbone
+            self.inference_head = new_head
+            
+            # Jika ini reload paksa atau awal, sinkronkan juga model training
+            if force_reload or self.backbone is None:
+                self.backbone = new_backbone
+                self.head = new_head
+                self._models_loaded = True
+                if hasattr(self, 'client'):
+                    self.client.model = self.backbone
+                    self.client.head = self.head
+
+            # 3. Invalidate Cache Identitas & RAM Cleanup
+            if hasattr(self, 'cached_refs'):
+                self.cached_refs = {}
+            self.last_cache_update = 0
+            gc.collect()
+            
+            print(f"[EAGER LOAD] Inference Mode: Global v{self.model_version} Ready.")
         except Exception as e:
-            print(f"[ERROR] Gagal memuat ulang model inferensi: {e}")
+            print(f"[ERROR] Gagal melakukan Eager Load: {e}")
+            traceback.print_exc()
 
     def start_background_tasks(self):
         print(f"[INIT] Memulai tugas latar belakang untuk client: {self.client_id}")
@@ -403,9 +433,16 @@ class FLClientManager:
             
             # Training/Preprocessing Guard
             if self.is_training_phase:
+                if cap.isOpened():
+                    print("[CAMERA] Melepaskan hardware kamera untuk menghemat daya/RAM selama training.")
+                    cap.release()
                 self.latest_result["matched"] = "TRAINING PHASE..."
-                time.sleep(2)
+                time.sleep(5)
                 continue
+            else:
+                if not cap.isOpened() and not virtual_mode:
+                    print("[CAMERA] Mengaktifkan kembali hardware kamera...")
+                    cap = cv2.VideoCapture(cam_idx)
 
             # Inisialisasi model hanya jika diperlukan (Lazy Load)
             if not self.backbone:
@@ -415,26 +452,28 @@ class FLClientManager:
             self.latest_frame = frame.copy()
             
             # Lakukan pemrosesan jika model sudah siap (Inference)
-            # Pastikan registry sudah ada
-            reg_path = os.path.join(self.data_path, "models", "global_embedding_registry.pth")
-            if self.backbone and os.path.exists(reg_path):
+            # Gunakan inference_backbone agar tidak terganggu drift training ronde
+            if self.inference_backbone:
                 start_time = time.time()
                 try:
                     # Konversi ke PIL Image
                     img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     img_pil = Image.fromarray(img_rgb)
                     
-                    matched, confidence = attendance_engine.recognize_directly(img_pil)
+                    matched, confidence = self.attendance.recognize_directly(img_pil)
                     
+                    status_str = f"v{self.model_version}"
+                    if self.is_training and self.fl_round > 0:
+                        status_str += f" (R{self.fl_round}/15)"
+
                     self.latest_result = {
                         "matched": matched,
                         "confidence": confidence,
                         "latency_ms": int((time.time() - start_time) * 1000),
-                        "model_version": self.model_version,
+                        "model_version": status_str,
                         "is_virtual": virtual_mode
                     }
                 except Exception as e:
-                    # print(f"[CAMERA ERROR] {e}") # Terlalu berisik untuk log loop
                     pass
             
             if not virtual_mode: time.sleep(0.5)
@@ -456,7 +495,7 @@ class FLClientManager:
             res = requests.post(f"{self.server_api_url}/api/clients/register", json=payload, timeout=2)
             if res.status_code == 200:
                 self.is_registered = True
-                print(f"[SUCCESS] Client {self.client_id} berhasil terdaftar pada server.")
+                print(f"[SUCCESS] Client {self.client_id} berhasil terdaftar di server.")
         except:
             self.is_registered = False
 
@@ -480,12 +519,15 @@ class FLClientManager:
                     # Update status ketersediaan update
                     if server_version > self.model_version:
                         self.fl_status = f"Update v{server_version} Tersedia"
+                        # TRICK: Jika idle dan versi tertinggal, paksa re-sync final
+                        if phase == "idle" and self.last_phase == "idle":
+                             self.handle_phase_transition("completed")
 
                     if phase != self.last_phase:
                         self.handle_phase_transition(phase)
                         self.last_phase = phase
             except Exception as e:
-                print(f"[ERROR] Kesalahan pada loop sinkronisasi: {e}")
+                print(f"[ERROR] Masalah pada loop sinkronisasi: {e}")
             time.sleep(5)
 
     def handle_phase_transition(self, phase):
@@ -504,24 +546,56 @@ class FLClientManager:
         elif phase in ["registry generation", "registry_generation"]:
              self.is_training_phase = True
              threading.Thread(target=self.run_registry_phase).start()
-        elif phase == "idle" or phase == "completed":
+        if phase == "idle" or phase == "completed":
             self.is_training_phase = False
             self.fl_status = "Online (Selesai)"
             
-        if (self.last_phase == "training" or self.last_phase == "registry generation") and phase == "completed":
-            print("[INFO] Pelatihan selesai. Mengunduh aset Registry Final...")
+        # PENTING: Gunakan OR untuk menangani race condition phase -> idle yang terlalu cepat
+        if (self.last_phase == "training" or self.last_phase == "registry generation" or self.last_phase == "idle") and (phase == "completed" or phase == "idle"):
+            # Cek apakah memang ada kenaikan versi di server
+            try:
+                resp = requests.get(f"{self.server_api_url}/api/status", timeout=2)
+                server_v = resp.json().get("model_version", self.model_version) if resp.status_code == 200 else self.model_version
+                if server_v <= self.model_version and not (phase == "completed"):
+                    return # Tidak perlu sync jika sudah up to date dan bukan fase completion eksplisit
+            except: pass
+
+            print("[INFO] Pelatihan selesai atau Update tersedia. Memulai Sinkronisasi Final...")
             def update_task():
-                if self.download_registry_assets():
-                    # Ambil versi terbaru dari server setelah download selesai
+                try:
+                    # 1. Unduh Backbone global terakhir
+                    if not self.download_backbone():
+                        print("[ERROR] Gagal mengunduh backbone final.")
+                    
+                    # 2. Unduh BN global terakhir
+                    if not self.download_bn():
+                        print("[ERROR] Gagal mengunduh BN final.")
+                        
+                    # 3. Unduh Registry Centroid 
+                    if not self.download_registry_assets():
+                        print("[ERROR] Gagal mengunduh registry final.")
+                        
+                    # 4. Ambil versi terbaru dan update metadata
                     try:
-                        resp = requests.get(f"{self.server_api_url}/api/status", timeout=2)
+                        resp = requests.get(f"{self.server_api_url}/api/status", timeout=5)
                         if resp.status_code == 200:
                             v = resp.json().get("model_version", self.model_version)
+                            print(f"[SYNC] Menetapkan versi lokal ke v{v}")
                             self._save_version(v)
-                    except: pass
+                    except Exception as e:
+                        print(f"[WARNING] Gagal update nomor versi: {e}")
+
+                    # 5. FORCE RELOAD: Pastikan inferensi menggunakan v1 segera
+                    self._reload_inference_models(force_reload=True)
                     
+                    # 6. Selesaikan label map dan refresh lokal
                     self.sync_label_map()
-                    self.refresh_local_embeddings() 
+                    self.refresh_local_embeddings()
+                    print("[SUCCESS] Siklus FL selesai, sistem siap untuk inferensi v-terbaru.")
+                    
+                except Exception as e:
+                    print(f"[CRITICAL] Sinkronisasi pasca-pelatihan gagal: {e}")
+            
             threading.Thread(target=update_task, daemon=True).start()
 
     def _save_version(self, v):
@@ -539,16 +613,14 @@ class FLClientManager:
             if res_bb.status_code == 200:
                 save_path = os.path.join(self.data_path, "models", "backbone.pth")
                 with open(save_path, "wb") as f:
-                    f.write(res_bb.content)
+                    size = f.write(res_bb.content)
+                print(f"[SYNC] Berhasil mengunduh backbone ({size} bytes).")
                 
-                try:
-                    loaded = torch.load(save_path, map_location=self.device)
-                    # Saat download global, kita TERAPKAN BN (ignore_bn=False) untuk konsistensi inferensi
-                    if self._apply_backbone_weights(loaded, ignore_bn=False):
-                        print("[SUCCESS] Backbone global (termasuk BN) berhasil diterapkan.")
-                        return True
-                except Exception as e:
-                    print(f"[SYNC] Failed to apply backbone: {e}")
+                # EAGER RELOAD: Terapkan backbone global ke RAM
+                self._reload_inference_models(force_reload=True)
+                return True
+            else:
+                print(f"[SYNC ERROR] Server returned status code {res_bb.status_code} for backbone.")
         except Exception as e:
             print(f"[SYNC ERROR] Backbone fetch failed: {e}")
         return False
@@ -625,7 +697,7 @@ class FLClientManager:
             db.close()
 
     def refresh_local_embeddings(self):
-        """Ekstraksi ulang embedding lokal menggunakan backbone terbaru yang sudah DISINKRONISASI."""
+        # Memperbarui embedding lokal menggunakan backbone terbaru hasil sinkronisasi
         self._ensure_models_loaded()
         db = SessionLocal()
         try:
@@ -636,19 +708,43 @@ class FLClientManager:
                 user_folder = os.path.join(processed_dir, user.user_id)
                 if not os.path.exists(user_folder): continue
                 
+                # Muat daftar gambar yang tersedia
                 imgs = [f for f in os.listdir(user_folder) if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
                 if not imgs: continue
                 
-                img_path = os.path.join(user_folder, imgs[0])
-                img_pil = Image.open(img_path).convert('RGB')
+                # FUNCTIONAL PARITY: Pilih gambar terbaik menggunakan ImageProcessor
+                # Coba hingga 5 gambar terbaik jika deteksi wajah gagal
+                selected_paths = image_processor.select_best_faces(user_folder, n=5)
+                print(f"[REFRESH] User {user.user_id}: Menyeleksi {len(selected_paths)} gambar terbaik untuk ekstraksi.")
                 
-                preprocess = transforms.Compose([
-                    transforms.Resize((112, 96), interpolation=InterpolationMode.BILINEAR), 
-                    transforms.ToTensor(),
-                    transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
-                ])
+                face_img = None
+                best_img_path = None
                 
-                input_tensor = preprocess(img_pil).unsqueeze(0).to(self.device)
+                for i, img_name in enumerate(selected_paths):
+                    trial_path = os.path.join(user_folder, img_name)
+                    try:
+                        img_pil = Image.open(trial_path).convert('RGB')
+                        # FUNCTIONAL PARITY: Ambil crop wajah tertajam
+                        face_img, _, _ = image_processor.detect_face(img_pil)
+                        if face_img is not None:
+                            best_img_path = trial_path
+                            print(f"[REFRESH] [SUCCESS] Wajah user {user.user_id} terdeteksi (Percobaan {i+1}, File: {img_name}).")
+                            break
+                        else:
+                            print(f"[REFRESH] [RETRY] Percobaan {i+1} gagal untuk {user.user_id} ({img_name}). Mencoba gambar lain...")
+                    except Exception as e:
+                        print(f"[REFRESH ERROR] Gagal memuat {img_name}: {e}")
+                        continue
+
+                if face_img is None:
+                    print(f"[REFRESH] [FAILED] User {user.user_id}: Wajah tidak terdeteksi di {len(selected_paths)} gambar terbaik.")
+                    continue
+
+                # Ambil skor untuk logging (opsional)
+                max_blur = image_processor.get_blur_score(best_img_path)
+                print(f"[REFRESH] User {user.user_id}: Menggunakan gambar kualitas {max_blur:.1f}")
+
+                input_tensor = image_processor.prepare_for_model(face_img).to(self.device)
                 
                 with torch.no_grad():
                     self.backbone.eval()
@@ -665,6 +761,11 @@ class FLClientManager:
                     db.add(EmbeddingLocal(user_id=user.user_id, embedding_data=encrypted_data, iv=iv, is_global=False))
                 db.commit()
                 
+                # Cleanup per user for Jetson RAM
+                del embedding_tensor
+                # RAM Cleanup per user (Pure CPU)
+                gc.collect()
+                
                 # Bagikan ke server
                 try:
                     payload = {
@@ -680,13 +781,6 @@ class FLClientManager:
         finally:
             db.close()
 
-    def get_blur_score(self, image_path):
-        try:
-            img = cv2.imread(image_path)
-            if img is None: return 0
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            return cv2.Laplacian(gray, cv2.CV_64F).var()
-        except: return 0
 
     def run_discovery_phase(self):
         """Pindai folder dan daftarkan ID ke server."""
@@ -773,9 +867,7 @@ class FLClientManager:
             os.makedirs(target_folder, exist_ok=True)
             
             source_path = os.path.join(students_dir, folder)
-            all_images = [f for f in os.listdir(source_path) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
-            scored_images = sorted([(img, self.get_blur_score(os.path.join(source_path, img))) for img in all_images], key=lambda x: x[1], reverse=True)
-            top_images = [img[0] for img in scored_images[:50]]
+            top_images = image_processor.select_best_faces(source_path, n=50)
             
             count = 0
             for img_name in top_images:
@@ -784,8 +876,9 @@ class FLClientManager:
                     img_pil = Image.open(img_path).convert('RGB')
                     target_path = os.path.join(target_folder, f"face_{count}.jpg")
                     
-                    # Gunakan MTCNN dari image_processor (lazy-loaded, bisa di-unload setelah selesai)
-                    if image_processor.mtcnn(img_pil, save_path=target_path) is not None:
+                    # Gunakan MTCNN dari image_processor (Portrait Cropping 96x112)
+                    face_img, _, _ = image_processor.detect_face(img_pil, save_path=target_path)
+                    if face_img is not None:
                         count += 1
                 except: pass
         
@@ -830,11 +923,13 @@ class FLClientManager:
         self.is_sending_registry = True
         self.report_status("Processing: Finalisasi Registry Identitas...")
         try:
-            # 1. SINKRONISASI BACKBONE & BN TERLEBIH DAHULU (Penting untuk konsistensi)
-            print("[INFO] Fase 1: Sinkronisasi Model dan Statistik Global...")
+            # 1. SINKRONISASI BACKBONE & BN TERLEBIH DAHULU (PENTING!)
+            # Ini menjamin ekstraksi fitur menggunakan "lensa" global yang seragam.
+            print("[INFO] Fase 1: Mengunduh Backbone & BN Global dari server...")
             self.download_backbone()
-            # Tingkatkan timeout: BN mungkin butuh waktu untuk diagregasi di server
-            self.download_bn(max_wait=30) 
+            # Catatan: Kita memanggil download_bn secara sinkron di sini
+            # karena kita butuh stats BN yang teragregasi ROUND SEBELUMNYA sebagai baseline yang stabil.
+            self.download_bn(max_wait=10) 
             
             # 2. HITUNG CENTROID (Menggunakan status model saat ini)
             print("[INFO] Fase 2: Menghitung Centroid Lokal (BN-Aligned)...")
@@ -871,6 +966,19 @@ class FLClientManager:
                 
                 if self._download_global_registry(max_wait=120):
                     print("[REGISTRY] Global Registry Synced.")
+                    
+                    # 5. ATOMIC VERSION SYNC: Pastikan versi diupdate SEBELUM reload
+                    try:
+                        resp = requests.get(f"{self.server_api_url}/api/status", timeout=5)
+                        if resp.status_code == 200:
+                            v = resp.json().get("model_version", 1)
+                            print(f"[REGISTRY] Syncing local version to v{v}")
+                            self._save_version(v)
+                    except: pass
+
+                    # CRITICAL: Paksa reload backbone ke inferensi dengan versi global yang sudah disinkronisasi
+                    print("[INFO] Finalisasi: Mereset backbone inferensi ke versi global agregasi...")
+                    self._reload_inference_models(force_reload=True)
                     self.report_status("Siap Selesai")
                 else:
                     print("[REGISTRY] Global Registry download failed/timed out.")
@@ -923,8 +1031,8 @@ class FLClientManager:
             finally:
                 self.is_training = False
                 self.report_status("Online (Selesai)")
-                # Reload model untuk menggunakan bobot global terbaru
-                self._reload_inference_models()
+                # Reload model untuk menggunakan bobot global terbaru (EAGER RELOAD)
+                self._reload_inference_models(force_reload=True)
         threading.Thread(target=run_client, daemon=True).start()
 
 fl_manager = FLClientManager()

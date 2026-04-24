@@ -18,13 +18,13 @@ EMISSIONS_DIR = os.path.join(DATA_ROOT, "emissions")
 
 # Parameter Pelatihan (Penyelarasan dengan FL)
 TRAINING_PARAMS = {
-    "total_epochs": 45,
+    "total_epochs": 20,
     "batch_size": 32,
     "label_smoothing": 0.1,
     "lr_schedule": {
-        0: 1e-4,   # Epoch 1-21 (Alignment dengan FL Round 1-7)
-        21: 5e-5,  # Epoch 22-36 (Alignment dengan FL Round 8-12)
-        36: 1e-5   # Epoch 37-45 (Alignment dengan FL Round 13-15)
+        0: 1e-4,   # Epoch 1-10
+        10: 5e-5,  # Epoch 11-15
+        15: 1e-5   # Epoch 16-20
     }
 }
 

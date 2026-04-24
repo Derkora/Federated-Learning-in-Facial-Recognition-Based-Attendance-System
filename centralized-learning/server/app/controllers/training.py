@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 import time
 import shutil
 import random
@@ -11,6 +12,7 @@ import torchvision.transforms as T
 from PIL import Image
 import cv2
 import numpy as np
+import torch.nn.functional as F
 
 from app.utils.face_utils import face_handler, DEVICE
 from app.utils.mobilefacenet import MobileFaceNet, ArcMarginProduct
@@ -28,21 +30,14 @@ if CODECARBON_AVAILABLE:
         pass
 
 class TrainingController:
-    # Kontroler Utama untuk Siklus Pelatihan Terpusat (Centralized Training).
-    # Menangani penerimaan data, pra-pemrosesan, hingga evaluasi biometric.
+    # Kontroler Utama untuk Pelatihan Terpusat (Centralized Training).
+    # Menangani alur data dari penerimaan hingga evaluasi model.
     
     def __init__(self):
+        # Inisialisasi direktori penyimpanan data dan model
         os.makedirs(PROCESSED_DATA, exist_ok=True)
         os.makedirs(MODEL_DIR, exist_ok=True)
 
-    def get_blur_score(self, image_path):
-        # Mengukur tingkat ketajaman gambar menggunakan variansi Laplacian.
-        try:
-            img = cv2.imread(image_path)
-            if img is None: return 0
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            return cv2.Laplacian(gray, cv2.CV_64F).var()
-        except: return 0
 
     def fetch_data(self, wait_timeout=600, expected_clients=None):
         # Tahap 1: Sinkronisasi dan Menunggu Unggahan Data dari Terminal
@@ -103,13 +98,14 @@ class TrainingController:
         }
 
     def preprocess_and_balance(self):
-        # Tahap 2: Penyelarasan Wajah (MTCNN) dan Seleksi Kualitas (Laplacian)
+        # Tahap 2: Menyeleksi wajah terbaik dan melakukan pemotongan (Face Cropping)
         try:
-            print("[INFO] Memulai tahap pra-pemrosesan dan seleksi kualitas...", flush=True)
-            if os.path.exists(PROCESSED_DATA): shutil.rmtree(PROCESSED_DATA)
+            print("[INFO] Memulai proses seleksi kualitas dan pemotongan wajah...", flush=True)
+            if os.path.exists(PROCESSED_DATA): 
+                shutil.rmtree(PROCESSED_DATA)
             os.makedirs(PROCESSED_DATA, exist_ok=True)
             
-            # Deteksi dan Cropping Wajah (MTCNN)
+            # Pindai folder NRP yang diunggah
             folders = [f for f in os.listdir(UPLOAD_DIR) if os.path.isdir(os.path.join(UPLOAD_DIR, f))]
             total_folders = len(folders)
             for i, nrp_folder in enumerate(folders):
@@ -117,22 +113,18 @@ class TrainingController:
                 dst = os.path.join(PROCESSED_DATA, nrp_folder)
                 os.makedirs(dst, exist_ok=True)
                 
-                # Seleksi berbasis Blur Detection (Laplacian) - Ambil Top 50 Tertajam
-                all_images = [f for f in os.listdir(src) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
-                scored_images = sorted([(img, self.get_blur_score(os.path.join(src, img))) for img in all_images], key=lambda x: x[1], reverse=True)
+                # Seleksi 50 foto tertajam menggunakan Laplacian Variance
+                top_images = face_handler.select_best_faces(src, n=50)
                 
-                # Ambil maksimal 50 gambar terbaik
-                top_images = [img[0] for img in scored_images[:50]]
-                
-                msg = f"Memproses {len(top_images)} wajah terbaik untuk {nrp_folder} ({i+1}/{total_folders})"
+                msg = f"Memproses {len(top_images)} foto terbaik untuk {nrp_folder} ({i+1}/{total_folders})"
                 print(f"[INFO] {msg}", flush=True)
                 cl_manager.update_logs(msg)
                 
                 for img_name in top_images:
+                    # Deteksi wajah dan simpan hasil crop 112x96
                     face_handler.detect_and_save(os.path.join(src, img_name), os.path.join(dst, img_name))
             
-            # Augmentasi sekarang dilakukan secara dinamis (on-the-fly) saat training
-            return {"status": "success", "message": "Pra-pemrosesan dan seleksi kualitas (Top 50 Laplacian) selesai."}
+            return {"status": "success", "message": "Proses seleksi (Top 50 Laplacian) dan cropping selesai."}
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
@@ -171,6 +163,7 @@ class TrainingController:
                 transforms.RandomRotation(degrees=15),
                 transforms.ColorJitter(brightness=0.2, contrast=0.2),
                 transforms.ToTensor(),
+                # Normalisasi MobileFaceNet (Standard): (x - 127.5) / 127.5
                 transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
                 transforms.RandomErasing(p=0.1)
             ])
@@ -185,6 +178,10 @@ class TrainingController:
             batch_size = cl_manager.default_batch_size
             train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
             val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+            
+            print(f"[DATASET] Found {len(full_dataset)} images across {num_classes} classes.", flush=True)
+            print(f"[DATASET] Split: {len(train_dataset)} train, {len(val_dataset)} validation.", flush=True)
+            cl_manager.update_logs(f"Dataset: {len(full_dataset)} gambar, {num_classes} kelas. Batch Size: {batch_size}")
             
             model = MobileFaceNet().to(DEVICE)
             if os.path.exists(PRETRAINED_PATH):
@@ -213,18 +210,33 @@ class TrainingController:
                 
                 model.train()
                 correct, total, total_loss = 0, 0, 0.0
-                for img, label in train_loader:
+                for b, (img, label) in enumerate(train_loader):
                     img, label = img.to(DEVICE), label.to(DEVICE)
                     optimizer.zero_grad()
-                    output = metric_fc(model(img), label)
+                    
+                    # Generate features once per batch
+                    features = model(img)
+                    
+                    output = metric_fc(features, label)
                     loss = criterion(output, label)
                     loss.backward()
                     optimizer.step()
                     
                     total_loss += loss.item()
-                    _, pred = torch.max(output.data, 1)
-                    total += label.size(0)
-                    correct += (pred == label).sum().item()
+                    
+                    # METRIK: Hitung Akurasi Sebenarnya (Tanpa Margin Pelatihan) - Functional Parity with FL
+                    with torch.no_grad():
+                        # Gunakan output murni (cosine similarity * s) untuk metrik akurasi dashboard
+                        # Ini konsisten dengan cara FL menghitung akurasi agar tidak terlihat 0% di awal.
+                        logits_for_acc = F.linear(F.normalize(features), F.normalize(metric_fc.weight)) * metric_fc.s
+                        _, pred = torch.max(logits_for_acc.data, 1)
+                        total += label.size(0)
+                        correct += (pred == label).sum().item()
+                    
+                    # Log progres setiap 10 batch
+                    if (b + 1) % 10 == 0 or (b + 1) == len(train_loader):
+                        batch_acc = round(100 * correct / total, 2)
+                        print(f"  [TRAIN] Epoch {epoch+1}: Batch {b+1}/{len(train_loader)} - Loss: {loss.item():.4f} - Acc: {batch_acc}%", flush=True)
                 
                 # 5. Validation Loop (Menyelaraskan dengan metrik FL)
                 model.eval()
@@ -232,10 +244,18 @@ class TrainingController:
                 with torch.no_grad():
                     for img, label in val_loader:
                         img, label = img.to(DEVICE), label.to(DEVICE)
-                        output = metric_fc(model(img), label)
+                        
+                        # Generate features
+                        features = model(img)
+                        # Hitung Logits Murni (Cosine Similarity * Scale) untuk Akurasi
+                        logits = F.linear(F.normalize(features), F.normalize(metric_fc.weight)) * metric_fc.s
+                        
+                        # Hitung Loss menggunakan ArcFace Margin
+                        output = metric_fc(features, label)
                         loss = criterion(output, label)
+                        
                         val_loss += loss.item()
-                        _, pred = torch.max(output.data, 1)
+                        _, pred = torch.max(logits.data, 1)
                         val_total += label.size(0)
                         val_correct += (pred == label).sum().item()
                 
@@ -279,10 +299,23 @@ class TrainingController:
             if tracker: tracker.stop()
             return {"status": "error", "message": str(e)}
 
-    def generate_reference_and_eval(self):
+    def generate_reference_and_eval(self, dbs=None):
         # Tahap 4: Pembuatan Basis Data Referensi Wajah dan Evaluasi Transmisi
         try:
             print("[INFO] Menghasilkan basis data referensi dan menghitung volume transmisi...", flush=True)
+            
+            # --- PERSISTENSI VERSI (Simpan ke DB sebelum generate registry) ---
+            if dbs:
+                try:
+                    new_v = models.ModelVersion(notes=f"Dibuat pada {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                    dbs.add(new_v)
+                    dbs.commit()
+                    dbs.refresh(new_v)
+                    print(f"[SUCCESS] Versi model v{new_v.version_id} berhasil disimpan ke database.")
+                except Exception as e:
+                    print(f"[ERROR] Gagal menyimpan versi model ke database: {e}")
+                    dbs.rollback()
+            
             model = MobileFaceNet().to(DEVICE)
             model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
             model.eval()

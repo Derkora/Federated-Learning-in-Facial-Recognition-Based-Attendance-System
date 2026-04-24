@@ -1,32 +1,31 @@
-# Catatan Implementasi & Perbedaan dari Proposal
+# Catatan Implementasi & Perbedaan dari Proposal (Revisi)
 
-## 🚀 Optimalisasi Perangkat Edge (Low RAM)
-Untuk mendukung perangkat dengan RAM terbatas (1GB - 4GB), implementasi teknis melakukan beberapa penyesuaian dari proposal awal:
+Dokumen ini mencatat perubahan teknis dan optimalisasi yang dilakukan selama tahap implementasi yang mungkin berbeda dari proposal awal. Catatan ini dapat digunakan sebagai dasar pembaruan pada buku Laporan/Skripsi.
 
-1.  **Transition ke ONNX Runtime**:
-    *   Meskipun proposal mungkin menyarankan penggunaan PyTorch secara langsung, sistem diubah menggunakan **ONNX Runtime** untuk proses inferensi absensi di latar belakang.
-    *   **Alasan**: Mengurangi konsumsi RAM hingga 80% dan memperkecil ukuran library dari >1GB menjadi ~30MB.
-    
-2.  **Kuantisasi Model (Dynamic Quantization)**:
-    *   Model `MobileFaceNet` dikonversi ke format **INT8 ONNX**.
-    *   **Hasil**: Ukuran model turun dari ~100MB menjadi ~25MB dengan penurunan akurasi yang minimal (<1%), sangat krusial untuk perangkat edge dengan penyimpanan terbatas.
+## 1. Optimalisasi Perangkat Edge (Stabilitas vs RAM)
 
-3.  **MTCNN Pre-Cropping & Resize**:
-    *   Proses deteksi dilakukan satu kali di awal, lalu wajah di-crop dan disimpan. Training dan Inferensi dilakukan pada data yang sudah di-resize ke **112x96**.
+Meskipun pada tahap awal sempat dieksplorasi penggunaan ONNX Runtime untuk menekan konsumsi RAM, sistem akhir diputuskan menggunakan **Full PyTorch (CPU Mode)** di terminal.
+- **Alasan**: Menghindari ketidakcocokan metadata model saat pembaruan dinamis dan memastikan keselarasan 100% antara fase pelatihan dan inferensi.
+- **Dampak**: Peningkatan penggunaan RAM tetap dalam batas wajar (1GB-2GB) dengan stabilitas arsitektur yang jauh lebih tinggi.
 
----
+## 2. Peningkatan Robustness Registrasi (Detection Retry)
 
-## 🛡️ Stabilisasi & Fitur Mutakhir (Breakthroughs)
-Beberapa fitur kritial ditambahkan untuk meningkatkan performa nyata sistem Federated Learning:
+Terdapat penambahan mekanisme **Multi-Trial Face Detection** pada proses pendaftaran dan pembaruan embedding:
+- **Perubahan**: Sistem tidak lagi hanya mengandalkan satu gambar tertajam. Jika deteksi wajah gagal pada gambar pertama, sistem akan mencoba hingga **5 kali** menggunakan urutan gambar tertajam berikutnya.
+- **Hasil**: Menghilangkan masalah "missing user" (misalnya kasus 29/30 identitas) yang disebabkan oleh satu frame yang tidak terbaca MTCNN meskipun cukup tajam.
 
-1.  **Global Batch Normalization (BN) Merging**:
-    Server kini menggabungkan statistik BN dari seluruh terminal menjadi satu set parameter global yang di-merge ke backbone sebelum didistribusikan kembali.
+## 3. Sinkronisasi Global Batch Normalization (BN)
 
-2.  **Knowledge Sharing (Global Identity Sync)**:
-    Terminal kini saling berbagi *feature centroids* (melalui server). Hal ini memungkinkan terminal A mengenali mahasiswa yang hanya pernah mendaftar di terminal B tanpa harus mengirim foto mentah mereka.
+Terobosan utama dalam akurasi Federated Learning:
+- **Konsep**: Sebelum menghitung centroid (registri), terminal **WAJIB** mensinkronisasikan statistik Global BN dari server dan menginjeksikannya ke dalam backbone model.
+- **Justifikasi**: Tanpa sinkronisasi BN sebelum pembuatan registri, akan terjadi "feature drift" yang menyebabkan skor similarity rendah (~0.2). Dengan sinkronisasi ini, akurasi meningkat pesat (Score > 0.6).
 
-3.  **Dynamic Head Expansion with Weight Preservation**:
-    *   Implementasi logika *Weight Copying* memastikan bobot mahasiswa lama tetap terjaga saat struktur klasifikasi melebar untuk menampung identitas baru.
+## 4. Persistensi Versi Model Berbasis Database
 
-4.  **Architectural Alignment (112x96 Portrait)**:
-    *   Sistem secara ketat menggunakan dimensi **112x96** yang disesuaikan dengan kernel global depthwise convolution MobileFaceNet. Ini memastikan fitur wajah tidak terdistorsi antara fase training dan inferensi.
+- **Perubahan**: Pelacakan versi model (v1, v2, dst.) dipindahkan dari metadata file ke **Database PostgreSQL (tabel public.model_versions)** di sisi Centralized Server.
+- **Manfaat**: Versi model tetap konsisten meskipun container dinyalakan ulang. Terminal dapat mendeteksi "lompatan versi" secara akurat dan memicu penyegaran (refresh) data biometrik lokal secara otomatis.
+
+## 5. Standarisasi Preprocessing (112x96 Portrait)
+
+- **Ketentuan**: Seluruh pipeline (CL, FL, Training, dan Inferensi) diselaraskan pada resolusi **112x96 portrait**.
+- **Teknis**: Menggunakan margin deteksi 20px dan resize bilinear tanpa distorsi aspek rasio, memastikan wajah yang "dilihat" model selama absensi memiliki karakteristik yang sama dengan saat pelatihan.

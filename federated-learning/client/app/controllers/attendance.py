@@ -15,7 +15,8 @@ from app.utils.security import encryptor
 from app.utils.sync_utils import sync_record_to_server
 
 class AttendanceController:
-    # Kontroler untuk proses Pengenalan Wajah dan Pelaporan Presensi (Optimasi Edge: No ONNX)
+    # Kontroler untuk proses Pengenalan Wajah dan Pencatatan Presensi.
+    # Menangani alur inferensi dari gambar kamera hingga pelaporan ke server.
     
     def __init__(self, fl_manager):
         self.fl_manager = fl_manager
@@ -45,8 +46,12 @@ class AttendanceController:
                 self._last_version_loaded = current_v
 
             with torch.no_grad():
-                self.fl_manager.backbone.eval()
-                query_embedding_tensor = self.fl_manager.backbone(input_tensor)
+                # Gunakan inference_backbone agar stabil terhadap drift ronde
+                target_backbone = getattr(self.fl_manager, 'inference_backbone', self.fl_manager.backbone)
+                if target_backbone is None: return {"matched": "Error", "confidence": 0, "message": "Model not loaded"}
+                
+                target_backbone.eval()
+                query_embedding_tensor = target_backbone(input_tensor)
                 query_embedding_tensor = torch.nn.functional.normalize(query_embedding_tensor, p=2, dim=1)
         except Exception as e:
             print(f"[ERROR] Kegagalan inferensi: {e}")
@@ -102,15 +107,19 @@ class AttendanceController:
         }
 
     def recognize_directly(self, img_pil):
-        # Memproses pengenalan secara langsung (dari camera loop)
+        # Inferensi langsung dari frame kamera (Optimasi Edge)
+        # Gunakan inference_backbone agar stabil terhadap drift ronde
+        target_backbone = getattr(self.fl_manager, 'inference_backbone', self.fl_manager.backbone)
+        if target_backbone is None: return "Unknown", 0.0
+        
         try:
             face_tensor, _, _ = image_processor.detect_face(img_pil)
             if face_tensor is None: return "Unknown", 0.0
             
             input_tensor = image_processor.prepare_for_model(face_tensor).to(self.fl_manager.device)
             with torch.no_grad():
-                self.fl_manager.backbone.eval()
-                query_embedding_tensor = self.fl_manager.backbone(input_tensor)
+                target_backbone.eval()
+                query_embedding_tensor = target_backbone(input_tensor)
                 query_embedding_tensor = torch.nn.functional.normalize(query_embedding_tensor, p=2, dim=1)
                 
             # Temporal Voting
@@ -144,11 +153,32 @@ class AttendanceController:
             return "Unknown", 0.0
 
     def _get_cached_identities(self, db):
-        # Refresh cache identitas (Setiap 30 detik atau jika kosong)
+        # Memperbarui cache identitas (Setiap 30 detik atau jika data kosong)
         if not hasattr(self.fl_manager, 'cached_refs') or time.time() - getattr(self.fl_manager, 'last_cache_update', 0) > 30:
             local_refs = {}
+            print(f"[ATTENDANCE] Memperbarui cache identitas dari database dan registri global...")
             
-            # 1. PUSTAKA GLOBAL
+            # 1. Memuat identitas dari database lokal
+            try:
+                embeddings = db.query(EmbeddingLocal).all()
+                db_count = 0
+                for emb in embeddings:
+                    try:
+                        # Prioritas: Identitas global di DB (is_global=True) dimuat terakhir agar menimpa lokal jika ada konflik
+                        dec_emb = np.frombuffer(emb.embedding_data, dtype=np.float32).copy() if emb.is_global else encryptor.decrypt_embedding(emb.embedding_data, emb.iv).copy()
+                        v = torch.from_numpy(dec_emb).float()
+                        v = torch.nn.functional.normalize(v.unsqueeze(0), p=2, dim=1).squeeze(0)
+                        local_refs[emb.user_id] = v.to(self.fl_manager.device)
+                        db_count += 1
+                    except Exception as e: 
+                        print(f"[ATTENDANCE ERROR] Gagal dekripsi embedding user {emb.user_id}: {e}")
+                        continue
+                print(f"[ATTENDANCE] Berhasil memuat {db_count} identitas dari database.")
+            except Exception as db_err:
+                print(f"[ATTENDANCE ERROR] Gagal query database: {db_err}")
+
+            # 2. PUSTAKA GLOBAL (SUMBER KEBENARAN UTAMA / Centroids)
+            # Dimuat SETELAH database agar menimpa identitas lama dengan centroid terbaru dari sinkronisasi global
             registry_path = os.path.join(self.fl_manager.data_path, "models", "global_embedding_registry.pth")
             if os.path.exists(registry_path):
                 try:
@@ -157,20 +187,11 @@ class AttendanceController:
                         v = torch.from_numpy(np.array(vec, dtype=np.float32).copy()) if not isinstance(vec, torch.Tensor) else vec.float()
                         v = torch.nn.functional.normalize(v.unsqueeze(0), p=2, dim=1).squeeze(0)
                         local_refs[nrp] = v.to(self.fl_manager.device)
+                    print(f"[ATTENDANCE] [SUCCESS] Registri global berhasil dimuat dengan {len(registry)} identitas.")
                 except Exception as e:
-                    print(f"[ERROR] Gagal memuat registry: {e}")
-            
-            # 2. IDENTITAS SEGAR (DB)
-            try:
-                embeddings = db.query(EmbeddingLocal).all()
-                for emb in embeddings:
-                    try:
-                        dec_emb = np.frombuffer(emb.embedding_data, dtype=np.float32).copy() if emb.is_global else encryptor.decrypt_embedding(emb.embedding_data, emb.iv).copy()
-                        v = torch.from_numpy(dec_emb).float()
-                        v = torch.nn.functional.normalize(v.unsqueeze(0), p=2, dim=1).squeeze(0)
-                        local_refs[emb.user_id] = v.to(self.fl_manager.device)
-                    except: continue
-            except: pass
+                    print(f"[ATTENDANCE ERROR] Gagal memuat berkas registry.pth: {e}")
+            else:
+                print(f"[ATTENDANCE] Registry global ({registry_path}) belum tersedia.")
             
             self.fl_manager.cached_refs = local_refs
             self.fl_manager.last_cache_update = time.time()
