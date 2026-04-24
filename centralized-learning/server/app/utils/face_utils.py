@@ -21,7 +21,9 @@ class FaceHandler:
         self.transform = T.Compose([
             T.Resize((112, 96)),
             T.ToTensor(),
-            T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+            # Normalisasi MobileFaceNet (Creator Standard): (x - 127.5) / 128.0
+            # 128/255 = 0.50196
+            T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.50196, 0.50196, 0.50196])
         ])
 
     def detect_and_save(self, img_path, dst_path):
@@ -78,8 +80,15 @@ class FaceHandler:
         return [os.path.basename(s[0]) for s in scored[:n]]
 
     def get_embedding(self, model, img_pil):
-        """Generate embedding from a PIL image."""
+        """Generate embedding from a PIL image menggunakan Flip Trick (Avg Orig + Mirror)."""
         img_tensor = self.transform(img_pil).unsqueeze(0).to(DEVICE)
-        return torch.nn.functional.normalize(model(img_tensor))
+        img_flip = torch.flip(img_tensor, [3])
+        
+        with torch.no_grad():
+            emb_orig = model(img_tensor)
+            emb_flip = model(img_flip)
+            # Rata-rata dan normalisasi ulang
+            combined = torch.nn.functional.normalize(emb_orig + emb_flip, p=2, dim=1)
+        return combined
 
 face_handler = FaceHandler()

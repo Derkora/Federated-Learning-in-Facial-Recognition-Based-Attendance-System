@@ -29,3 +29,23 @@ Terobosan utama dalam akurasi Federated Learning:
 
 - **Ketentuan**: Seluruh pipeline (CL, FL, Training, dan Inferensi) diselaraskan pada resolusi **112x96 portrait**.
 - **Teknis**: Menggunakan margin deteksi 20px dan resize bilinear tanpa distorsi aspek rasio, memastikan wajah yang "dilihat" model selama absensi memiliki karakteristik yang sama dengan saat pelatihan.
+
+## 6. Optimasi Hyperparameter (Accuracy Boost)
+
+- **Perubahan**: Mengganti optimizer Adam dengan **SGD with Nesterov Momentum** dan menerapkan **Per-Layer Weight Decay**.
+- **Justifikasi**: Berdasarkan referensi implementasi *ArcFace*, SGD memberikan kurva konvergensi yang lebih tajam dan generalisasi fitur yang lebih baik pada model MobileFaceNet dibandingkan Adam yang cenderung datar.
+- **Dampak**: Model lebih sensitif terhadap perbedaan fitur wajah antar individu yang mirip sekalipun.
+
+## 7. Metode Inferensi Tingkat Lanjut (Flip Trick & CIM)
+
+Sistem mengadopsi dua teknik baru untuk meningkatkan stabilitas dan kecepatan:
+- **Flip Trick Evaluation**: Mengekstraksi fitur dari wajah asli dan wajah yang di-flip secara horizontal, lalu merata-ratakannya. Teknik ini secara signifikan menstabilkan skor similarity terhadap kemiringan wajah.
+- **Confident Instant Match (CIM)**: Bypass temporal voting jika skor kemiripan frame tunggal > 0.85. Hal ini menghilangkan keluhan "pemanasan" atau delay saat pertama kali wajah terdeteksi.
+
+## 8. Pengetatan Keamanan (Threshold 0.75)
+- **Ketentuan**: Ambang batas (threshold) pengenalan ditingkatkan dari proposal awal (0.5 atau 0.6) menjadi **0.75**.
+- **Tujuan**: Untuk meminimalisir *False Positive* (salah deteksi) pada lingkungan dengan banyak orang di latar belakang. Dengan model yang sudah dioptimasi, skor mahasiswa asli tetap mampu mencapai angka yang tinggi secara konsisten.
+
+## 9. Penerapan Stochastic Weight Averaging (SWA)
+- **Perubahan**: Menambahkan fase perataan bobot model (*weight averaging*) di akhir siklus pelatihan. Pada CL, hal ini dilakukan pada 5 epoch terakhir. Pada FL, dilakukan melalui *Snapshot Averaging* pada 3 ronde terakhir di sisi server.
+- **Manfaat**: Teknik ini menghasilkan model yang lebih "generalis" dan tidak terpaku pada noise data di satu iterasi tertentu, sehingga hasil identifikasi jauh lebih stabil dan tidak fluktuatif.

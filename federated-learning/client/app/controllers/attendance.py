@@ -51,8 +51,17 @@ class AttendanceController:
                 if target_backbone is None: return {"matched": "Error", "confidence": 0, "message": "Model not loaded"}
                 
                 target_backbone.eval()
-                query_embedding_tensor = target_backbone(input_tensor)
-                query_embedding_tensor = torch.nn.functional.normalize(query_embedding_tensor, p=2, dim=1)
+                
+                # --- FLIP TRICK (Alignment dengan Registry) ---
+                # 1. Embedding Citra Asli
+                emb_orig = target_backbone(input_tensor)
+                
+                # 2. Embedding Citra Mirror (Horizontal Flip)
+                face_flipped = torch.flip(input_tensor, dims=[3])
+                emb_mirror = target_backbone(face_flipped)
+                
+                # 3. Rata-rata dan Normalisasi
+                query_embedding_tensor = torch.nn.functional.normalize((emb_orig + emb_mirror) / 2, p=2, dim=1)
         except Exception as e:
             print(f"[ERROR] Kegagalan inferensi: {e}")
             return {"matched": "Error", "confidence": 0, "message": str(e)}
@@ -60,20 +69,32 @@ class AttendanceController:
         # Manajemen Cache Identitas
         local_refs = self._get_cached_identities(db)
 
-        # Proses Voting Temporal
-        now = time.time()
-        if now - self.fl_manager.last_face_time > 1.0:
+        # --- LOGIKA TEMPORAL VOTING & CIM (Confident Instant Match) ---
+        # 1. Cek Kemiripan Instant Frame (Tanpa Buffer)
+        query_embedding = query_embedding_tensor.cpu().numpy()[0]
+        user_id_instant, confidence_instant = identify_user_globally(query_embedding, local_refs, threshold=self.fl_manager.inference_threshold)
+        
+        # CIM Bypass: Jika skor sangat tinggi (> 0.85), anggap valid langsung dan reset buffer
+        if confidence_instant > 0.85 and user_id_instant != "Unknown":
+            print(f"[CIM] Instant Match Confident! {user_id_instant} (Sim: {confidence_instant:.4f})")
             self.fl_manager.prediction_buffer.clear()
+            self.fl_manager.prediction_buffer.append(query_embedding_tensor)
+            user_id, confidence = user_id_instant, confidence_instant
+        else:
+            # Jika tidak sangat tinggi, gunakan rata-rata temporal (Normal voting)
+            now = time.time()
+            if now - self.fl_manager.last_face_time > 1.0:
+                self.fl_manager.prediction_buffer.clear()
+                
+            self.fl_manager.prediction_buffer.append(query_embedding_tensor)
+            self.fl_manager.last_face_time = now
             
-        self.fl_manager.prediction_buffer.append(query_embedding_tensor)
-        self.fl_manager.last_face_time = now
-        
-        mean_embedding_tensor = torch.stack(list(self.fl_manager.prediction_buffer)).mean(0)
-        mean_embedding_tensor = torch.nn.functional.normalize(mean_embedding_tensor, p=2, dim=1)
-        mean_embedding = mean_embedding_tensor.cpu().numpy()[0]
-        
-        # Pencocokan identitas dengan threshold produksi
-        user_id, confidence = identify_user_globally(mean_embedding, local_refs, threshold=self.fl_manager.inference_threshold)
+            mean_embedding_tensor = torch.stack(list(self.fl_manager.prediction_buffer)).mean(0)
+            mean_embedding_tensor = torch.nn.functional.normalize(mean_embedding_tensor, p=2, dim=1)
+            mean_embedding = mean_embedding_tensor.cpu().numpy()[0]
+            
+            # Pencocokan identitas dengan threshold produksi
+            user_id, confidence = identify_user_globally(mean_embedding, local_refs, threshold=self.fl_manager.inference_threshold)
         
         # Pencatatan Absensi
         if user_id != "Unknown":
@@ -91,7 +112,7 @@ class AttendanceController:
                 sync_record_to_server, 
                 user_id, user_name, float(confidence), os.getenv("HOSTNAME", "client-1")
             )
-            print(f"[SUCCESS] Terdeteksi (Voted): {user_id} (Sim: {confidence:.4f})")
+            print(f"[SUCCESS] Wajah Terverifikasi: {user_id} (Sim: {confidence:.4f})")
         else:
             if confidence > 0.1: 
                 print(f"[DEBUG] Model v{current_v} | Kecocokan: Unknown | Sim: {confidence:.4f} | Thres: {self.fl_manager.inference_threshold}")
@@ -119,20 +140,21 @@ class AttendanceController:
             input_tensor = image_processor.prepare_for_model(face_tensor).to(self.fl_manager.device)
             with torch.no_grad():
                 target_backbone.eval()
-                query_embedding_tensor = target_backbone(input_tensor)
-                query_embedding_tensor = torch.nn.functional.normalize(query_embedding_tensor, p=2, dim=1)
                 
-            # Temporal Voting
-            now = time.time()
-            if now - self.fl_manager.last_face_time > 1.0:
-                self.fl_manager.prediction_buffer.clear()
-            self.fl_manager.prediction_buffer.append(query_embedding_tensor)
-            self.fl_manager.last_face_time = now
-            
-            mean_embedding_tensor = torch.stack(list(self.fl_manager.prediction_buffer)).mean(0)
-            mean_embedding_tensor = torch.nn.functional.normalize(mean_embedding_tensor, p=2, dim=1)
-            mean_embedding = mean_embedding_tensor.cpu().numpy()[0]
-            
+                # --- FLIP TRICK (Alignment dengan Registry) ---
+                # 1. Embedding Citra Asli
+                emb_orig = target_backbone(input_tensor)
+                
+                # 2. Embedding Citra Mirror (Horizontal Flip)
+                face_flipped = torch.flip(input_tensor, dims=[3])
+                emb_mirror = target_backbone(face_flipped)
+                
+                # 3. Rata-rata dan Normalisasi
+                query_embedding_tensor = torch.nn.functional.normalize((emb_orig + emb_mirror) / 2, p=2, dim=1)
+                
+            # --- LOGIKA TEMPORAL VOTING & CIM (Confident Instant Match) ---
+            # 1. Cek Kemiripan Instant Frame
+            query_embedding_np = query_embedding_tensor.cpu().numpy()[0]
             local_refs = getattr(self.fl_manager, 'cached_refs', {})
             if not local_refs:
                 from app.db.db import SessionLocal
@@ -142,14 +164,35 @@ class AttendanceController:
                 finally:
                     db.close()
 
-            matched, confidence = identify_user_globally(
-                mean_embedding, 
-                local_refs, 
-                threshold=self.fl_manager.inference_threshold
-            )
+            user_id_instant, confidence_instant = identify_user_globally(query_embedding_np, local_refs, threshold=self.fl_manager.inference_threshold)
+
+            # CIM Bypass: Jika skor sangat tinggi (> 0.85), anggap valid langsung dan reset buffer
+            if confidence_instant > 0.85 and user_id_instant != "Unknown":
+                print(f"[CIM] Instant Match Confident! {user_id_instant} (Sim: {confidence_instant:.4f})")
+                self.fl_manager.prediction_buffer.clear()
+                self.fl_manager.prediction_buffer.append(query_embedding_tensor)
+                matched, confidence = user_id_instant, confidence_instant
+            else:
+                # Temporal Voting (Normal)
+                now = time.time()
+                if now - self.fl_manager.last_face_time > 1.0:
+                    self.fl_manager.prediction_buffer.clear()
+                self.fl_manager.prediction_buffer.append(query_embedding_tensor)
+                self.fl_manager.last_face_time = now
+                
+                mean_embedding_tensor = torch.stack(list(self.fl_manager.prediction_buffer)).mean(0)
+                mean_embedding_tensor = torch.nn.functional.normalize(mean_embedding_tensor, p=2, dim=1)
+                mean_embedding = mean_embedding_tensor.cpu().numpy()[0]
+                
+                matched, confidence = identify_user_globally(
+                    mean_embedding, 
+                    local_refs, 
+                    threshold=self.fl_manager.inference_threshold
+                )
+            
             return matched, float(confidence)
         except Exception as e:
-            print(f"[ERROR] Kegagalan pengenalan wajah: {e}")
+            print(f"[ERROR] Kegagalan sistem pengenalan wajah: {e}")
             return "Unknown", 0.0
 
     def _get_cached_identities(self, db):

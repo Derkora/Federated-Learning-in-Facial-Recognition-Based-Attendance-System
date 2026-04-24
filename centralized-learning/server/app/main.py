@@ -107,7 +107,12 @@ async def get_attendance_recap(dbs: Session = Depends(db.get_db)):
 # Pemeriksaan Kesehatan (Health Check) bagi Terminal
 @app.get("/ping")
 async def health_check():
-    return {"status": "online", "upload_requested": cl_manager.upload_requested, "model_version": cl_manager.model_version}
+    return {
+        "status": "online", 
+        "upload_requested": cl_manager.upload_requested, 
+        "model_version": cl_manager.model_version,
+        "inference_threshold": cl_manager.inference_threshold
+    }
 
 # Pendaftaran Terminal (Client) Baru
 @app.post("/register-client", response_model=schemas.ClientResponse)

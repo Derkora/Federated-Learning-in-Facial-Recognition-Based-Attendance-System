@@ -14,9 +14,8 @@ class ImageProcessor:
         # MTCNN akan dimuat secara malas (Lazy Load) untuk menghemat RAM saat standby
         self._mtcnn = None
         
-        # Normalisasi MobileFaceNet (True Standard): (x - 127.5) / 127.5
-        # Jika menggunakan ToTensor() [0, 1], maka mean=0.5, std=0.5 untuk hasil [-1, 1]
-        self.normalize = T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        # Normalisasi MobileFaceNet (True Standard Creator Alignment): std=128/255 = 0.50196
+        self.normalize = T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.50196, 0.50196, 0.50196])
     
     @property
     def mtcnn(self):

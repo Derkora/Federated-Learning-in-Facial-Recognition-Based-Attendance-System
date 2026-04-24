@@ -11,16 +11,24 @@ DEVICE = torch.device('cpu')
 
 class ImageProcessor:
     def __init__(self):
-        self.mtcnn = MTCNN(
-            image_size=112, 
-            margin=20, 
-            keep_all=False, 
-            device=DEVICE, 
-            post_process=False
-        )
+        # MTCNN akan dimuat secara malas (Lazy Load) untuk menghemat RAM saat standby
+        self._mtcnn = None
         
-        # Normalisasi MobileFaceNet
-        self.normalize = T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        # Normalisasi MobileFaceNet (True Standard Creator Alignment): std=128/255 = 0.50196
+        self.normalize = T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.50196, 0.50196, 0.50196])
+
+    @property
+    def mtcnn(self):
+        if self._mtcnn is None:
+            print("[INFO] Loading MTCNN detector to RAM...")
+            self._mtcnn = MTCNN(
+                image_size=112, 
+                margin=20, 
+                keep_all=False, 
+                device=DEVICE, 
+                post_process=False 
+            )
+        return self._mtcnn
 
     def get_detector(self):
         return self.mtcnn
@@ -74,7 +82,7 @@ class ImageProcessor:
             
             # 2. Resizing ke Portrait 96x112 menggunakan metode BILINEAR
             face_img = img_crop.resize((96, 112), Image.BILINEAR)
-            print(f"[PREPROCESS] Wajah telah di-crop dan di-resize ke 96x112.") 
+            print(f"[PREPROCESS] Wajah terdeteksi, di-crop, dan di-resize ke 96x112 (Portrait).") 
             
             return face_img
         except Exception as e:

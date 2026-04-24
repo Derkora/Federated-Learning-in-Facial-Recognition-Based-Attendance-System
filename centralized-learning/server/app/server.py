@@ -36,7 +36,7 @@ class CentralizedServerManager:
         # Default dari config
         self.default_epochs = TRAINING_PARAMS["total_epochs"]
         self.default_batch_size = TRAINING_PARAMS["batch_size"]
-        self.inference_threshold = 0.60
+        self.inference_threshold = 0.75
         self.load_settings()
         self._load_persistence()
 

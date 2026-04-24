@@ -160,18 +160,21 @@ class LocalTrainer:
             transforms.Resize((112, 96), interpolation=InterpolationMode.BILINEAR), 
             transforms.RandomHorizontalFlip(),
             transforms.RandomRotation(degrees=15),
-            transforms.ColorJitter(brightness=0.2, contrast=0.2), 
+            transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1), # Diperkuat
+            transforms.RandomGrayscale(p=0.1),
+            transforms.RandomApply([transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0))], p=0.3),
+            transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.2), 
             transforms.ToTensor(),
-            # Normalisasi MobileFaceNet (Standard): (x - 127.5) / 127.5
-            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+            # Normalisasi MobileFaceNet (True Standard Creator Alignment): std=128/255 = 0.50196
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.50196, 0.50196, 0.50196]),
             transforms.RandomErasing(p=0.1)
         ])
         
         self.val_transform = transforms.Compose([
             transforms.Resize((112, 96), interpolation=InterpolationMode.BILINEAR), 
             transforms.ToTensor(),
-            # Normalisasi MobileFaceNet (Standard): (x - 127.5) / 127.5
-            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+            # Normalisasi MobileFaceNet (True Standard Creator Alignment): std=128/255 = 0.50196
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.50196, 0.50196, 0.50196])
         ])
 
     def train(self, epochs=5, lr=0.0001, round_num=0, global_embeddings=None, label_map=None, mu=0.05, lam=0.1):
@@ -195,14 +198,37 @@ class LocalTrainer:
         head_snapshot = copy.deepcopy(self.head.state_dict())
         global_ref = copy.deepcopy(self.backbone.state_dict())
 
-        backbone_params = [p for p in self.backbone.parameters() if p.requires_grad]
-        head_params = list(self.head.parameters())
-        optimizer = torch.optim.Adam([
-            {'params': backbone_params},
-            {'params': head_params}
-        ], lr=lr)
+        # --- SELEKSI PARAMETER UNTUK PER-LAYER WEIGHT DECAY ---
+        # 1. Backbone Params (Decay: 4e-5)
+        backbone_decay = []
+        backbone_no_decay = []
+        for name, param in self.backbone.named_parameters():
+            if not param.requires_grad: continue
+            # PReLU dan Bias tidak boleh kena Weight Decay (Stabilitas)
+            if 'prelu' in name.lower() or 'bias' in name.lower():
+                backbone_no_decay.append(param)
+            else:
+                backbone_decay.append(param)
+
+        # 2. Head Params (Decay: 4e-4 - Lebih kuat untuk klasifikasi)
+        head_decay = []
+        head_no_decay = []
+        for name, param in self.head.named_parameters():
+            if 'bias' in name.lower():
+                head_no_decay.append(param)
+            else:
+                head_decay.append(param)
+
+        # OPTIMIZER: SGD + Nesterov Momentum (Standar Creator MobileFaceNet)
+        optimizer = torch.optim.SGD([
+            {'params': backbone_decay, 'weight_decay': 4e-5},
+            {'params': backbone_no_decay, 'weight_decay': 0.0},
+            {'params': head_decay, 'weight_decay': 4e-4},
+            {'params': head_no_decay, 'weight_decay': 0.0}
+        ], lr=lr, momentum=0.9, nesterov=True)
         
-        criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+        # LOSS: Pure CrossEntropy (Tanpa Label Smoothing agar margin tegas)
+        criterion = nn.CrossEntropyLoss()
 
         print(f"[TRAINER] Round {round_num}: Training {len(dataset)} data untuk {epochs} epochs")
         total_loss, correct, total = 0.0, 0, 0
@@ -297,11 +323,18 @@ class LocalTrainer:
                 
                 if img_mask.any():
                     img_input = imgs[img_mask]
+                    
+                    # --- FLIP TRICK (Alignment dengan Registry & Live Inference) ---
+                    # Menghitung rata-rata embedding asli dan mirror untuk validasi yang lebih akurat
                     if img_input.size(0) == 1:
-                        features_fixed = self.backbone(torch.cat([img_input, img_input], dim=0))
-                        features[img_mask] = features_fixed[0:1]
+                        # Case single image (MTCNN quirks)
+                        f_orig = self.backbone(torch.cat([img_input, img_input], dim=0))[0:1]
+                        f_flip = self.backbone(torch.cat([torch.flip(img_input, [3]), torch.flip(img_input, [3])], dim=0))[0:1]
                     else:
-                        features[img_mask] = self.backbone(img_input)
+                        f_orig = self.backbone(img_input)
+                        f_flip = self.backbone(torch.flip(img_input, [3]))
+                    
+                    features[img_mask] = torch.nn.functional.normalize(f_orig + f_flip, p=2, dim=1)
                         
                 if emb_mask.any():
                     features[emb_mask] = embs[emb_mask]
@@ -418,11 +451,17 @@ class LocalTrainer:
                 img_mask = ~is_embedding
                 if not img_mask.any(): continue
                 imgs_batch = imgs[img_mask].to(self.device)
+                # --- FLIP TRICK (Mandatory for Centroid Stability) ---
                 if imgs_batch.size(0) == 1:
-                    features = self.backbone(torch.cat([imgs_batch, imgs_batch]))[0:1]
+                    f_orig = self.backbone(torch.cat([imgs_batch, imgs_batch]))[0:1]
+                    f_flip = self.backbone(torch.cat([torch.flip(imgs_batch, [3]), torch.flip(imgs_batch, [3])]))[0:1]
                 else:
-                    features = self.backbone(imgs_batch)
-                features = F.normalize(features, p=2, dim=1)
+                    f_orig = self.backbone(imgs_batch)
+                    f_flip = self.backbone(torch.flip(imgs_batch, [3]))
+                
+                # Rata-rata dan normalisasi unit vector
+                features = F.normalize(f_orig + f_flip, p=2, dim=1)
+                
                 batch_labels = labels[img_mask]
                 for i in range(len(batch_labels)):
                     nrp = dataset.id_map[batch_labels[i].item()]

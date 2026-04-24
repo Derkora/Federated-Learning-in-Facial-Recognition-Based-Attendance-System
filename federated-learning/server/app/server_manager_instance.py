@@ -3,6 +3,8 @@ import os
 import io
 import torch
 import json
+import math
+import copy
 import tempfile
 import shutil
 import numpy as np
@@ -47,6 +49,7 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
         self.session_id = session_id
         self.manager = manager
         self.target_version = target_version
+        self.snapshots = [] # Untuk SWA/Snapshot Averaging
 
     def aggregate_fit(self, server_round: int, results: list, failures: list):
         print(f"\n[INFO] Ronde {server_round} | Ringkasan Performa")
@@ -149,10 +152,33 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                         with tempfile.NamedTemporaryFile(delete=False, dir="data") as tmp:
                             torch.save(sd, tmp.name)
                             shutil.move(tmp.name, "data/backbone.pth")
-                            
                     except Exception as e:
-                        print(f"[ERROR] Gagal menyimpan file model: {e}")
+                        print(f"[ERROR] Gagal menyimpan file murni/BN: {e}")
+
+                    # --- SWA / SNAPSHOT AVERAGING ---
+                    if server_round >= TRAINING_PARAMS.get("swa_start_round", 8):
+                        print(f"[SWA] Ronde {server_round}: Menyimpan snapshot backbone untuk perataan akhir.")
+                        self.snapshots.append(copy.deepcopy(sd))
+
+                    # Jika Ronde Terakhir, lakukan perataan (Averaging)
+                    if server_round == self.manager.default_rounds and len(self.snapshots) > 1:
+                        print(f"[SWA] Melakukan Snapshot Averaging dari {len(self.snapshots)} ronde terakhir...")
+                        swa_sd = copy.deepcopy(self.snapshots[0])
+                        for key in swa_sd:
+                            for i in range(1, len(self.snapshots)):
+                                swa_sd[key] += self.snapshots[i][key]
+                            swa_sd[key] = torch.div(swa_sd[key], len(self.snapshots))
                         
+                        # Simpan hasil SWA sebagai model final
+                        buf_swa = io.BytesIO()
+                        torch.save(swa_sd, buf_swa)
+                        global_model.weights = buf_swa.getvalue()
+                        db.commit()
+                        
+                        torch.save(swa_sd, "data/backbone.pth")
+                        print("[SWA] Model final berhasil di-rata-ratakan (Snapshot Averaged). Akurasi stabil.")
+                        self.manager.update_logs("Snapshot Averaging (SWA) berhasil diterapkan pada model final.")
+
                 except Exception as e:
                     print(f"[ERROR] Gagal menyimpan ronde {server_round} ke DB: {e}")
                     db.rollback()
@@ -216,7 +242,7 @@ class FLServerManager:
         self.ready_clients = set() 
         self.received_data = []
         self.discovery_clients = set()
-        self.inference_threshold = 0.50
+        self.inference_threshold = 0.75
         self.metrics = {
             "accuracy": 0, "loss": 0, 
             "backbone_sync_mb": 0, "registry_sync_mb": 0,
@@ -376,13 +402,29 @@ class FLServerManager:
             self.metrics["convergence_round"] = round_num
 
     def _get_lr_for_round(self, server_round):
-        # Penyelarasan LR Schedule dari konfigurasi terpusat
-        schedule = TRAINING_PARAMS["lr_schedule"]
-        lr = 1e-4 # Nilai default
-        for threshold in sorted(schedule.keys()):
-            if server_round >= threshold:
-                lr = schedule[threshold]
-        return lr
+        # LR Schedule (Cosine vs Step)
+        schedule_type = TRAINING_PARAMS.get("lr_schedule", "step")
+        
+        if schedule_type == "cosine":
+            initial_lr = TRAINING_PARAMS.get("initial_lr", 0.1)
+            min_lr = TRAINING_PARAMS.get("min_lr", 1e-4)
+            total_rounds = self.default_rounds # Menggunakan settings saat ini
+            
+            # Cosine Annealing: min + 0.5*(initial-min)*(1 + cos(pi * round / total))
+            # Round di-offset 1 agar ronde 1 dimulai dari initial_lr
+            lr = min_lr + 0.5 * (initial_lr - min_lr) * (1 + math.cos(math.pi * (server_round-1) / total_rounds))
+            return lr
+        else:
+            # Fallback ke Step-LR (Original logic)
+            schedule = {1: 0.1, 5: 0.01, 8: 0.001} # Default jika tidak ada di config
+            if isinstance(TRAINING_PARAMS.get("lr_schedule"), dict):
+                schedule = TRAINING_PARAMS["lr_schedule"]
+            
+            lr = 0.1
+            for threshold in sorted(schedule.keys()):
+                if server_round >= threshold:
+                    lr = schedule[threshold]
+            return lr
 
     def get_status(self, db=None):
         attendance_count = 0

@@ -1,8 +1,10 @@
 import os
-from datetime import datetime
+import datetime
 import time
 import shutil
 import random
+import math
+import copy
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -129,13 +131,13 @@ class TrainingController:
             return {"status": "error", "message": str(e)}
 
     def _get_lr(self, epoch):
-        # Penyelarasan LR Schedule dari konfigurasi terpusat
-        schedule = TRAINING_PARAMS["lr_schedule"]
-        # Ambil LR berdasarkan epoch tertinggi yang sudah dilewati
-        lr = 1e-4 # Default
-        for threshold in sorted(schedule.keys()):
-            if epoch >= threshold:
-                lr = schedule[threshold]
+        # LR Schedule Cosine Annealing (Smooth Decay)
+        initial_lr = TRAINING_PARAMS.get("initial_lr", 0.1)
+        min_lr = TRAINING_PARAMS.get("min_lr", 1e-4)
+        total_epochs = TRAINING_PARAMS.get("total_epochs", 20)
+        
+        # Formula: min_lr + 0.5 * (initial_lr - min_lr) * (1 + cos(pi * epoch / total_epochs))
+        lr = min_lr + 0.5 * (initial_lr - min_lr) * (1 + math.cos(math.pi * epoch / total_epochs))
         return lr
 
     def train_model(self, epochs=None):
@@ -161,10 +163,12 @@ class TrainingController:
                 transforms.Resize((112, 96)),
                 transforms.RandomHorizontalFlip(),
                 transforms.RandomRotation(degrees=15),
-                transforms.ColorJitter(brightness=0.2, contrast=0.2),
+                transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1), # Diperkuat
+                transforms.RandomGrayscale(p=0.1),
+                transforms.RandomApply([transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0))], p=0.3),
+                transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.2),
                 transforms.ToTensor(),
-                # Normalisasi MobileFaceNet (Standard): (x - 127.5) / 127.5
-                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.50196, 0.50196, 0.50196]),
                 transforms.RandomErasing(p=0.1)
             ])
             full_dataset = datasets.ImageFolder(PROCESSED_DATA, transform=transform)
@@ -189,16 +193,34 @@ class TrainingController:
             
             metric_fc = ArcMarginProduct(128, num_classes).to(DEVICE)
             
-            # 3. Adam Optimizer dengan Label Smoothing dari Config
-            smoothing = TRAINING_PARAMS["label_smoothing"]
-            criterion = nn.CrossEntropyLoss(label_smoothing=smoothing)
+            # 3. SGD Optimizer dengan Per-Layer Weight Decay (Creator Standard)
+            # - PReLU: weight_decay = 0
+            # - Linear/Head: weight_decay = 4e-4
+            # - Lainnya/Backbone: weight_decay = 4e-5
+            criterion = nn.CrossEntropyLoss() # Gunakan Pure CrossEntropy (Tanpa Label Smoothing)
             
-            optimizer = optim.Adam([
-                {'params': model.parameters()}, 
-                {'params': metric_fc.parameters()}
-            ], lr=self._get_lr(0))
+            # Pengelompokan Parameter
+            ignored_params = list(map(id, model.linear1.parameters()))
+            ignored_params += list(map(id, metric_fc.parameters()))
+            
+            prelu_params = []
+            for m in model.modules():
+                if isinstance(m, nn.PReLU):
+                    ignored_params += list(map(id, m.parameters()))
+                    prelu_params += m.parameters()
+            
+            base_params = filter(lambda p: id(p) not in ignored_params, model.parameters())
+            
+            optimizer = optim.SGD([
+                {'params': base_params, 'weight_decay': 4e-5},
+                {'params': model.linear1.parameters(), 'weight_decay': 4e-4},
+                {'params': metric_fc.parameters(), 'weight_decay': 4e-4},
+                {'params': prelu_params, 'weight_decay': 0.0}
+            ], lr=self._get_lr(0), momentum=0.9, nesterov=True)
             
             epoch_history = []
+            swa_snapshots = []
+            swa_start = TRAINING_PARAMS.get("swa_start_epoch", 15)
             final_acc = 0
             start_time = time.time()
             
@@ -245,13 +267,17 @@ class TrainingController:
                     for img, label in val_loader:
                         img, label = img.to(DEVICE), label.to(DEVICE)
                         
-                        # Generate features
-                        features = model(img)
-                        # Hitung Logits Murni (Cosine Similarity * Scale) untuk Akurasi
-                        logits = F.linear(F.normalize(features), F.normalize(metric_fc.weight)) * metric_fc.s
+                        # Flip Trick: Ambil rata-rata embedding asli dan mirror
+                        features_orig = model(img)
+                        features_flip = model(torch.flip(img, [3]))
                         
-                        # Hitung Loss menggunakan ArcFace Margin
-                        output = metric_fc(features, label)
+                        features = torch.nn.functional.normalize(features_orig + features_flip, p=2, dim=1)
+                        
+                        # Hitung Logits Murni (Cosine Similarity * Scale) untuk Akurasi
+                        logits = F.linear(features, F.normalize(metric_fc.weight)) * metric_fc.s
+                        
+                        # Hitung Loss menggunakan ArcFace Margin (Hanya pada fitur asli untuk validasi loss)
+                        output = metric_fc(features_orig, label)
                         loss = criterion(output, label)
                         
                         val_loss += loss.item()
@@ -276,6 +302,25 @@ class TrainingController:
                 print(f"[INFO] {msg}", flush=True)
                 cl_manager.update_logs(msg)
                 final_acc = val_acc 
+                
+                # SWA Snapshot Collection (Epoch 15-20)
+                if epoch >= swa_start:
+                    print(f"[SWA] Menyimpan snapshot dari epoch {epoch+1}...", flush=True)
+                    swa_snapshots.append(copy.deepcopy(model.state_dict()))
+            
+            # --- STOCHASTIC WEIGHT AVERAGING (SWA) EXECUTION ---
+            if len(swa_snapshots) > 0:
+                print(f"[SWA] Melakukan rata-rata bobot dari {len(swa_snapshots)} snapshot...", flush=True)
+                swa_state_dict = copy.deepcopy(swa_snapshots[0])
+                for key in swa_state_dict:
+                    # Rata-rata per-layer bobot dari semua snapshot
+                    for i in range(1, len(swa_snapshots)):
+                        swa_state_dict[key] += swa_snapshots[i][key]
+                    swa_state_dict[key] = torch.div(swa_state_dict[key], len(swa_snapshots))
+                
+                model.load_state_dict(swa_state_dict)
+                print("[SWA] Bobot model berhasil dirata-ratakan. Stabilitas & Generalisasi meningkat.", flush=True)
+                cl_manager.update_logs("Stochastic Weight Averaging (SWA) berhasil diterapkan pada model akhir.")
             
             torch.save(model.state_dict(), MODEL_PATH)
             cl_manager.update_logs("Pelatihan selesai. Model berhasil disimpan.")
@@ -307,7 +352,7 @@ class TrainingController:
             # --- PERSISTENSI VERSI (Simpan ke DB sebelum generate registry) ---
             if dbs:
                 try:
-                    new_v = models.ModelVersion(notes=f"Dibuat pada {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                    new_v = models.ModelVersion(notes=f"Dibuat pada {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                     dbs.add(new_v)
                     dbs.commit()
                     dbs.refresh(new_v)

@@ -8,22 +8,22 @@ Sistem memastikan kualitas data lokal sebelum masuk ke fase pelatihan.
 - **MTCNN Face Cropping**: Wajah dipotong secara presisi dengan margin tertentu untuk menghilangkan porsi latar belakang yang tidak relevan.
 - **112x96 Dimensional Alignment**: Hasil potongan wajah diubah ukurannya ke dimensi **112x96** (Portrait). Standarisasi dimensi ini sangat krusial agar sinkron dengan input arsitektur MobileFaceNet.
 
-## Tahap 2: Inisialisasi Arsitektur (pFedFace - Hybrid)
-Struktur ini memisahkan pengetahuan global dan identitas lokal.
-- **Global Backbone (MobileFaceNet)**: Ekstraktor fitur universal yang dikirim ke server untuk agregasi menggunakan algoritma FedProx.
-- **Global BN Merging**: Server menggabungkan statistik Batch Normalization dari seluruh terminal. Statistik ini kemudian digunakan oleh semua terminal untuk menstabilkan ekstraksi fitur.
-- **Local Head (ArcMargin Product)**: Komponen lokal yang menyimpan pengetahuan spesifik tentang identitas mahasiswa di terminal tersebut, dilengkapi fitur Weight Preservation untuk menjaga data lama.
+## Tahap 2: Inisialisasi Arsitektur & Optimasi (pFedFace - Hybrid)
+Struktur ini memisahkan pengetahuan global dan identitas lokal untuk akurasi maksimal.
+- **Global Backbone (MobileFaceNet)**: Ekstraktor fitur universal yang menggunakan **SGD with Nesterov Momentum** dan per-layer weight decay untuk mempelajari struktur wajah secara general.
+- **Global BN Merging**: Server menggabungkan statistik Batch Normalization (mean/variance) dari seluruh klien untuk menstabilkan ekstraksi fitur terhadap variasi pencahayaan antar terminal.
+- **Local Head (ArcMargin Product)**: Komponen lokal yang menyimpan pengetahuan spesifik tentang identitas mahasiswa di terminal tersebut, memastikan pemisahan antar mahasiswa (class separation) sangat tajam.
 
 ## Tahap 3: Siklus Federated & Registry Generation
 Sistem berjalan dalam fase terkoordinasi untuk membangun "World-Knowledge" yang aman:
 1.  **Phase Discovery**: Pendaftaran ID Mahasiswa ke Global Map di server untuk sinkronisasi NRP dan Nama.
 2.  **Phase Preprocessing**: Ekstraksi wajah secara lokal di semua terminal secara serentak.
-3.  **Phase Training (Flower)**: Pelatihan paralel menggunakan FedProx ($\mu=0.05$). Terminal melakukan Knowledge Sharing dengan menyertakan centroid wajah mahasiswa dari terminal lain.
-4.  **Phase Registry Generation**: Pembuatan database identitas universal. Statistik **Global BN disinkronkan terlebih dahulu** sebelum perhitungan centroid dilakukan untuk mencegah drift fitur.
+3.  **Phase Training (Flower)**: Pelatihan paralel menggunakan **FedProx** ($\mu=0.05$) dan **Cosine Annealing LR**. Setiap terminal melakukan pelatihan lokal pada data pribadinya tanpa mengirimkan citra mentah ke server.
+4.  **Snapshot Averaging (SWA Variant)**: Server menyimpan snapshot model dari ronde-ronde terakhir (misalnya ronde 8-10) dan melakukan rata-rata bobot (weight averaging). Hal ini menghasilkan model global yang jauh lebih stabil dan tahan terhadap fluktuasi data antar ronde.
+5.  **Phase Registry Generation**: Pembuatan database identitas universal. Statistik **Global BN disinkronkan terlebih dahulu** sebelum perhitungan centroid dilakukan untuk memastikan ekstraksi fitur yang konsisten dan akurat.
 
-## Tahap 4: Inferensi & Auto-Sync
-Setelah pelatihan, sistem siap digunakan untuk absensi real-time:
-- **Automatic Version Sync**: Background heartbeat secara otomatis mendeteksi jika ada versi model baru di server (berdasarkan database PostgreSQL).
-- **Proactive Registry Refresh**: Terminal secara otomatis melakukan refresh embedding lokal jika mendeteksi lonjakan versi model global, memastikan biometric data selalu selaras dengan backbone terbaru.
-- **Threshold 0.60+**: Ambang batas ditingkatkan menjadi **0.60** guna memastikan presisi tinggi dan meminimalkan False Positives.
-- **Temporal Voting**: Hasil deteksi dirata-ratakan dari buffer 10 frame untuk stabilitas prediksi.
+## Tahap 4: Inferensi & Advanced Matching
+Setelah pelatihan, sistem siap digunakan untuk absensi real-time dengan teknik canggih:
+- **Flip Trick Evaluation**: Meningkatkan stabilitas skor dengan merata-ratakan embedding citra asli dan citra mirror (horizontal flip) sebelum pencocokan identitas.
+- **Confident Instant Match (CIM)**: Menghilangkan delay "pemanasan". Jika skor kemiripan > 0.85, sistem langsung memverifikasi wajah tanpa menunggu buffer temporal.
+- **Temporal Voting (0.75+ Threshold)**: Jika skor di antara 0.75 - 0.85, sistem menggunakan buffer 5 frame untuk memastikan stabilitas prediksi sebelum dicatat dalam database kehadiran.

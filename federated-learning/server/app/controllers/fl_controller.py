@@ -25,7 +25,7 @@ class FLController:
     def __init__(self, fl_manager):
         self.fl_manager = fl_manager
 
-    def start_lifecycle(self, rounds: int, min_clients: int, epochs: int = None):
+    def start_lifecycle(self, rounds: int = 10, min_clients: int = 2, epochs: int = 1):
         # Memulai siklus lengkap FL dalam satu tombol.
         self.fl_manager.start_time = time.time()
         # Proses ini berjalan di thread terpisah agar tidak memblokir dashboard.

@@ -12,26 +12,26 @@ Proses penyiapan data yang dilakukan di sisi terminal sebelum pengiriman ke serv
 
 ---
 
-## Tahap 2: Arsitektur Model (MobileFaceNet - Global)
-Berbeda dengan Federated Learning, sistem terpusat ini melatih satu model global yang digunakan oleh seluruh terminal.
-- **Global Backbone**: Menggunakan arsitektur MobileFaceNet (128-dim) yang dilatih secara serentak di server pusat.
-- **Shared Parameters**: Semua terminal menggunakan bobot yang identik yang disinkronisasi dari server pusat.
-- **Loss Function (ArcMargin)**: Menggunakan ArcMargin Product pada server untuk membedakan identitas mahasiswa dengan margin yang ketat.
+## Tahap 2: Arsitektur Model & Optimasi (Accuracy Boost)
+- **MobileFaceNet Backbone**: Menggunakan arsitektur 128-dimensi yang ringan namun tangguh untuk perangkat edge.
+- **SGD with Nesterov Momentum**: Beralih dari Adam ke SGD dengan momentum Nesterov (0.9) untuk konvergensi yang lebih stabil dan generalisasi fitur yang lebih tajam.
+- **Per-Layer Weight Decay**: Menerapkan bobot pinalti yang berbeda (Backbone: 4e-5, Head: 4e-4) untuk mencegah overfitting pada dataset yang kecil.
+- **ArcMargin Product**: Margin denda (penalty) digunakan untuk mendorong pemisahan antar identitas mahasiswa secara maksimal di ruang laten.
 
 ---
 
 ## Tahap 3: Siklus Pelatihan Terpusat & Model Versioning
 Alur kerja yang memindahkan dataset wajah dari terminal ke server pusat dan mengelola versi model:
 1.  **Fase Import Data**: Terminal mengemas folder `raw_data/students` menjadi berkas ZIP (`data.zip`) dan mengirimkannya melalui endpoint `/upload-bulk-zip`.
-2.  **Centralized Training**: Server mengekstrak data dan melatih model MobileFaceNet selama 20 epoch dengan learning rate schedule yang teroptimasi (1e-4 ke 1e-5).
-3.  **Model Version Persistence**: Setelah training, server menyimpan catatan versi model baru ke dalam database PostgreSQL. Hal ini memastikan nomor versi model (misalnya v1, v2) tetap terjaga meskipun container server dijalankan ulang.
-4.  **Reference Generation**: Server menghasilkan registri embedding (`reference_embeddings.pth`) yang berisi centroid dari seluruh data mahasiswa yang telah dikumpulkan.
+2.  **Centralized Training**: Server mengekstrak data dan melatih model selama 20 epoch menggunakan jadwal **Cosine Annealing Learning Rate** untuk transisi bobot yang mulus.
+3.  **Stochastic Weight Averaging (SWA)**: Untuk meningkatkan stabilitas fitur, sistem melakukan snapshot model pada 5 epoch terakhir dan merata-ratakannya menjadi satu model final yang lebih robust terhadap noise citra.
+4.  **Model Version Persistence**: Setelah training, server menyimpan catatan versi model baru ke dalam database PostgreSQL. Hal ini memastikan nomor versi model (misalnya v1, v2) tetap terjaga meskipun container server dijalankan ulang.
+5.  **Reference Generation**: Server menghasilkan registri embedding (`reference_embeddings.pth`) yang berisi centroid dari seluruh data mahasiswa yang telah dikumpulkan.
 
 ---
 
-## Tahap 4: Inferensi & Cosine Similarity
-Setelah model disinkronisasi, terminal melakukan pengenalan real-time:
-- **Registry Synchronization**: Terminal mengunduh bobot model (`global_model.pth`) dan registri embedding terbaru dari server.
-- **Cosine Similarity Matching**: Perbandingan dilakukan menggunakan skor Cosine Similarity dengan normalisasi L2 pada query dan reference embedding.
-- **Threshold 0.60+**: Ambang batas kemiripan ditetapkan pada **0.60** untuk menyeimbangkan antara tingkat akurasi (True Positives) dan keamanan (False Positives).
-- **Temporal Voting**: Menggunakan buffer 10 frame untuk menstabilkan prediksi wajah di depan kamera.
+## Tahap 4: Inferensi & Advanced Matching
+Setelah model disinkronisasi, terminal melakukan pengenalan real-time dengan teknik tingkat lanjut:
+- **Flip Trick Evaluation**: Meningkatkan stabilitas skor dengan merata-ratakan embedding citra asli dan citra mirror (horizontal flip) sebelum pencocokan.
+- **Confident Instant Match (CIM)**: Menghilangkan "pemanasan" kamera. Jika skor kemiripan > 0.85, sistem langsung memberikan hasil identifikasi tanpa menunggu buffer temporal.
+- **Temporal Voting (0.75+ Threshold)**: Jika skor di bawah 0.85 namun di atas 0.75, sistem menggunakan buffer 5 frame untuk memastikan stabilitas prediksi sebelum dicatat sebagai kehadiran.

@@ -16,16 +16,16 @@ REF_PATH = os.path.join(MODEL_DIR, "reference_embeddings.pth")
 PRETRAINED_PATH = os.path.join(MODEL_DIR, "global_model_v0.pth")
 EMISSIONS_DIR = os.path.join(DATA_ROOT, "emissions")
 
-# Parameter Pelatihan (Penyelarasan dengan FL)
+# Parameter Pelatihan (Penyelarasan dengan Optimized SGD Strategy)
 TRAINING_PARAMS = {
     "total_epochs": 20,
     "batch_size": 32,
-    "label_smoothing": 0.1,
-    "lr_schedule": {
-        0: 1e-4,   # Epoch 1-10
-        10: 5e-5,  # Epoch 11-15
-        15: 1e-5   # Epoch 16-20
-    }
+    "label_smoothing": 0.0, # Pure CrossEntropy for better margin expansion
+    "lr_schedule": "cosine", # Diganti ke Cosine Annealing
+    "initial_lr": 0.1,
+    "min_lr": 1e-4,
+    "swa_start_epoch": 15,    # SWA Aktif di 5 epoch terakhir
+    "swa_lr": 0.01
 }
 
 # Parameter Ekonomi & Perhitungan Biaya

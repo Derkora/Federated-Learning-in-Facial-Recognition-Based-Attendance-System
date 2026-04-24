@@ -131,7 +131,7 @@ class FLClientManager:
         self.is_camera_running = False
         
         # Ambang Batas Inferensi (Dinamis dari Server)
-        self.inference_threshold = 0.50
+        self.inference_threshold = 0.75
 
     def _load_identity(self):
         """Memuat atau membuat identitas unik client yang tersimpan di volume data."""
@@ -352,6 +352,8 @@ class FLClientManager:
             # 3. Invalidate Cache Identitas & RAM Cleanup
             if hasattr(self, 'cached_refs'):
                 self.cached_refs = {}
+            if hasattr(self, 'prediction_buffer'):
+                self.prediction_buffer.clear()
             self.last_cache_update = 0
             gc.collect()
             
@@ -748,8 +750,13 @@ class FLClientManager:
                 
                 with torch.no_grad():
                     self.backbone.eval()
-                    embedding_tensor = self.backbone(input_tensor)
-                    embedding_tensor = torch.nn.functional.normalize(embedding_tensor, p=2, dim=1)
+                    # --- FLIP TRICK (Alignment dengan Inferensi) ---
+                    emb_orig = self.backbone(input_tensor)
+                    input_flipped = torch.flip(input_tensor, dims=[3])
+                    emb_mirror = self.backbone(input_flipped)
+                    
+                    # Gabungkan dan Normalisasi
+                    embedding_tensor = torch.nn.functional.normalize((emb_orig + emb_mirror) / 2, p=2, dim=1)
                     embedding_np = embedding_tensor.cpu().numpy()[0]
                     
                 encrypted_data, iv = encryptor.encrypt_embedding(embedding_np)

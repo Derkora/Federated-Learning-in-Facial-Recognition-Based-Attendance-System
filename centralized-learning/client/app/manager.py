@@ -50,7 +50,7 @@ class CLClientManager:
         self.latest_frame = None
         self.latest_result = {"matched": "Standby", "confidence": 0, "latency_ms": 0, "is_virtual": False}
         self.is_camera_running = False
-        self.threshold = 0.60
+        self.threshold = 0.75
 
     def _load_identity(self):
         """Memuat atau membuat identitas unik client yang tersimpan di volume data."""
@@ -270,7 +270,7 @@ class CLClientManager:
                     if res.status_code == 200:
                         server_info = res.json()
                         server_version = server_info.get("model_version", 0)
-                        server_threshold = server_info.get("inference_threshold", 0.50)
+                        server_threshold = server_info.get("inference_threshold", 0.75)
                         upload_requested = server_info.get("upload_requested", False)
                         
                         # Sinkronisasi threshold

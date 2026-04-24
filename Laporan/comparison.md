@@ -18,15 +18,16 @@ Untuk memastikan validitas perbandingan, kedua sistem mengikuti konfigurasi pela
 | :--- | :--- | :--- | :--- |
 | **Arsitektur Backbone** | MobileFaceNet (128-dim) | MobileFaceNet (128-dim) | Identik untuk validitas fitur. |
 | **Loss Function** | ArcMarginProduct | ArcMarginProduct | Standar pengenalan wajah modern. |
-| **Optimizer** | Adam | Adam | Konsistensi dalam pembaruan bobot. |
-| **Learning Rate (LR)** | 1e-4 (E1-10), 5e-5 (E11-15), 1e-5 (E16-20) | 1e-4 (R1-5), 5e-5 (R6-8), 1e-5 (R9-10) | Menghindari bias kecepatan belajar. |
-| **Total Iterasi Data** | 20 Epoch | (10 Ronde x 2 Epoch) = 20 Iterasi | Frekuensi melihat data yang setara. |
-| **Batch Size** | 32 (Total) | 16 (per klien) = 32 (Total) | Beban gradien yang setara. |
+| **Optimizer** | **SGD (Nesterov)** | **SGD (Nesterov)** | Akurasi konvergensi lebih tajam. |
+| **Learning Rate (LR)** | Cosine Annealing (0.1 -> 1e-4) | Cosine Annealing (0.1 -> 1e-4) | Penurunan LR yang lebih mulus. |
+| **Averaging Strategy** | **SWA** (Last 5 Epochs) | **Snapshot Averaging** (Last 3 Rounds) | Stabilitas fitur & robustness. |
+| **Total Iterasi Data** | 20 Epoch | (10 Ronde x 2 Epoch) = 20 Iterasi | Beban latihan yang setara. |
+| **Batch Size** | 32 (Total) | 16 (per klien) = 32 (Total) | Gradien stochastic yang seimbang. |
 | **Kualitas Input** | Top 50 (Laplacian Var) | Top 50 (Laplacian Var) | Standar kualitas input yang sama. |
-| **Resolusi Input** | 112 x 96 (Portrait) | 112 x 96 (Portrait) | Tanpa distorsi aspek rasio. |
-| **Engine Inferensi** | **Full PyTorch (CPU)** | **Full PyTorch (CPU)** | Migrasi dari ONNX demi stabilitas. |
-| **Threshold** | 0.60 | 0.60 | Ambang batas kemiripan yang selaras. |
-| **Sync Registry** | Centroid Embedding | Centroid Embedding | Metode pencocokan identitas yang sama. |
+| **Resolusi Input** | 112 x 96 (Portrait) | 112 x 96 (Portrait) | Fokus fitur area wajah (squash). |
+| **Engine Inferensi** | **Full PyTorch (CPU)** | **Full PyTorch (CPU)** | Stabilitas arsitektur maksimal. |
+| **Threshold** | **0.75** (High Privacy) | **0.75** (High Privacy) | Standar keamanan diperketat. |
+| **Metode Inferensi** | **Flip Trick + CIM** | **Flip Trick + CIM** | Stabilitas & Kecepatan instan. |
 
 ## 3. Inovasi Federated Learning (Diambil)
 
