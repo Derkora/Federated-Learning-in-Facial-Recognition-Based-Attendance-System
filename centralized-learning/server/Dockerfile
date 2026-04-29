@@ -1,23 +1,28 @@
-# Tahap 1: Builder
-FROM python:3.10-slim AS builder
+FROM python:3.10-slim-bullseye
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN echo "Acquire::Retries \"10\";" > /etc/apt/apt.conf.d/80-retries && \
+    apt-get update && apt-get install -y --no-install-recommends --fix-missing \
     build-essential \
+    gfortran \
+    libopenblas-dev \
+    liblapack-dev \
+    libgl1 \
+    libglib2.0-0 \
+    libopenblas0 \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
+ENV OMP_NUM_THREADS=1
+ENV OPENBLAS_NUM_THREADS=1
+
 COPY requirements-train.txt .
-RUN pip install --user --no-cache-dir -r requirements-train.txt --extra-index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir -r requirements-train.txt
 
-# Tahap 2: Runner
-FROM python:3.10-slim
-
-WORKDIR /app
-
-COPY --from=builder /root/.local /root/.local
 COPY app/ app/
 
-ENV PATH=/root/.local/bin:$PATH
+ENV PYTHONPATH="/app"
+ENV PYTHONUNBUFFERED=1
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

@@ -1,4 +1,4 @@
-# --- Core Web & API ---
+# Web Framework & API
 fastapi==0.104.1
 uvicorn[standard]==0.24.0.post1
 pydantic==1.10.13
@@ -7,19 +7,20 @@ python-multipart==0.0.6
 jinja2==3.1.2
 aiofiles==23.2.1
 
-# --- Database & Persistence ---
+# Database & Persistence
 sqlalchemy==2.0.23
 psycopg2-binary==2.9.9
 
-# --- Federated Learning ---
+# Federated Learning
 flwr==1.7.0
 
-# --- Deep Learning & Biometrics (CPU Only for Aggregator) ---
---extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.1.1+cpu
-torchvision==0.16.1+cpu
+# Deep Learning & Biometrics (Versi stabil yang telah teruji di Jetson Nano ARM64)
+# Catatan: Tanpa suffix +cpu dan tanpa --extra-index-url — indeks /whl/cpu hanya
+# menyediakan wheel x86. PyPI default sudah memiliki wheel ARM64 native.
+torch==2.0.1
+torchvision==0.15.2
 facenet-pytorch==2.5.3
-numpy==1.26.2
+numpy==1.23.5
 
-# --- Monitoring & Metrics ---
+# Monitoring & Metrics
 codecarbon==2.3.1

@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-def identify_user_globally(query_embedding, local_embeddings_dict, threshold=0.35, metric="cosine"):
+def identify_user_globally(query_embedding, local_embeddings_dict, threshold=0.35, metric="cosine", verbose=True):
     if not local_embeddings_dict:
         return "Unknown", 0.0
     
@@ -16,8 +16,8 @@ def identify_user_globally(query_embedding, local_embeddings_dict, threshold=0.3
     
     best_match = "Unknown"
     max_sim = -1.0
-    min_dist = 10.0 # Nilai tinggi untuk pencarian Euclidean
-    
+    min_dist = 10.0
+
     for user_id, ref_embedding in local_embeddings_dict.items():
         ref_tensor = torch.from_numpy(ref_embedding).float() if isinstance(ref_embedding, np.ndarray) else ref_embedding.float()
         if ref_tensor.dim() == 1:
@@ -43,12 +43,13 @@ def identify_user_globally(query_embedding, local_embeddings_dict, threshold=0.3
     if metric == "cosine":
         confidence = float(max_sim)
     else:
-        # Konversi Euclidean [0, 2] menjadi kemiripan [0, 1]
         confidence = float(1.0 - (min_dist / 2.0))
         
     if confidence < threshold:
-        print(f"[CLASSIFIER] Match '{best_match}' rejected (Score: {confidence:.3f} < threshold {threshold})")
+        if verbose:
+            print(f"[CLASSIFIER] Match '{best_match}' rejected (Score: {confidence:.3f} < threshold {threshold})")
         return "Unknown", confidence
         
-    print(f"[CLASSIFIER] Match '{best_match}' accepted (Score: {confidence:.3f})")
+    if verbose:
+        print(f"[CLASSIFIER] Match '{best_match}' accepted (Score: {confidence:.3f})")
     return best_match, confidence

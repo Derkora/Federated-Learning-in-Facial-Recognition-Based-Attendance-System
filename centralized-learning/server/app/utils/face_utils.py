@@ -1,5 +1,6 @@
 import os
 import cv2
+import numpy as np
 import torch
 import torchvision.transforms as T
 from PIL import Image
@@ -7,6 +8,15 @@ from facenet_pytorch import MTCNN
 from .mobilefacenet import MobileFaceNet
 
 DEVICE = torch.device('cpu')
+
+# Landmark kanonik 96x112 Portrait (standar InsightFace/MobileFaceNet)
+CANONICAL_LANDMARKS = np.array([
+    [30.2946, 51.6963],  # mata kiri
+    [65.5318, 51.5014],  # mata kanan
+    [48.0252, 71.7366],  # hidung
+    [33.5493, 92.3655],  # mulut kiri
+    [62.7299, 92.2041],  # mulut kanan
+], dtype=np.float32)
 
 class FaceHandler:
     def __init__(self):
@@ -28,33 +38,40 @@ class FaceHandler:
 
     def detect_and_save(self, img_path, dst_path):
         """
-        Deteksi wajah dan simpan hasil crop Portrait (96x112) - Architectural Alignment.
-        Urutan: Detect -> PIL Crop (with Margin) -> Resize (96x112).
+        Deteksi wajah dan simpan hasil crop Portrait 96x112.
+        Utamakan landmark alignment, fallback ke bbox crop.
         """
         try:
             img = Image.open(img_path).convert('RGB')
-            boxes, _ = self.mtcnn.detect(img)
-            
-            if boxes is not None and len(boxes) > 0:
-                box = boxes[0] # [x, y, x2, y2]
-                
-                # Tambahkan margin manual agar konsisten dengan behavior MTCNN
-                margin = 20
-                w = box[2] - box[0]
-                h = box[3] - box[1]
-                box[0] = max(0, box[0] - margin/2)
-                box[1] = max(0, box[1] - margin/2)
-                box[2] = min(img.width, box[2] + margin/2)
-                box[3] = min(img.height, box[3] + margin/2)
+            boxes, _, landmarks = self.mtcnn.detect(img, landmarks=True)
 
-                # 1. PIL Crop
-                face_img = img.crop((box[0], box[1], box[2], box[3]))
-                
-                # 2. Squash Resize ke Portrait 96x112
-                # PIL menggunakan (Width, Height)
-                face_img = face_img.resize((96, 112), Image.BILINEAR)
-                
-                # 3. Simpan
+            if boxes is not None and len(boxes) > 0:
+                face_img = None
+
+                # Utamakan: Landmark Alignment
+                if landmarks is not None and landmarks[0] is not None:
+                    try:
+                        src = np.array(landmarks[0], dtype=np.float32)
+                        M, _ = cv2.estimateAffinePartial2D(src, CANONICAL_LANDMARKS, method=cv2.LMEDS)
+                        if M is not None:
+                            img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+                            aligned = cv2.warpAffine(img_cv, M, (96, 112),
+                                                     flags=cv2.INTER_LINEAR,
+                                                     borderMode=cv2.BORDER_REPLICATE)
+                            face_img = Image.fromarray(cv2.cvtColor(aligned, cv2.COLOR_BGR2RGB))
+                    except Exception:
+                        face_img = None
+
+                # Fallback: Bbox Crop
+                if face_img is None:
+                    box = boxes[0]
+                    margin = 20
+                    x1 = max(0, int(box[0] - margin/2))
+                    y1 = max(0, int(box[1] - margin/2))
+                    x2 = min(img.width, int(box[2] + margin/2))
+                    y2 = min(img.height, int(box[3] + margin/2))
+                    face_img = img.crop((x1, y1, x2, y2)).resize((96, 112), Image.BILINEAR)
+
                 face_img.save(dst_path)
                 return True
             else:

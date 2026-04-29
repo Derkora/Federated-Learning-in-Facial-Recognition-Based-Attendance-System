@@ -710,43 +710,42 @@ class FLClientManager:
                 user_folder = os.path.join(processed_dir, user.user_id)
                 if not os.path.exists(user_folder): continue
                 
-                # Muat daftar gambar yang tersedia
-                imgs = [f for f in os.listdir(user_folder) if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
-                if not imgs: continue
-                
-                # FUNCTIONAL PARITY: Pilih gambar terbaik menggunakan ImageProcessor
-                # Coba hingga 5 gambar terbaik jika deteksi wajah gagal
+                # Pilih gambar terbaik (sudah berupa face crop 96x112 dari tahap preprocessing)
                 selected_paths = image_processor.select_best_faces(user_folder, n=5)
-                print(f"[REFRESH] User {user.user_id}: Menyeleksi {len(selected_paths)} gambar terbaik untuk ekstraksi.")
-                
-                face_img = None
+                if not selected_paths:
+                    print(f"[REFRESH] [FAILED] User {user.user_id}: Tidak ada gambar tersedia.")
+                    continue
+                print(f"[REFRESH] User {user.user_id}: Menyeleksi {len(selected_paths)} gambar terbaik.")
+
+                # PENTING: Gambar di processed/ SUDAH berupa face crop 96x112.
+                # Jangan panggil detect_face() lagi — MTCNN gagal mendeteksi wajah
+                # di dalam crop yang sudah rapat (tidak ada margin dahi/leher).
+                # Gunakan prepare_for_model() langsung sebagai penggantinya.
+                input_tensor = None
                 best_img_path = None
-                
-                for i, img_name in enumerate(selected_paths):
+                for img_name in selected_paths:
                     trial_path = os.path.join(user_folder, img_name)
                     try:
                         img_pil = Image.open(trial_path).convert('RGB')
-                        # FUNCTIONAL PARITY: Ambil crop wajah tertajam
-                        face_img, _, _ = image_processor.detect_face(img_pil)
-                        if face_img is not None:
+                        input_tensor = image_processor.prepare_for_model(img_pil)
+                        if input_tensor is not None:
                             best_img_path = trial_path
-                            print(f"[REFRESH] [SUCCESS] Wajah user {user.user_id} terdeteksi (Percobaan {i+1}, File: {img_name}).")
+                            print(f"[REFRESH] [OK] User {user.user_id}: Menggunakan crop langsung dari '{img_name}'.")
                             break
-                        else:
-                            print(f"[REFRESH] [RETRY] Percobaan {i+1} gagal untuk {user.user_id} ({img_name}). Mencoba gambar lain...")
                     except Exception as e:
                         print(f"[REFRESH ERROR] Gagal memuat {img_name}: {e}")
                         continue
 
-                if face_img is None:
-                    print(f"[REFRESH] [FAILED] User {user.user_id}: Wajah tidak terdeteksi di {len(selected_paths)} gambar terbaik.")
+                if input_tensor is None:
+                    print(f"[REFRESH] [FAILED] User {user.user_id}: Semua gambar gagal diproses.")
                     continue
 
-                # Ambil skor untuk logging (opsional)
-                max_blur = image_processor.get_blur_score(best_img_path)
-                print(f"[REFRESH] User {user.user_id}: Menggunakan gambar kualitas {max_blur:.1f}")
+                # Log kualitas gambar
+                if best_img_path:
+                    max_blur = image_processor.get_blur_score(best_img_path)
+                    print(f"[REFRESH] User {user.user_id}: Skor ketajaman {max_blur:.1f}")
 
-                input_tensor = image_processor.prepare_for_model(face_img).to(self.device)
+                input_tensor = input_tensor.to(self.device)
                 
                 with torch.no_grad():
                     self.backbone.eval()
@@ -755,11 +754,19 @@ class FLClientManager:
                     input_flipped = torch.flip(input_tensor, dims=[3])
                     emb_mirror = self.backbone(input_flipped)
                     
-                    # Gabungkan dan Normalisasi
+                    # Gabungkan dan Normalisasi L2
                     embedding_tensor = torch.nn.functional.normalize((emb_orig + emb_mirror) / 2, p=2, dim=1)
                     embedding_np = embedding_tensor.cpu().numpy()[0]
                     
                 encrypted_data, iv = encryptor.encrypt_embedding(embedding_np)
+                # Hapus entri global yang usang (is_global=True) untuk user ini
+                # Embedding dari sesi training sebelumnya yang disimpan sebagai global
+                # bisa menghasilkan orthogonal embedding dengan backbone saat ini.
+                stale_global = db.query(EmbeddingLocal).filter_by(user_id=user.user_id, is_global=True).first()
+                if stale_global:
+                    db.delete(stale_global)
+                    print(f"[REFRESH] Menghapus entri global usang untuk {user.user_id}.")
+                
                 emb_record = db.query(EmbeddingLocal).filter_by(user_id=user.user_id, is_global=False).first()
                 if emb_record:
                     emb_record.embedding_data = encrypted_data
@@ -768,9 +775,8 @@ class FLClientManager:
                     db.add(EmbeddingLocal(user_id=user.user_id, embedding_data=encrypted_data, iv=iv, is_global=False))
                 db.commit()
                 
-                # Cleanup per user for Jetson RAM
+                # Cleanup per user untuk hemat RAM Jetson
                 del embedding_tensor
-                # RAM Cleanup per user (Pure CPU)
                 gc.collect()
                 
                 # Bagikan ke server
@@ -938,8 +944,22 @@ class FLClientManager:
             # karena kita butuh stats BN yang teragregasi ROUND SEBELUMNYA sebagai baseline yang stabil.
             self.download_bn(max_wait=10) 
             
-            # 2. HITUNG CENTROID (Menggunakan status model saat ini)
-            print("[INFO] Fase 2: Menghitung Centroid Lokal (BN-Aligned)...")
+            # 2. HITUNG CENTROID menggunakan INFERENCE BACKBONE (PENTING!)
+            # Gunakan self.inference_backbone (dimuat dari backbone.pth + global BN)
+            # bukan self.client.trainer.backbone (bobot training lokal).
+            # Inference backbone = backbone yang SAMA persis dengan yang digunakan saat inferensi.
+            # Menggunakan trainer.backbone (meskipun di-sync ke global) dapat menyebabkan
+            # embedding space collapse karena FedAvg averaging melemahkan discriminative features.
+            print("[INFO] Fase 2: Menghitung Centroid (menggunakan Inference Backbone)...")
+            # Sync sementara inference_backbone ke trainer agar calculate_centroids bisa dipakai
+            try:
+                inf_state = self.inference_backbone.state_dict()
+                self.client.trainer.backbone.load_state_dict(inf_state, strict=True)
+                self.client.trainer.backbone.eval()
+                print("[INFO] Trainer backbone sinkron ke inference_backbone (versi BN-applied).")
+            except Exception as e:
+                print(f"[WARN] Sinkronisasi inference backbone ke trainer gagal: {e}")
+
             bn_params = self.client.trainer.get_bn_parameters()
             centroids = self.client.trainer.calculate_centroids(label_map=self.client.label_map)
             

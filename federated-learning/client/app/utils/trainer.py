@@ -157,15 +157,18 @@ class LocalTrainer:
         self.nrp_to_idx = {} 
         
         self.transform = transforms.Compose([
-            transforms.Resize((112, 96), interpolation=InterpolationMode.BILINEAR), 
+            transforms.Resize((112, 96), interpolation=InterpolationMode.BILINEAR),
             transforms.RandomHorizontalFlip(),
-            transforms.RandomRotation(degrees=15),
-            transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1), # Diperkuat
-            transforms.RandomGrayscale(p=0.1),
-            transforms.RandomApply([transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0))], p=0.3),
-            transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.2), 
+            # Rotasi ±10° — representatif untuk variasi posisi kepala mahasiswa
+            transforms.RandomRotation(degrees=10),
+            # ColorJitter ringan — dataset sudah dalam kondisi cahaya baik (bukan rendah)
+            # Nilai 0.2 cukup untuk simulasi variasi natural tanpa distorsi warna artifisial
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.05),
+            # Blur ringan untuk simulasi variasi depth-of-field kamera (p=0.2)
+            transforms.RandomApply([transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 1.0))], p=0.2),
+            transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.2),
             transforms.ToTensor(),
-            # Normalisasi MobileFaceNet (True Standard Creator Alignment): std=128/255 = 0.50196
+            # Normalisasi MobileFaceNet (Creator Alignment): std=128/255 = 0.50196
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.50196, 0.50196, 0.50196]),
             transforms.RandomErasing(p=0.1)
         ])

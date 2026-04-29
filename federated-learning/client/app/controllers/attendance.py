@@ -72,7 +72,7 @@ class AttendanceController:
         # --- LOGIKA TEMPORAL VOTING & CIM (Confident Instant Match) ---
         # 1. Cek Kemiripan Instant Frame (Tanpa Buffer)
         query_embedding = query_embedding_tensor.cpu().numpy()[0]
-        user_id_instant, confidence_instant = identify_user_globally(query_embedding, local_refs, threshold=self.fl_manager.inference_threshold)
+        user_id_instant, confidence_instant = identify_user_globally(query_embedding, local_refs, threshold=self.fl_manager.inference_threshold, verbose=False)
         
         # CIM Bypass: Jika skor sangat tinggi (> 0.85), anggap valid langsung dan reset buffer
         if confidence_instant > 0.85 and user_id_instant != "Unknown":
@@ -164,7 +164,7 @@ class AttendanceController:
                 finally:
                     db.close()
 
-            user_id_instant, confidence_instant = identify_user_globally(query_embedding_np, local_refs, threshold=self.fl_manager.inference_threshold)
+            user_id_instant, confidence_instant = identify_user_globally(query_embedding_np, local_refs, threshold=self.fl_manager.inference_threshold, verbose=False)
 
             # CIM Bypass: Jika skor sangat tinggi (> 0.85), anggap valid langsung dan reset buffer
             if confidence_instant > 0.85 and user_id_instant != "Unknown":
@@ -200,45 +200,77 @@ class AttendanceController:
         if not hasattr(self.fl_manager, 'cached_refs') or time.time() - getattr(self.fl_manager, 'last_cache_update', 0) > 30:
             local_refs = {}
             print(f"[ATTENDANCE] Memperbarui cache identitas dari database dan registri global...")
-            
-            # 1. Memuat identitas dari database lokal
+
+            # ── TIER 1 (Terendah): Identitas cross-client dari DB (is_global=True) ──
+            # Ini adalah fallback stale dari sesi sebelumnya. Bisa di-override oleh tier 2 dan 3.
             try:
-                embeddings = db.query(EmbeddingLocal).all()
-                db_count = 0
-                for emb in embeddings:
+                global_db_embs = db.query(EmbeddingLocal).filter_by(is_global=True).all()
+                db_global_count = 0
+                for emb in global_db_embs:
                     try:
-                        # Prioritas: Identitas global di DB (is_global=True) dimuat terakhir agar menimpa lokal jika ada konflik
-                        dec_emb = np.frombuffer(emb.embedding_data, dtype=np.float32).copy() if emb.is_global else encryptor.decrypt_embedding(emb.embedding_data, emb.iv).copy()
+                        dec_emb = np.frombuffer(emb.embedding_data, dtype=np.float32).copy()
                         v = torch.from_numpy(dec_emb).float()
                         v = torch.nn.functional.normalize(v.unsqueeze(0), p=2, dim=1).squeeze(0)
                         local_refs[emb.user_id] = v.to(self.fl_manager.device)
-                        db_count += 1
-                    except Exception as e: 
-                        print(f"[ATTENDANCE ERROR] Gagal dekripsi embedding user {emb.user_id}: {e}")
-                        continue
-                print(f"[ATTENDANCE] Berhasil memuat {db_count} identitas dari database.")
-            except Exception as db_err:
-                print(f"[ATTENDANCE ERROR] Gagal query database: {db_err}")
+                        db_global_count += 1
+                    except Exception as e:
+                        print(f"[ATTENDANCE ERROR] Dekripsi global {emb.user_id}: {e}")
+                if db_global_count > 0:
+                    print(f"[ATTENDANCE] Tier 1: {db_global_count} embedding cross-client (DB global).")
+            except Exception as e:
+                print(f"[ATTENDANCE ERROR] Query DB global: {e}")
 
-            # 2. PUSTAKA GLOBAL (SUMBER KEBENARAN UTAMA / Centroids)
-            # Dimuat SETELAH database agar menimpa identitas lama dengan centroid terbaru dari sinkronisasi global
+            # ── TIER 2 (Sedang): global_embedding_registry.pth dari server ──
+            # Dihitung dengan inference_backbone terkini → lebih akurat dari DB global stale.
+            # Override SEMUA entri dari Tier 1, kecuali mahasiswa LOKAL (Tier 3 yang akan menang).
+            # Lacak dulu siapa mahasiswa lokal:
+            local_user_ids = set()
+            try:
+                local_ids_res = db.query(EmbeddingLocal.user_id).filter_by(is_global=False).all()
+                local_user_ids = {row[0] for row in local_ids_res}
+            except Exception: pass
+
             registry_path = os.path.join(self.fl_manager.data_path, "models", "global_embedding_registry.pth")
             if os.path.exists(registry_path):
                 try:
                     registry = torch.load(registry_path, map_location="cpu")
+                    reg_count = 0
                     for nrp, vec in registry.items():
+                        if nrp in local_user_ids:
+                            continue  # Biarkan Tier 3 (lokal) mengurus student ini
                         v = torch.from_numpy(np.array(vec, dtype=np.float32).copy()) if not isinstance(vec, torch.Tensor) else vec.float()
                         v = torch.nn.functional.normalize(v.unsqueeze(0), p=2, dim=1).squeeze(0)
-                        local_refs[nrp] = v.to(self.fl_manager.device)
-                    print(f"[ATTENDANCE] [SUCCESS] Registri global berhasil dimuat dengan {len(registry)} identitas.")
+                        local_refs[nrp] = v.to(self.fl_manager.device)  # Override Tier 1 stale
+                        reg_count += 1
+                    print(f"[ATTENDANCE] Tier 2: {reg_count} embedding cross-client dari registry.pth (fresh).")
                 except Exception as e:
-                    print(f"[ATTENDANCE ERROR] Gagal memuat berkas registry.pth: {e}")
+                    print(f"[ATTENDANCE ERROR] Registry.pth: {e}")
             else:
-                print(f"[ATTENDANCE] Registry global ({registry_path}) belum tersedia.")
-            
+                print(f"[ATTENDANCE] Registry global belum tersedia (hanya Tier 1).")
+
+            # ── TIER 3 (Tertinggi): Embedding LOKAL dari DB (is_global=False) ──
+            # Dihasilkan oleh refresh_local_embeddings dengan backbone inferensi terkini.
+            # Override Tier 1 dan 2 untuk semua mahasiswa lokal.
+            try:
+                local_db_embs = db.query(EmbeddingLocal).filter_by(is_global=False).all()
+                db_local_count = 0
+                for emb in local_db_embs:
+                    try:
+                        dec_emb = encryptor.decrypt_embedding(emb.embedding_data, emb.iv).copy()
+                        v = torch.from_numpy(dec_emb).float()
+                        v = torch.nn.functional.normalize(v.unsqueeze(0), p=2, dim=1).squeeze(0)
+                        local_refs[emb.user_id] = v.to(self.fl_manager.device)
+                        db_local_count += 1
+                    except Exception as e:
+                        print(f"[ATTENDANCE ERROR] Dekripsi lokal {emb.user_id}: {e}")
+                print(f"[ATTENDANCE] Tier 3: {db_local_count} embedding lokal (prioritas tertinggi).")
+            except Exception as e:
+                print(f"[ATTENDANCE ERROR] Query DB lokal: {e}")
+
+            print(f"[ATTENDANCE] Total refs: {len(local_refs)} identitas.")
             self.fl_manager.cached_refs = local_refs
             self.fl_manager.last_cache_update = time.time()
-            
+
         return self.fl_manager.cached_refs
 
     def _ensure_user_and_get_name(self, user_id, db):
