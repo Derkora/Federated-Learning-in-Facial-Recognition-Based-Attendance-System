@@ -8,6 +8,12 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+centralized-learning/docker-log-cl.md
+federated-learning/docker-log-fl.md
+federated-learning-old/
+xiaoccer/
+*.pdf
+myenv/
 build/
 develop-eggs/
 dist/

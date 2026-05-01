@@ -43,9 +43,9 @@ class TrainingController:
 
     def fetch_data(self, wait_timeout=600, expected_clients=None):
         # Tahap 1: Sinkronisasi dan Menunggu Unggahan Data dari Terminal
-        print(f"[INFO] Memulai pemantauan unggahan data di {UPLOAD_DIR}...", flush=True)
+        print(f"[INIT] Memulai pemantauan unggahan data di {UPLOAD_DIR}...", flush=True)
         if expected_clients:
-            print(f"[INFO] Menunggu data dari minimal {expected_clients} terminal.", flush=True)
+            print(f"[OK] Menunggu data dari minimal {expected_clients} terminal.", flush=True)
             
         start_time = time.time()
         last_img_count = -1
@@ -72,7 +72,7 @@ class TrainingController:
                         elapsed_stable = time.time() - stable_since
                         if elapsed_stable >= STABILIZATION_TIME:
                             msg = f"Data telah stabil! Total akhir: {len(subdirs)} kelas, {img_count} gambar."
-                            print(f"[FASE 1] {msg}", flush=True)
+                            print(f"[SUCCESS] {msg}", flush=True)
                             cl_manager.update_logs(msg)
                             break
                         else:
@@ -80,7 +80,7 @@ class TrainingController:
                 else:
                     print(f"[INFO] Menunggu unggahan pertama... (Durasi: {int(time.time() - start_time)} detik)", flush=True)
             except Exception as e:
-                print(f"[ERROR] Kesalahan saat pengecekan: {e}", flush=True)
+                print(f"[ERROR] Kesalahan saat pengecekan data: {e}", flush=True)
             
             time.sleep(5)
         
@@ -102,7 +102,7 @@ class TrainingController:
     def preprocess_and_balance(self):
         # Tahap 2: Menyeleksi wajah terbaik dan melakukan pemotongan (Face Cropping)
         try:
-            print("[INFO] Memulai proses seleksi kualitas dan pemotongan wajah...", flush=True)
+            print("[INIT] Memulai proses seleksi ketajaman dan pemotongan wajah...", flush=True)
             if os.path.exists(PROCESSED_DATA): 
                 shutil.rmtree(PROCESSED_DATA)
             os.makedirs(PROCESSED_DATA, exist_ok=True)
@@ -115,19 +115,21 @@ class TrainingController:
                 dst = os.path.join(PROCESSED_DATA, nrp_folder)
                 os.makedirs(dst, exist_ok=True)
                 
-                # Seleksi 50 foto tertajam menggunakan Laplacian Variance
+                # 1. Seleksi Laplacian: Ambil Top 50 foto tertajam
                 top_images = face_handler.select_best_faces(src, n=50)
                 
                 msg = f"Memproses {len(top_images)} foto terbaik untuk {nrp_folder} ({i+1}/{total_folders})"
-                print(f"[INFO] {msg}", flush=True)
+                print(f"[OK] {msg}", flush=True)
                 cl_manager.update_logs(msg)
                 
                 for img_name in top_images:
-                    # Deteksi wajah dan simpan hasil crop 112x96
+                    # 2. Deteksi & Alignment: Simpan hasil crop 112x96 dengan landmark alignment
                     face_handler.detect_and_save(os.path.join(src, img_name), os.path.join(dst, img_name))
             
-            return {"status": "success", "message": "Proses seleksi (Top 50 Laplacian) dan cropping selesai."}
+            print("[SUCCESS] Preprocessing selesai. Seluruh wajah telah disejajarkan (Aligned).")
+            return {"status": "success", "message": "Seleksi Laplacian dan Landmark Alignment selesai."}
         except Exception as e:
+            print(f"[ERROR] Gagal melakukan preprocessing: {e}")
             return {"status": "error", "message": str(e)}
 
     def _get_lr(self, epoch):
@@ -158,7 +160,7 @@ class TrainingController:
             except: pass
 
         try:
-            print(f"[INFO] Memulai pelatihan dengan augmentasi dinamis ({epochs} epoch)...", flush=True)
+            print(f"[INIT] Memulai pelatihan dengan augmentasi dinamis ({epochs} epoch)...", flush=True)
             transform = transforms.Compose([
                 transforms.Resize((112, 96)),
                 transforms.RandomHorizontalFlip(),
@@ -183,8 +185,8 @@ class TrainingController:
             train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
             val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
             
-            print(f"[DATASET] Found {len(full_dataset)} images across {num_classes} classes.", flush=True)
-            print(f"[DATASET] Split: {len(train_dataset)} train, {len(val_dataset)} validation.", flush=True)
+            print(f"[DATASET] Ditemukan {len(full_dataset)} gambar dalam {num_classes} kelas.", flush=True)
+            print(f"[DATASET] Split: {len(train_dataset)} latih, {len(val_dataset)} validasi.", flush=True)
             cl_manager.update_logs(f"Dataset: {len(full_dataset)} gambar, {num_classes} kelas. Batch Size: {batch_size}")
             
             model = MobileFaceNet().to(DEVICE)
@@ -258,7 +260,7 @@ class TrainingController:
                     # Log progres setiap 10 batch
                     if (b + 1) % 10 == 0 or (b + 1) == len(train_loader):
                         batch_acc = round(100 * correct / total, 2)
-                        print(f"  [TRAIN] Epoch {epoch+1}: Batch {b+1}/{len(train_loader)} - Loss: {loss.item():.4f} - Acc: {batch_acc}%", flush=True)
+                        print(f"  [TRAIN] Epoch {epoch+1}: Batch {b+1}/{len(train_loader)} - Loss: {loss.item():.4f} - Akurasi: {batch_acc}%", flush=True)
                 
                 # 5. Validation Loop (Menyelaraskan dengan metrik FL)
                 model.eval()
@@ -298,8 +300,8 @@ class TrainingController:
                     "val_accuracy": val_acc
                 })
                 
-                msg = f"Epoch {epoch+1}/{epochs} | Acc: {epoch_acc}% | Val Acc: {val_acc}% | Loss: {avg_loss}"
-                print(f"[INFO] {msg}", flush=True)
+                msg = f"Epoch {epoch+1}/{epochs} | Akurasi: {epoch_acc}% | Validasi: {val_acc}% | Loss: {avg_loss}"
+                print(f"[OK] {msg}", flush=True)
                 cl_manager.update_logs(msg)
                 final_acc = val_acc 
                 
@@ -320,7 +322,7 @@ class TrainingController:
                 
                 model.load_state_dict(swa_state_dict)
                 print("[SWA] Bobot model berhasil dirata-ratakan. Stabilitas & Generalisasi meningkat.", flush=True)
-                cl_manager.update_logs("Stochastic Weight Averaging (SWA) berhasil diterapkan pada model akhir.")
+                cl_manager.update_logs("Snapshot Averaging (SWA) berhasil diterapkan.")
             
             torch.save(model.state_dict(), MODEL_PATH)
             cl_manager.update_logs("Pelatihan selesai. Model berhasil disimpan.")
@@ -342,12 +344,13 @@ class TrainingController:
             }
         except Exception as e:
             if tracker: tracker.stop()
+            print(f"[ERROR] Pelatihan gagal: {e}")
             return {"status": "error", "message": str(e)}
 
     def generate_reference_and_eval(self, dbs=None):
         # Tahap 4: Pembuatan Basis Data Referensi Wajah dan Evaluasi Transmisi
         try:
-            print("[INFO] Menghasilkan basis data referensi dan menghitung volume transmisi...", flush=True)
+            print("[INIT] Membuat basis data referensi identitas...", flush=True)
             
             # --- PERSISTENSI VERSI (Simpan ke DB sebelum generate registry) ---
             if dbs:
@@ -356,9 +359,9 @@ class TrainingController:
                     dbs.add(new_v)
                     dbs.commit()
                     dbs.refresh(new_v)
-                    print(f"[SUCCESS] Versi model v{new_v.version_id} berhasil disimpan ke database.")
+                    print(f"[SUCCESS] Versi model v{new_v.version_id} disimpan.")
                 except Exception as e:
-                    print(f"[ERROR] Gagal menyimpan versi model ke database: {e}")
+                    print(f"[ERROR] Gagal menyimpan versi: {e}")
                     dbs.rollback()
             
             model = MobileFaceNet().to(DEVICE)
@@ -389,7 +392,7 @@ class TrainingController:
                         ref_db[nrp] = centroid.cpu()
 
                 # --- SELF-TEST: Verifikasi integritas embedding pada server ---
-                print("[INFO] Menjalankan self-test pada server...", flush=True)
+                print("[INIT] Menjalankan uji mandiri integritas model...", flush=True)
                 test_results = []
                 for nrp, centroid in ref_db.items():
                     p = os.path.join(PROCESSED_DATA, nrp)
@@ -407,10 +410,10 @@ class TrainingController:
                     # Pastikan shape (1, 128) -> (128,) untuk dot product yang benar
                     sim = torch.sum(test_emb.view(-1) * centroid.view(-1)).item()
                     test_results.append(sim)
-                    print(f"  > [SELF-TEST] nrp: {nrp} | Sim: {sim:.4f} | Embedding Norm: {test_emb.norm():.2f}")
+                    print(f"  > [TEST] nrp: {nrp} | Sim: {sim:.4f}")
                 
                 avg_self_sim = sum(test_results) / len(test_results) if test_results else 0
-                print(f"[OK] Self-test selesai. Rata-rata similarity internal: {avg_self_sim:.4f}")
+                print(f"[SUCCESS] Uji mandiri selesai. Rata-rata Similarity: {avg_self_sim:.4f}")
             
             torch.save(ref_db, f"{MODEL_DIR}/reference_embeddings.pth")
             
@@ -426,6 +429,7 @@ class TrainingController:
                 "download_volume_mb": round(download_size / (1024 * 1024), 2)
             }
         except Exception as e:
+            print(f"[ERROR] Gagal membuat registri: {e}")
             return {"status": "error", "message": str(e)}
 
 training_controller = TrainingController()

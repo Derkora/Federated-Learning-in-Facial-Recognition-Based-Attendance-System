@@ -21,7 +21,6 @@ CANONICAL_LANDMARKS = np.array([
 class FaceHandler:
     def __init__(self):
         # post_process=False agar data yang disimpan di disk adalah RAW pixel [0, 255]
-        # Ini mencegah double normalization saat training loader memroses gambar.
         self.mtcnn = MTCNN(
             image_size=112, 
             margin=20, 
@@ -31,15 +30,13 @@ class FaceHandler:
         self.transform = T.Compose([
             T.Resize((112, 96)),
             T.ToTensor(),
-            # Normalisasi MobileFaceNet (Creator Standard): (x - 127.5) / 128.0
-            # 128/255 = 0.50196
+            # Normalisasi MobileFaceNet (Standard): (x - 127.5) / 128.0
             T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.50196, 0.50196, 0.50196])
         ])
 
     def detect_and_save(self, img_path, dst_path):
         """
-        Deteksi wajah dan simpan hasil crop Portrait 96x112.
-        Utamakan landmark alignment, fallback ke bbox crop.
+        Deteksi wajah dan simpan hasil crop Portrait 96x112 dengan alignment.
         """
         try:
             img = Image.open(img_path).convert('RGB')
@@ -48,7 +45,7 @@ class FaceHandler:
             if boxes is not None and len(boxes) > 0:
                 face_img = None
 
-                # Utamakan: Landmark Alignment
+                # 1. Landmark Alignment (Prioritas Utama)
                 if landmarks is not None and landmarks[0] is not None:
                     try:
                         src = np.array(landmarks[0], dtype=np.float32)
@@ -59,10 +56,10 @@ class FaceHandler:
                                                      flags=cv2.INTER_LINEAR,
                                                      borderMode=cv2.BORDER_REPLICATE)
                             face_img = Image.fromarray(cv2.cvtColor(aligned, cv2.COLOR_BGR2RGB))
-                    except Exception:
-                        face_img = None
+                    except Exception as e:
+                        print(f"[DEBUG] Alignment gagal: {e}")
 
-                # Fallback: Bbox Crop
+                # 2. Fallback: Bbox Crop
                 if face_img is None:
                     box = boxes[0]
                     margin = 20
@@ -75,14 +72,14 @@ class FaceHandler:
                 face_img.save(dst_path)
                 return True
             else:
-                print(f"[FaceHandler] Skip: Tidak ditemukan wajah pada {os.path.basename(img_path)}")
+                print(f"[FaceHandler] Skip: Wajah tidak terdeteksi pada {os.path.basename(img_path)}")
         except Exception as e:
             print(f"[FaceHandler] ERROR pada {os.path.basename(img_path)}: {e}")
         return False
 
     def get_blur_score(self, image_path):
+        """Hitung skor Laplacian Variance."""
         try:
-            
             img = cv2.imread(image_path)
             if img is None: return 0
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -90,6 +87,7 @@ class FaceHandler:
         except: return 0
 
     def select_best_faces(self, folder_path, n=50):
+        """Pilih N gambar terbaik berdasarkan ketajaman."""
         if not os.path.exists(folder_path): return []
         imgs = [os.path.join(folder_path, f) for f in os.listdir(folder_path) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
         if not imgs: return []
@@ -97,15 +95,20 @@ class FaceHandler:
         return [os.path.basename(s[0]) for s in scored[:n]]
 
     def get_embedding(self, model, img_pil):
-        """Generate embedding from a PIL image menggunakan Flip Trick (Avg Orig + Mirror)."""
+        """Generate embedding menggunakan Flip Trick (Avg Orig + Mirror)."""
+        # Pastikan img_pil sudah berukuran 112x96 (Portrait)
+        if img_pil.size != (96, 112):
+            img_pil = img_pil.resize((96, 112), Image.BILINEAR)
+            
         img_tensor = self.transform(img_pil).unsqueeze(0).to(DEVICE)
         img_flip = torch.flip(img_tensor, [3])
         
         with torch.no_grad():
             emb_orig = model(img_tensor)
             emb_flip = model(img_flip)
-            # Rata-rata dan normalisasi ulang
+            # Rata-rata dan normalisasi ulang unit vector
             combined = torch.nn.functional.normalize(emb_orig + emb_flip, p=2, dim=1)
         return combined
 
 face_handler = FaceHandler()
+

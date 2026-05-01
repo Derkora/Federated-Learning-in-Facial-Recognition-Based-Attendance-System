@@ -81,28 +81,63 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                 final_loss = aggregated_metrics.get("loss", 0.0)
                 
                 # 1. KONVERSI KE STATE_DICT (Critical for Identification Consistency)
-                # Kita tidak lagi menyimpan list parameter mentah, melainkan file .pth yang siap pakai.
+                # Gunakan model saat ini sebagai basis agar BN stats tidak terhapus (Preserve BN)
                 global_model_instance = MobileFaceNet()
-                sd = global_model_instance.state_dict()
-                shared_keys = [k for k in sd.keys() if 
-                               not any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked'])
-                               and any(x in k.lower() for x in ['weight', 'bias'])]
-                
-                if len(params_np) == len(shared_keys):
-                    for k, v in zip(shared_keys, params_np):
-                        sd[k] = torch.from_numpy(v.copy())
+                global_model = db.query(GlobalModel).order_by(GlobalModel.last_updated.desc()).first()
+                if global_model and global_model.weights:
+                    sd = global_model.get_state_dict()
+                    print("[INFO] Menggunakan bobot model terakhir sebagai basis agregasi (Preserving BN).")
                 else:
-                    print(f"[WARNING] Ketidakcocokan kunci saat menyimpan: {len(params_np)} params vs {len(shared_keys)} keys.")
+                    sd = global_model_instance.state_dict()
+                    print("[INFO] Memulai agregasi dari model kosong (Seeding).")
+                
+                # Cek mode berdasarkan jumlah parameter
+                # Standard Backbone (tanpa BN/Head) biasanya ~50-60 keys (conv weights & biases)
+                # Full Backbone + BN biasanya 131 keys
+                all_keys = list(sd.keys())
+                conv_keys = [k for k in all_keys if not any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked'])]
+                
+                if len(params_np) == len(conv_keys):
+                    print(f"[INFO] Ronde {server_round}: Mode pFedFace (Backbone Only) terdeteksi.")
+                    target_keys = conv_keys
+                elif len(params_np) >= len(all_keys):
+                    print(f"[INFO] Ronde {server_round}: Mode Full Sync (Backbone + BN) terdeteksi.")
+                    target_keys = all_keys
+                else:
+                    print(f"[WARNING] Panjang parameter tidak dikenal ({len(params_np)}). Menggunakan fallback conv_keys.")
+                    target_keys = conv_keys[:len(params_np)]
 
-                # 2. MERGE GLOBAL BN (Jika tersedia dari fase registry sebelumnya)
-                bn_path = "data/global_bn_combined.pth"
-                if os.path.exists(bn_path):
+                # 2. IDENTIFIKASI PARAMETER (Orderly Filtering)
+                bn_params = {}
+                backbone_params = {}
+                
+                # Filter pFedFace Style: Pisahkan Backbone (Conv) dan BN
+                for i, k in enumerate(target_keys):
+                    if i < len(params_np):
+                        val = torch.from_numpy(params_np[i].copy())
+                        if any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked']):
+                            bn_params[k] = val
+                        else:
+                            backbone_params[k] = val
+                
+                # Pasang ke model utama (Hanya yang disetujui untuk sinkronisasi)
+                # Dalam pFedFace, bn_params biasanya kosong di sini karena tidak dikirim via Flower
+                sd.update(backbone_params)
+                if bn_params:
+                    print(f"[INFO] Ronde {server_round}: {len(bn_params)} parameter BN terdeteksi dan digabungkan.")
+                    sd.update(bn_params)
+
+                # 3. HANDLE CLASSIFIER HEAD (Parameter tambahan di akhir payload)
+                num_target = len(target_keys)
+                if len(params_np) > num_target:
+                    head_params_np = params_np[num_target:]
+                    print(f"[INFO] Ronde {server_round}: {len(head_params_np)} parameter Head terdeteksi.")
                     try:
-                        bn_params = torch.load(bn_path, map_location="cpu")
-                        sd.update(bn_params)
-                        print(f"[INFO] Ronde {server_round}: Statistik BN global digabungkan ke backbone.")
-                    except Exception as bn_err:
-                        print(f"[WARNING] Ronde {server_round}: Gagal serialisasi BN: {bn_err}")
+                        # Bungkus Head dalam state_dict teratur
+                        head_sd = {"weight": torch.from_numpy(head_params_np[0].copy())}
+                        torch.save(head_sd, "data/global_head.pth")
+                    except Exception as e:
+                        print(f"[WARN] Gagal menyimpan global_head: {e}")
 
                 # Simpan hasil ke database
                 db = SessionLocal()

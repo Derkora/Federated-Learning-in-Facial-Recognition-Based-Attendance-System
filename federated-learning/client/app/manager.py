@@ -63,13 +63,12 @@ class FLClientManager:
             except: pass
 
         # 2. Muat Jumlah Kelas dari Label Map (Sumber Kebenaran Utama)
-        # Jika file ada, kita gunakan jumlah kelas nyata agar tidak terjadi '0 weights preserved' saat resize perdana
         if os.path.exists(self.map_path):
             try:
                 with open(self.map_path, 'r') as f:
                     data = json.load(f)
                     self.num_classes = len(data)
-                    print(f"[INIT] Terdeteksi {self.num_classes} kelas dari label map lokal.")
+                    print(f"[INIT] Terdeteksi {self.num_classes} identitas dari label map lokal.")
             except: pass
         elif os.path.exists(self.head_path):
             try:
@@ -87,7 +86,7 @@ class FLClientManager:
         self.fl_server_address = os.getenv("FL_SERVER_ADDRESS", "server-fl:8085")
         self.server_api_url = os.getenv("SERVER_API_URL", "http://server-fl:8080")
         
-        # Load or Generate Persistent Identity
+        # Muat atau Buat Identitas Persisten
         self.client_id = self._load_identity()
         
         self.client = FaceRecognitionClient(
@@ -97,10 +96,10 @@ class FLClientManager:
         )
         self.client.fl_manager = self
         
-        print("[INIT] Memulai Eager Loading model...")
+        print("[INIT] Memulai pemuatan ulang model inferensi (Eager Loading)...")
         self._reload_inference_models(force_reload=True)
         
-        # Sinkronisasi Final Status dari Persistence
+        # Sinkronisasi Status Terakhir dari Persistensi
         if os.path.exists(self.map_path):
             try:
                 with open(self.map_path, 'r') as f:
@@ -108,13 +107,13 @@ class FLClientManager:
                     self.client.label_map = data
                     if hasattr(self.client, 'trainer'):
                         self.client.trainer.nrp_to_idx = {nrp: idx for idx, nrp in enumerate(data)}
-                        print(f"[INIT] Trainer label map restored ({len(data)} ids).")
+                        print(f"[INIT] Label map trainer dipulihkan ({len(data)} identitas).")
             except: pass
         
         self.is_training = False
         self.current_phase = "idle"
         self.fl_status = "Online (Menunggu Instruksi)"
-        self.fl_round = 0 # Track current round
+        self.fl_round = 0 
         self.last_phase = "idle"
         
         self.is_registered = False
@@ -159,7 +158,7 @@ class FLClientManager:
         Sinkronisasi data NRP, Nama, dan Embedding Mahasiswa dari server.
         """
         try:
-            print("[INFO] Sinkronisasi informasi identitas global dari server...")
+            print("[INIT] Sinkronisasi informasi identitas global dari server...")
             res = requests.get(f"{self.server_api_url}/api/training/identities", timeout=10)
             if res.status_code == 200:
                 identities = res.json()
@@ -836,7 +835,7 @@ class FLClientManager:
             if res.status_code == 200:
                 self.client.label_map = res.json()
                 self.num_classes = len(self.client.label_map)
-                print(f"[SYNC] Global label map synced. Total classes: {self.num_classes}")
+                print(f"[SYNC] Peta label global berhasil disinkronkan. Total identitas: {self.num_classes}")
                 
                 # Expand head immediately if already loaded
                 if self.head is not None:
@@ -901,6 +900,13 @@ class FLClientManager:
         
         has_data = any(len(os.listdir(os.path.join(processed_dir, sub))) > 0 for sub in os.listdir(processed_dir) if os.path.isdir(os.path.join(processed_dir, sub)))
         if has_data:
+            # PENTING: Sebelum training, unduh Backbone & BN Global terbaru sebagai baseline.
+            # Ini yang menjamin akurasi Ronde 1 bisa mencapai 0.9 karena model memulai 
+            # dari titik optimal (Global Lens).
+            print("[INFO] Menyiapkan bekal training: Mengunduh Backbone & BN Global...")
+            self.download_backbone()
+            self.download_bn(max_wait=10)
+            
             self.report_status("Siap Training")
             self.refresh_local_embeddings()
             

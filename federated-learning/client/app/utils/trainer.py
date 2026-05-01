@@ -159,16 +159,12 @@ class LocalTrainer:
         self.transform = transforms.Compose([
             transforms.Resize((112, 96), interpolation=InterpolationMode.BILINEAR),
             transforms.RandomHorizontalFlip(),
-            # Rotasi ±10° — representatif untuk variasi posisi kepala mahasiswa
-            transforms.RandomRotation(degrees=10),
-            # ColorJitter ringan — dataset sudah dalam kondisi cahaya baik (bukan rendah)
-            # Nilai 0.2 cukup untuk simulasi variasi natural tanpa distorsi warna artifisial
-            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.05),
-            # Blur ringan untuk simulasi variasi depth-of-field kamera (p=0.2)
-            transforms.RandomApply([transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 1.0))], p=0.2),
+            transforms.RandomRotation(degrees=15),
+            transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
+            transforms.RandomGrayscale(p=0.1),
+            transforms.RandomApply([transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0))], p=0.3),
             transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.2),
             transforms.ToTensor(),
-            # Normalisasi MobileFaceNet (Creator Alignment): std=128/255 = 0.50196
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.50196, 0.50196, 0.50196]),
             transforms.RandomErasing(p=0.1)
         ])
@@ -389,7 +385,7 @@ class LocalTrainer:
 
 
     def _is_shared_param(self, name):
-        """Filter ketat untuk pFedFace: Kecualikan BatchNorm."""
+        """Filter ketat untuk pFedFace: Kecualikan BatchNorm agar tetap lokal."""
         name = name.lower()
         if any(x in name for x in ['bn', 'running_', 'num_batches_tracked']):
             return False
@@ -398,20 +394,34 @@ class LocalTrainer:
     def get_backbone_parameters(self, personalized=True):
         if self.backbone is None: return []
         state_dict = self.backbone.state_dict()
-        if personalized:
-            shared_keys = [k for k in state_dict.keys() if self._is_shared_param(k)]
-            mode_str = "pFedFace (Conv/Linear Only)"
-        else:
-            shared_keys = list(state_dict.keys())
-            mode_str = "Standard (Full Sync)"
+        shared_keys = [k for k in state_dict.keys() if not personalized or self._is_shared_param(k)]
+        
+        mode_str = "pFedFace (Local BN/Head)" if personalized else "Standard (Full Sync)"
         print(f"[TRAINER] Extracting {len(shared_keys)} parameters ({mode_str}).")
-        return [state_dict[k].cpu().numpy().copy() for k in shared_keys]
+        
+        params = [state_dict[k].cpu().numpy().copy() for k in shared_keys]
+        
+        # Sertakan Head hanya jika bukan Personalized (pFedFace)
+        if not personalized and self.head is not None:
+            head_params = [p.detach().cpu().numpy().copy() for p in self.head.parameters()]
+            print(f"[TRAINER] Including {len(head_params)} head parameters.")
+            params.extend(head_params)
+            
+        return params
 
     def get_bn_parameters(self):
+        """
+        Mengambil seluruh parameter BatchNorm dalam bentuk state_dict (Orderly).
+        Digunakan untuk finalisasi di fase Registry.
+        """
         if self.backbone is None: return {}
         state_dict = self.backbone.state_dict()
-        bn_keys = [k for k in state_dict.keys() if any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked'])]
-        print(f"[TRAINER] Extracting {len(bn_keys)} BN parameters.")
+        # Filter semua key yang berkaitan dengan BN
+        bn_keys = [k for k in state_dict.keys() if 
+                   any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked'])]
+        
+        # Kembalikan sebagai dictionary of numpy arrays (Serialized State Dict)
+        print(f"[TRAINER] Collecting {len(bn_keys)} BN parameters into orderly state_dict.")
         return {k: state_dict[k].cpu().numpy().copy() for k in bn_keys}
 
     def set_backbone_parameters(self, parameters, personalized=True):
@@ -421,25 +431,29 @@ class LocalTrainer:
             self.backbone.eval()
             
         state_dict = self.backbone.state_dict()
-        if personalized:
-            shared_keys = [k for k in state_dict.keys() if self._is_shared_param(k)]
-        else:
-            shared_keys = list(state_dict.keys())
+        shared_keys = [k for k in state_dict.keys() if not personalized or self._is_shared_param(k)]
+        num_backbone = len(shared_keys)
 
-        if len(parameters) != len(shared_keys):
-            if len(parameters) == len(state_dict):
-                shared_keys = list(state_dict.keys())
-            else: return
-
-        print(f"[TRAINER] Injecting {len(parameters)} parameters.")
+        print(f"[TRAINER] Injecting {num_backbone} backbone parameters.")
         new_state_dict = OrderedDict(state_dict)
-        for k, v in zip(shared_keys, parameters):
+        for i, k in enumerate(shared_keys):
             try:
-                tensor_v = torch.from_numpy(v.copy())
-                if tensor_v.shape == state_dict[k].shape:
-                    new_state_dict[k] = tensor_v
+                if i < len(parameters):
+                    tensor_v = torch.from_numpy(parameters[i].copy())
+                    if tensor_v.shape == state_dict[k].shape:
+                        new_state_dict[k] = tensor_v
             except: continue
         self.backbone.load_state_dict(new_state_dict, strict=False)
+
+        # Pasang Head Parameters (Hanya jika Full Sync dan ada dalam payload)
+        if not personalized and len(parameters) > num_backbone and self.head is not None:
+            head_params = parameters[num_backbone:]
+            print(f"[TRAINER] Injecting {len(head_params)} head parameters.")
+            for i, p in enumerate(self.head.parameters()):
+                if i < len(head_params):
+                    try:
+                        p.data = torch.from_numpy(head_params[i].copy()).to(self.device)
+                    except: continue
 
     def calculate_centroids(self, label_map=None):
         if self.backbone is None: return {}

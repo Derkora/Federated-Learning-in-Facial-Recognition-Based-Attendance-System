@@ -125,10 +125,6 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         except Exception as e:
             print(f"[CLIENT] Checkpoint save failed: {e}")
 
-        # model_version.txt jangan diupdate di sini, biarkan manager yang menangani di akhir siklus
-        except Exception as e:
-            print(f"[CLIENT] Checkpoint save failed: {e}")
-
         # Evaluasi validasi (non-fatal)
         val_loss, val_accuracy = 0.0, 0.0
         try:
