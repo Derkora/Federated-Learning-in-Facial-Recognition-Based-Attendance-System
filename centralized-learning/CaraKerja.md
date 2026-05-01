@@ -1,37 +1,39 @@
-# Cara Kerja Sistem: Centralized Face Attendance
+# Cara Kerja Sistem: Centralized Face Attendance (Prime State)
 
-Sistem ini dirancang untuk mencapai identifikasi wajah dengan performa maksimal melalui pengumpulan seluruh dataset ke server pusat untuk melatih satu model global yang utuh.
+Sistem ini dirancang untuk mencapai performa identifikasi wajah maksimal melalui pengumpulan dataset ke server pusat untuk melatih satu model global yang presisi.
 
 ---
 
-## Tahap 1: Data Engineering & Mandatory Preprocessing
-Proses penyiapan data yang dilakukan di sisi terminal sebelum pengiriman ke server pusat.
-- **Multi-Trial Face Detection**: Sistem melakukan percobaan deteksi wajah hingga 5 kali per mahasiswa. Jika deteksi gagal pada gambar tertajam, sistem secara otomatis mencoba gambar berikutnya berdasarkan urutan nilai Laplacian Variance (sharpness) tertinggi.
-- **MTCNN Face Cropping**: Wajah dipotong secara otomatis dari frame kamera asli dengan margin 20px untuk meminimalkan noise latar belakang.
-- **112x96 Dimensional Alignment**: Wajah yang dipotong diubah ukurannya ke dimensi standar **112x96** (Portrait) menggunakan metode bilinear untuk memastikan konsistensi ekstraksi fitur tanpa distorsi aspek rasio.
+## Tahap 1: Data Engineering & Mandatory Preprocessing (Identik dengan FL)
+Proses penyiapan data di sisi terminal sebelum pengiriman ke server pusat:
+1.  **Laplacian Variance Selection**: Sistem secara otomatis memilih maksimal **50 citra wajah paling tajam** dari folder `raw_data/students`. Hal ini memastikan model hanya belajar dari data berkualitas tinggi.
+2.  **Face Detection (MTCNN)**: Mendeteksi lokasi wajah. Jika deteksi gagal pada citra tertajam, sistem akan mencoba gambar alternatif berikutnya (Multi-Trial).
+3.  **Affine Landmark Alignment**: Ini adalah peningkatan krusial. Sistem mendeteksi 5 titik landmark (mata, hidung, mulut) dan melakukan transformasi Affine agar posisi mata dan mulut sejajar secara horizontal.
+4.  **Portrait Resizing (112x96)**: Hasil alignment dipotong dan diubah ukurannya ke dimensi **112x96** (Portrait), yang merupakan standar emas untuk model MobileFaceNet.
+5.  **Single Normalization**: Citra dikonversi ke tensor dan dinormalisasi tepat satu kali ke rentang [-1, 1] menggunakan standar MobileFaceNet: `(x - 127.5) / 128.0`.
 
 ---
 
 ## Tahap 2: Arsitektur Model & Optimasi (Accuracy Boost)
-- **MobileFaceNet Backbone**: Menggunakan arsitektur 128-dimensi yang ringan namun tangguh untuk perangkat edge.
-- **SGD with Nesterov Momentum**: Beralih dari Adam ke SGD dengan momentum Nesterov (0.9) untuk konvergensi yang lebih stabil dan generalisasi fitur yang lebih tajam.
-- **Per-Layer Weight Decay**: Menerapkan bobot pinalti yang berbeda (Backbone: 4e-5, Head: 4e-4) untuk mencegah overfitting pada dataset yang kecil.
-- **ArcMargin Product**: Margin denda (penalty) digunakan untuk mendorong pemisahan antar identitas mahasiswa secara maksimal di ruang laten.
+- **MobileFaceNet Backbone**: Arsitektur CNN 128-dimensi yang sangat efisien untuk perangkat Edge (Raspberry Pi/Jetson).
+- **ArcMargin Product (Head)**: Menggunakan fungsi ArcFace untuk memaksimalkan margin jarak antar identitas di ruang laten.
+- **Optimizer: SGD with Nesterov Momentum**: Menggunakan momentum 0.9 untuk konvergensi yang lebih tajam dan stabil dibandingkan Adam.
+- **Per-Layer Weight Decay**: Pinalti bobot yang berbeda antara Backbone (4e-5) dan Head (4e-4) untuk mencegah overfitting pada jumlah data yang terbatas.
 
 ---
 
-## Tahap 3: Siklus Pelatihan Terpusat & Model Versioning
-Alur kerja yang memindahkan dataset wajah dari terminal ke server pusat dan mengelola versi model:
-1.  **Fase Import Data**: Terminal mengemas folder `raw_data/students` menjadi berkas ZIP (`data.zip`) dan mengirimkannya melalui endpoint `/upload-bulk-zip`.
-2.  **Centralized Training**: Server mengekstrak data dan melatih model selama 20 epoch menggunakan jadwal **Cosine Annealing Learning Rate** untuk transisi bobot yang mulus.
-3.  **Stochastic Weight Averaging (SWA)**: Untuk meningkatkan stabilitas fitur, sistem melakukan snapshot model pada 5 epoch terakhir dan merata-ratakannya menjadi satu model final yang lebih robust terhadap noise citra.
-4.  **Model Version Persistence**: Setelah training, server menyimpan catatan versi model baru ke dalam database PostgreSQL. Hal ini memastikan nomor versi model (misalnya v1, v2) tetap terjaga meskipun container server dijalankan ulang.
-5.  **Reference Generation**: Server menghasilkan registri embedding (`reference_embeddings.pth`) yang berisi centroid dari seluruh data mahasiswa yang telah dikumpulkan.
+## Tahap 3: Siklus Pelatihan Terpusat (Centralized)
+1.  **Bulk Data Upload**: Terminal mengompresi folder `processed` menjadi berkas ZIP dan mengunggahnya ke server.
+2.  **Model Versioning**: Server secara otomatis menaikkan nomor versi model (misal: v1 ke v2) dalam database PostgreSQL untuk pelacakan permanen.
+3.  **Cosine Annealing LR**: Pelatihan selama 20 epoch dengan skema penurunan Learning Rate mengikuti kurva kosinus (0.1 -> 0.0001) untuk transisi bobot yang sangat halus.
+4.  **Stochastic Weight Averaging (SWA)**: Server mengambil snapshot model pada 5 epoch terakhir dan melakukan perataan bobot (*averaging*) untuk menghasilkan model final yang lebih tahan terhadap fluktuasi data.
+5.  **Global Registry Generation**: Server menghitung *centroid* (rata-rata vektor) untuk setiap mahasiswa dan menyimpannya dalam `reference_embeddings.pth`.
 
 ---
 
-## Tahap 4: Inferensi & Advanced Matching
-Setelah model disinkronisasi, terminal melakukan pengenalan real-time dengan teknik tingkat lanjut:
-- **Flip Trick Evaluation**: Meningkatkan stabilitas skor dengan merata-ratakan embedding citra asli dan citra mirror (horizontal flip) sebelum pencocokan.
-- **Confident Instant Match (CIM)**: Menghilangkan "pemanasan" kamera. Jika skor kemiripan > 0.85, sistem langsung memberikan hasil identifikasi tanpa menunggu buffer temporal.
-- **Temporal Voting (0.75+ Threshold)**: Jika skor di bawah 0.85 namun di atas 0.75, sistem menggunakan buffer 5 frame untuk memastikan stabilitas prediksi sebelum dicatat sebagai kehadiran.
+## Tahap 4: Live Inference (Inference Engine)
+Setelah terminal mengunduh model terbaru, sistem menjalankan mesin inferensi real-time:
+- **Eager Loading & Isolation**: Memuat model ke RAM secara terpisah dari thread sistem agar absensi tetap berjalan meskipun ada proses background.
+- **Flip Trick Evaluation**: Mengambil embedding dari wajah asli dan wajah yang di-flip horizontal, lalu dirata-ratakan untuk stabilitas skor maksimal.
+- **Temporal Voting**: Mengumpulkan 5 frame berturut-turut untuk memastikan identitas sebelum mencatat presensi.
+- **Confident Instant Match (CIM)**: Jika skor similarity > 0.85, sistem langsung memverifikasi wajah tanpa menunggu buffer frame.

@@ -1,51 +1,30 @@
-# Catatan Implementasi & Perbedaan dari Proposal (Revisi)
+# Catatan Implementasi & Revisi (Prime State)
 
-Dokumen ini mencatat perubahan teknis dan optimalisasi yang dilakukan selama tahap implementasi yang mungkin berbeda dari proposal awal. Catatan ini dapat digunakan sebagai dasar pembaruan pada buku Laporan/Skripsi.
+Dokumen ini mencatat perubahan teknis krusial yang diimplementasikan selama pengembangan untuk mencapai stabilitas sistem. Poin-poin ini disarankan untuk diupdate pada Buku Laporan/Skripsi (Bab 3 dan Bab 4).
 
-## 1. Optimalisasi Perangkat Edge (Stabilitas vs RAM)
+## 1. Upgrade Preprocessing: Affine Landmark Alignment
+- **Semula (Proposal)**: Hanya menggunakan MTCNN Bounding Box Crop.
+- **Implementasi (Update)**: Menggunakan **Affine Alignment** berdasarkan 5 titik landmark (mata, hidung, mulut).
+- **Justifikasi**: Penyelarasan wajah secara geometris (memastikan posisi mata sejajar horizontal) secara signifikan mengurangi variasi fitur yang harus dipelajari model, sehingga akurasi meningkat drastis terutama pada wajah yang miring.
 
-Meskipun pada tahap awal sempat dieksplorasi penggunaan ONNX Runtime untuk menekan konsumsi RAM, sistem akhir diputuskan menggunakan **Full PyTorch (CPU Mode)** di terminal.
-- **Alasan**: Menghindari ketidakcocokan metadata model saat pembaruan dinamis dan memastikan keselarasan 100% antara fase pelatihan dan inferensi.
-- **Dampak**: Peningkatan penggunaan RAM tetap dalam batas wajar (1GB-2GB) dengan stabilitas arsitektur yang jauh lebih tinggi.
+## 2. Adopsi Arsitektur pFedFace (Personalized FL)
+- **Semula (Proposal)**: Full Model Synchronization (semua parameter disinkronkan).
+- **Implementasi (Update)**: Hanya mensinkronkan **Backbone** (MobileFaceNet), sementara **BatchNorm (BN)** dan **Classifier Head** tetap lokal di setiap terminal.
+- **Justifikasi**: Masalah *non-IID* (distribusi identitas yang berbeda antar terminal) dapat menyebabkan *Loss Spike* jika Head disinkronkan secara paksa. Dengan pFedFace, terminal mempertahankan "pengetahuan identitas lokal" yang unik bagi mahasiswanya sendiri.
 
-## 2. Peningkatan Robustness Registrasi (Detection Retry)
+## 3. Preservasi Statistik Global Batch Normalization (BN)
+- **Teknis**: Statistik BN (mean/variance) tidak lagi direset setiap ronde di server. Server sekarang menjaga (*preserve*) BN global hasil sesi sebelumnya sebagai baseline.
+- **Dampak**: Menghilangkan masalah "amnesia model" di mana akurasi sering kali drop secara misterius setelah ronde pelatihan selesai. Hal ini memastikan model selalu memulai dari titik optimal (Acc 0.9+ sejak ronde awal).
 
-Terdapat penambahan mekanisme **Multi-Trial Face Detection** pada proses pendaftaran dan pembaruan embedding:
-- **Perubahan**: Sistem tidak lagi hanya mengandalkan satu gambar tertajam. Jika deteksi wajah gagal pada gambar pertama, sistem akan mencoba hingga **5 kali** menggunakan urutan gambar tertajam berikutnya.
-- **Hasil**: Menghilangkan masalah "missing user" (misalnya kasus 29/30 identitas) yang disebabkan oleh satu frame yang tidak terbaca MTCNN meskipun cukup tajam.
+## 4. Standarisasi Dimensi Portrait 96x112
+- **Detail**: Resolusi input dikunci pada **96 (width) x 112 (height)**.
+- **Justifikasi**: Fokus pada area vertikal wajah (portrait) memberikan kepadatan fitur yang lebih baik untuk model MobileFaceNet dibandingkan resolusi landscape atau square standar.
 
-## 3. Sinkronisasi Global Batch Normalization (BN)
+## 5. Implementasi Flip Trick & CIM pada Inferensi
+- **Flip Trick**: Mengevaluasi wajah asli dan mirror (rata-rata embedding) untuk stabilitas skor.
+- **Confident Instant Match (CIM)**: Bypass temporal voting jika skor > 0.85 untuk respons instan.
+- **Justifikasi**: Meningkatkan *User Experience* (kecepatan absensi) tanpa mengorbankan keamanan (keamanan tetap terjaga melalui threshold 0.75 untuk kasus umum).
 
-Terobosan utama dalam akurasi Federated Learning:
-- **Konsep**: Sebelum menghitung centroid (registri), terminal **WAJIB** mensinkronisasikan statistik Global BN dari server dan menginjeksikannya ke dalam backbone model.
-- **Justifikasi**: Tanpa sinkronisasi BN sebelum pembuatan registri, akan terjadi "feature drift" yang menyebabkan skor similarity rendah (~0.2). Dengan sinkronisasi ini, akurasi meningkat pesat (Score > 0.6).
-
-## 4. Persistensi Versi Model Berbasis Database
-
-- **Perubahan**: Pelacakan versi model (v1, v2, dst.) dipindahkan dari metadata file ke **Database PostgreSQL (tabel public.model_versions)** di sisi Centralized Server.
-- **Manfaat**: Versi model tetap konsisten meskipun container dinyalakan ulang. Terminal dapat mendeteksi "lompatan versi" secara akurat dan memicu penyegaran (refresh) data biometrik lokal secara otomatis.
-
-## 5. Standarisasi Preprocessing (112x96 Portrait)
-
-- **Ketentuan**: Seluruh pipeline (CL, FL, Training, dan Inferensi) diselaraskan pada resolusi **112x96 portrait**.
-- **Teknis**: Menggunakan margin deteksi 20px dan resize bilinear tanpa distorsi aspek rasio, memastikan wajah yang "dilihat" model selama absensi memiliki karakteristik yang sama dengan saat pelatihan.
-
-## 6. Optimasi Hyperparameter (Accuracy Boost)
-
-- **Perubahan**: Mengganti optimizer Adam dengan **SGD with Nesterov Momentum** dan menerapkan **Per-Layer Weight Decay**.
-- **Justifikasi**: Berdasarkan referensi implementasi *ArcFace*, SGD memberikan kurva konvergensi yang lebih tajam dan generalisasi fitur yang lebih baik pada model MobileFaceNet dibandingkan Adam yang cenderung datar.
-- **Dampak**: Model lebih sensitif terhadap perbedaan fitur wajah antar individu yang mirip sekalipun.
-
-## 7. Metode Inferensi Tingkat Lanjut (Flip Trick & CIM)
-
-Sistem mengadopsi dua teknik baru untuk meningkatkan stabilitas dan kecepatan:
-- **Flip Trick Evaluation**: Mengekstraksi fitur dari wajah asli dan wajah yang di-flip secara horizontal, lalu merata-ratakannya. Teknik ini secara signifikan menstabilkan skor similarity terhadap kemiringan wajah.
-- **Confident Instant Match (CIM)**: Bypass temporal voting jika skor kemiripan frame tunggal > 0.85. Hal ini menghilangkan keluhan "pemanasan" atau delay saat pertama kali wajah terdeteksi.
-
-## 8. Pengetatan Keamanan (Threshold 0.75)
-- **Ketentuan**: Ambang batas (threshold) pengenalan ditingkatkan dari proposal awal (0.5 atau 0.6) menjadi **0.75**.
-- **Tujuan**: Untuk meminimalisir *False Positive* (salah deteksi) pada lingkungan dengan banyak orang di latar belakang. Dengan model yang sudah dioptimasi, skor mahasiswa asli tetap mampu mencapai angka yang tinggi secara konsisten.
-
-## 9. Penerapan Stochastic Weight Averaging (SWA)
-- **Perubahan**: Menambahkan fase perataan bobot model (*weight averaging*) di akhir siklus pelatihan. Pada CL, hal ini dilakukan pada 5 epoch terakhir. Pada FL, dilakukan melalui *Snapshot Averaging* pada 3 ronde terakhir di sisi server.
-- **Manfaat**: Teknik ini menghasilkan model yang lebih "generalis" dan tidak terpaku pada noise data di satu iterasi tertentu, sehingga hasil identifikasi jauh lebih stabil dan tidak fluktuatif.
+## 6. Integrasi Database untuk Versioning Model
+- **Sistem**: Pelacakan versi model (v1, v2, dst.) dikelola secara permanen di database PostgreSQL.
+- **Manfaat**: Konsistensi versi tetap terjaga meskipun infrastruktur server (container) dimulai ulang, memudahkan terminal dalam melakukan sinkronisasi otomatis.

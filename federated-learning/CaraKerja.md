@@ -1,29 +1,44 @@
-# Cara Kerja Sistem: Federated Face Attendance
+# Cara Kerja Sistem: Federated Face Attendance (Prime State)
 
-Sistem ini dirancang untuk mencapai identifikasi wajah yang stabil dengan tingkat kepercayaan tinggi melalui kolaborasi antar perangkat tanpa memindahkan data mentah mahasiswa ke server.
+Sistem ini dirancang untuk mencapai identifikasi wajah stabil melalui kolaborasi antar terminal tanpa memindahkan data mentah mahasiswa ke server (Privacy-Preserving).
 
-## Tahap 1: Data Engineering & Mandatory Preprocessing
-Sistem memastikan kualitas data lokal sebelum masuk ke fase pelatihan.
-- **Multi-Trial Face Detection**: Sistem melakukan percobaan deteksi wajah hingga 5 kali per identitas. Jika deteksi gagal, sistem menggunakan gambar alternatif dengan tingkat ketajaman (Laplacian Variance) tertinggi berikutnya.
-- **MTCNN Face Cropping**: Wajah dipotong secara presisi dengan margin tertentu untuk menghilangkan porsi latar belakang yang tidak relevan.
-- **112x96 Dimensional Alignment**: Hasil potongan wajah diubah ukurannya ke dimensi **112x96** (Portrait). Standarisasi dimensi ini sangat krusial agar sinkron dengan input arsitektur MobileFaceNet.
+---
 
-## Tahap 2: Inisialisasi Arsitektur & Optimasi (pFedFace - Hybrid)
-Struktur ini memisahkan pengetahuan global dan identitas lokal untuk akurasi maksimal.
-- **Global Backbone (MobileFaceNet)**: Ekstraktor fitur universal yang menggunakan **SGD with Nesterov Momentum** dan per-layer weight decay untuk mempelajari struktur wajah secara general.
-- **Global BN Merging**: Server menggabungkan statistik Batch Normalization (mean/variance) dari seluruh klien untuk menstabilkan ekstraksi fitur terhadap variasi pencahayaan antar terminal.
-- **Local Head (ArcMargin Product)**: Komponen lokal yang menyimpan pengetahuan spesifik tentang identitas mahasiswa di terminal tersebut, memastikan pemisahan antar mahasiswa (class separation) sangat tajam.
+## Tahap 1: Fase Persiapan & Sinkronisasi (Discovery)
+Langkah awal untuk memastikan semua terminal memiliki "bahasa" yang sama sebelum belajar dimulai:
+1.  **Discovery Identitas**: Setiap terminal memindai folder lokal (`raw_data/students`) untuk mendaftarkan ID (NRP) ke server.
+2.  **Global Label Map Sync**: Server mengumpulkan semua ID unik dari seluruh terminal dan mengirimkan balik daftar urutan kelas (label map) yang seragam ke semua client. Ini mencegah index klasifikasi tertukar antar terminal.
 
-## Tahap 3: Siklus Federated & Registry Generation
-Sistem berjalan dalam fase terkoordinasi untuk membangun "World-Knowledge" yang aman:
-1.  **Phase Discovery**: Pendaftaran ID Mahasiswa ke Global Map di server untuk sinkronisasi NRP dan Nama.
-2.  **Phase Preprocessing**: Ekstraksi wajah secara lokal di semua terminal secara serentak.
-3.  **Phase Training (Flower)**: Pelatihan paralel menggunakan **FedProx** ($\mu=0.05$) dan **Cosine Annealing LR**. Setiap terminal melakukan pelatihan lokal pada data pribadinya tanpa mengirimkan citra mentah ke server.
-4.  **Snapshot Averaging (SWA Variant)**: Server menyimpan snapshot model dari ronde-ronde terakhir (misalnya ronde 8-10) dan melakukan rata-rata bobot (weight averaging). Hal ini menghasilkan model global yang jauh lebih stabil dan tahan terhadap fluktuasi data antar ronde.
-5.  **Phase Registry Generation**: Pembuatan database identitas universal. Statistik **Global BN disinkronkan terlebih dahulu** sebelum perhitungan centroid dilakukan untuk memastikan ekstraksi fitur yang konsisten dan akurat.
+---
 
-## Tahap 4: Inferensi & Advanced Matching
-Setelah pelatihan, sistem siap digunakan untuk absensi real-time dengan teknik canggih:
-- **Flip Trick Evaluation**: Meningkatkan stabilitas skor dengan merata-ratakan embedding citra asli dan citra mirror (horizontal flip) sebelum pencocokan identitas.
-- **Confident Instant Match (CIM)**: Menghilangkan delay "pemanasan". Jika skor kemiripan > 0.85, sistem langsung memverifikasi wajah tanpa menunggu buffer temporal.
-- **Temporal Voting (0.75+ Threshold)**: Jika skor di antara 0.75 - 0.85, sistem menggunakan buffer 5 frame untuk memastikan stabilitas prediksi sebelum dicatat dalam database kehadiran.
+## Tahap 2: Fase Pemrosesan Data (Preprocessing)
+Langkah krusial untuk kualitas input yang seragam (Identik dengan CL):
+1.  **Laplacian Selection (Top 50)**: Memilih maksimal 50 foto paling tajam per mahasiswa.
+2.  **MTCNN Face Detection**: Deteksi lokasi wajah dengan mekanisme Multi-Trial.
+3.  **Affine Landmark Alignment**: Menyejajarkan posisi mata dan mulut secara horizontal berdasarkan 5 titik landmark.
+4.  **Portrait Crop (96x112)**: Memastikan area wajah fokus pada dimensi Portrait yang standar.
+5.  **Initial Centroid Generation**: Menghasilkan embedding awal menggunakan model saat ini untuk dikirim ke server sebagai data referensi.
+
+---
+
+## Tahap 3: Fase Pelatihan Terfederasi (pFedFace - Hybrid)
+Proses kolaborasi pengetahuan tanpa berbagi privasi:
+1.  **Model Initialization**: Terminal memuat MobileFaceNet (backbone) dan mengekspansi ArcMarginProduct (head) sesuai label map global.
+2.  **Backbone Only Sync (pFedFace)**: Selama ronde Flower, terminal **hanya mengirimkan parameter Backbone** ke server. Parameter BatchNorm (BN) dan Head (Classifier) tetap disimpan secara lokal agar model bisa beradaptasi dengan kondisi spesifik (kamera/cahaya) di terminal tersebut.
+3.  **FedProx Optimization**: Menggunakan parameter proximal untuk menangani variasi data antar terminal (non-IID).
+4.  **Snapshot Averaging**: Server merata-ratakan bobot backbone dari 3 ronde terakhir untuk stabilitas fitur yang lebih tinggi.
+
+---
+
+## Tahap 4: Fase Finalisasi & Pembangkitan Registry
+Konsolidasi pengetahuan global setelah pelatihan Flower selesai:
+1.  **Download Global Backbone**: Mengunduh bobot backbone hasil agregasi terbaru.
+2.  **Download Global BN**: Mengunduh statistik Batch Normalization global ("tempel di belakang") untuk menstabilkan ekstraksi fitur saat inferensi.
+3.  **Centroid Re-calculation**: Terminal menghitung ulang "titik tengah" (centroid) embedding setiap mahasiswa menggunakan kombinasi Backbone Global + BN Global untuk disimpan sebagai registri identitas universal.
+
+---
+
+## Tahap 5: Fase Inferensi (Live Attendance)
+1.  **Eager Loading**: Memuat model versi terbaru ke RAM secara terisolasi.
+2.  **Flip Trick Evaluation**: Merata-ratakan embedding wajah asli dan mirror untuk hasil skor yang lebih stabil.
+3.  **Temporal Voting & CIM**: Menggunakan buffer frame untuk konfirmasi identitas, namun mendukung *Instant Match* jika skor > 0.85.

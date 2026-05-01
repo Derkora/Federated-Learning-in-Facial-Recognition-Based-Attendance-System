@@ -1,55 +1,39 @@
-# Perbandingan Sistem: Centralized Learning vs Federated Learning
+# Perbandingan Sistem: Centralized Learning vs Federated Learning (Revisi Final)
 
-Laporan ini membandingkan pendekatan baseline **Centralized Learning (CL)** dengan sistem **Federated Learning (FL)** yang diusulkan untuk aplikasi absensi berbasis pengenalan wajah.
+Laporan ini membandingkan pendekatan **Centralized Learning (CL)** dengan sistem **Federated Learning (FL)** yang dioptimasi (pFedFace) untuk aplikasi absensi berbasis wajah.
 
-## 1. Perbandingan Arsitektur
+## 1. Perbandingan Arsitektur & Alur Data
 
-| Komponen | Centralized Learning (Baseline) | Federated Learning (Diambil) |
+| Komponen | Centralized Learning (CL) | Federated Learning (FL - pFedFace) |
 | :--- | :--- | :--- |
-| **Aliran Data** | **Data-to-Global**: Gambar wajah mentah dikirim ke server dalam bentuk berkas ZIP. | **Model-to-Data**: Data mentah tetap berada di perangkat edge. Hanya bobot model yang dibagikan. |
-| **Struktur Model** | **Monolitik**: Satu model MobileFaceNet (128-dim) dilatih pada seluruh data gabungan. | **Hybrid (pFedFace)**: Global Backbone (MobileFaceNet) + Local Head (ArcMargin) untuk identitas unik. |
-| **Strategi Pelatihan** | **Bulk Training**: Server melatih satu model global sekaligus setelah seluruh data diterima. | **Iterative Training**: Klien melatih secara lokal menggunakan FedProx dan agregasi melalui Flower. |
-| **Privasi** | Rendah (Server melihat seluruh data wajah). | **Tinggi** (Server tidak pernah menerima gambar mentah). |
+| **Aliran Data** | **Data-to-Model**: Citra wajah mentah dikirim ke server pusat. | **Model-to-Data**: Citra wajah mentah tidak pernah keluar dari terminal. |
+| **Pusat Pengetahuan** | **Monolitik**: Satu model global untuk semua identitas. | **Hybrid**: Global Backbone (Fitur Umum) + Local Head (Identitas Spesifik). |
+| **Keamanan Identitas** | Bergantung pada keamanan server pusat. | **Sangat Tinggi**: Identitas unik (Head) tidak pernah dibagikan. |
+| **Optimasi Agregasi** | SWA (Last 5 Epochs). | Snapshot Averaging (Last 3 Rounds). |
 
-## 2. Keselarasan Parameter Pelatihan
-Untuk memastikan validitas perbandingan, kedua sistem mengikuti konfigurasi pelatihan yang identik:
+## 2. Keselarasan Parameter (Parity)
+Kedua sistem menggunakan parameter yang identik untuk memastikan perbandingan yang adil:
 
-| Parameter | Centralized Learning (CL) | Federated Learning (FL) | Catatan |
-| :--- | :--- | :--- | :--- |
-| **Arsitektur Backbone** | MobileFaceNet (128-dim) | MobileFaceNet (128-dim) | Identik untuk validitas fitur. |
-| **Loss Function** | ArcMarginProduct | ArcMarginProduct | Standar pengenalan wajah modern. |
-| **Optimizer** | **SGD (Nesterov)** | **SGD (Nesterov)** | Akurasi konvergensi lebih tajam. |
-| **Learning Rate (LR)** | Cosine Annealing (0.1 -> 1e-4) | Cosine Annealing (0.1 -> 1e-4) | Penurunan LR yang lebih mulus. |
-| **Averaging Strategy** | **SWA** (Last 5 Epochs) | **Snapshot Averaging** (Last 3 Rounds) | Stabilitas fitur & robustness. |
-| **Total Iterasi Data** | 20 Epoch | (10 Ronde x 2 Epoch) = 20 Iterasi | Beban latihan yang setara. |
-| **Batch Size** | 32 (Total) | 16 (per klien) = 32 (Total) | Gradien stochastic yang seimbang. |
-| **Kualitas Input** | Top 50 (Laplacian Var) | Top 50 (Laplacian Var) | Standar kualitas input yang sama. |
-| **Resolusi Input** | 112 x 96 (Portrait) | 112 x 96 (Portrait) | Fokus fitur area wajah (squash). |
-| **Engine Inferensi** | **Full PyTorch (CPU)** | **Full PyTorch (CPU)** | Stabilitas arsitektur maksimal. |
-| **Threshold** | **0.75** (High Privacy) | **0.75** (High Privacy) | Standar keamanan diperketat. |
-| **Metode Inferensi** | **Flip Trick + CIM** | **Flip Trick + CIM** | Stabilitas & Kecepatan instan. |
+| Parameter | Centralized Learning (CL) | Federated Learning (FL) |
+| :--- | :--- | :--- |
+| **Backbone** | MobileFaceNet (128-dim) | MobileFaceNet (128-dim) |
+| **Preprocessing** | **Affine Landmark Alignment** | **Affine Landmark Alignment** |
+| **Resolusi** | 112 x 96 (Portrait) | 112 x 96 (Portrait) |
+| **Optimizer** | SGD with Nesterov (0.9) | SGD with Nesterov (0.9) |
+| **Learning Rate** | Cosine Annealing (0.1 -> 1e-4) | Cosine Annealing (0.1 -> 1e-4) |
+| **Threshold** | 0.75 (High Confidence) | 0.75 (High Confidence) |
+| **Metode Inferensi** | Flip Trick + Temporal Voting | Flip Trick + Temporal Voting |
 
-## 3. Inovasi Federated Learning (Diambil)
+## 3. Analisis Perbedaan Operasional
 
-Sistem FL yang diusulkan memperkenalkan beberapa teknik tingkat lanjut:
+### Keunggulan Centralized (CL)
+- **Kemudahan Agregasi**: Karena seluruh data ada di satu tempat, perhitungan centroid dan normalisasi data sangat mudah dilakukan.
+- **Konvergensi Cepat**: Model belajar dari distribusi data yang lengkap sejak awal (IID).
 
-*   **pFedFace (Personalized Federated Face)**: Memisahkan pengetahuan ekstraksi fitur (global) dari pengetahuan identitas (lokal).
-*   **Global BN Merging**: Server menggabungkan statistik Batch Normalization (mean/variance) dari seluruh klien, yang secara signifikan menstabilkan akurasi inferensi lintas perangkat.
-*   **Knowledge Sharing (Centroids)**: Klien bertukar centroid wajah yang telah anonim, memungkinkan model "mengenal" mahasiswa dari terminal lain tanpa melihat foto mereka.
-*   **FedProx Optimization**: Menggunakan parameter proximal ($\mu$) untuk menangani data non-IID (Independent and Identically Distributed) yang umum pada pengenalan wajah.
+### Keunggulan Federated (FL)
+- **Privasi Maksimal**: Menghilangkan risiko kebocoran data biometrik massal di server.
+- **Adaptasi Lokal (Personalization)**: Melalui pFedFace, terminal bisa memiliki bobot BatchNorm yang spesifik untuk kondisi pencahayaan di lokasi tersebut tanpa mengganggu terminal lain.
+- **Efisiensi Bandwidth**: Hanya mengirimkan bobot model (beberapa MB) alih-alih ribuan foto (ratusan MB).
 
-## 4. Perbandingan Alur Kerja
-
-### Alur Kerja Centralized
-1.  **Klien**: Preprocessing -> Kemas ZIP -> Unggah ke Server.
-2.  **Server**: Ekstrak ZIP -> Pelatihan Model -> Pembuatan Registri Embedding.
-3.  **Klien**: Unduh model `.pth` dan registri `reference_embeddings.pth` untuk inferensi.
-
-### Alur Kerja Federated (Dynamic Barrier Sync)
-1.  **Fase Discovery**: Pendaftaran ID Mahasiswa ke Global Map di server.
-2.  **Fase Preprocess**: Pemotongan wajah lokal dan pemilihan 50 gambar tertajam.
-3.  **Fase Training**: Ronde pelatihan paralel menggunakan Flower dan FedProx.
-4.  **Fase Registry**: Sinkronisasi Global BN diikuti pembuatan database identitas universal.
-
-## Kesimpulan
-Sistem **Federated Learning** menawarkan alternatif yang menjaga privasi dibandingkan baseline Centralized tanpa mengorbankan performa pengenalan. Dengan memanfaatkan **pFedFace**, **Global BN Merging**, dan **Knowledge Sharing**, sistem ini mampu mengatasi tantangan khas FL seperti heterogenitas identitas dan model drift.
+## 4. Kesimpulan
+Sistem **Federated Learning** dengan arsitektur **pFedFace** terbukti mampu menyamai performa sistem Centralized dalam hal stabilitas pengenalan wajah, sekaligus memberikan perlindungan privasi yang jauh lebih unggul bagi data biometrik mahasiswa.
