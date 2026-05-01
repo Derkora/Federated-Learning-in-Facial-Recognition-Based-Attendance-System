@@ -17,6 +17,8 @@ import numpy as np
 import torch.nn.functional as F
 
 from app.utils.face_utils import face_handler, DEVICE
+from app.utils.freezing import set_model_freeze
+
 from app.utils.mobilefacenet import MobileFaceNet, ArcMarginProduct
 from app.db import models
 from app.server_manager_instance import cl_manager
@@ -193,7 +195,15 @@ class TrainingController:
             if os.path.exists(PRETRAINED_PATH):
                 model.load_state_dict(torch.load(PRETRAINED_PATH, map_location=DEVICE))
             
+            # --- PENERAPAN PARTIAL FREEZING ---
+            # Opsi: "none", "early", "backbone"
+            set_model_freeze(model, freeze_mode="early")
+            
             metric_fc = ArcMarginProduct(128, num_classes).to(DEVICE)
+            # Head selalu aktif
+            for param in metric_fc.parameters():
+                param.requires_grad = True
+
             
             # 3. SGD Optimizer dengan Per-Layer Weight Decay (Creator Standard)
             # - PReLU: weight_decay = 0
@@ -209,14 +219,18 @@ class TrainingController:
             for m in model.modules():
                 if isinstance(m, nn.PReLU):
                     ignored_params += list(map(id, m.parameters()))
-                    prelu_params += m.parameters()
+                    prelu_params += [p for p in m.parameters() if p.requires_grad]
+
             
-            base_params = filter(lambda p: id(p) not in ignored_params, model.parameters())
+            base_params = [p for p in model.parameters() if id(p) not in ignored_params and p.requires_grad]
+
             
             optimizer = optim.SGD([
                 {'params': base_params, 'weight_decay': 4e-5},
-                {'params': model.linear1.parameters(), 'weight_decay': 4e-4},
-                {'params': metric_fc.parameters(), 'weight_decay': 4e-4},
+                {'params': [p for p in model.linear1.parameters() if p.requires_grad], 'weight_decay': 4e-4},
+
+                {'params': [p for p in metric_fc.parameters() if p.requires_grad], 'weight_decay': 4e-4},
+
                 {'params': prelu_params, 'weight_decay': 0.0}
             ], lr=self._get_lr(0), momentum=0.9, nesterov=True)
             

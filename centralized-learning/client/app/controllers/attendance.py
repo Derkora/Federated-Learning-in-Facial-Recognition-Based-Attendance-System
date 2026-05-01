@@ -36,6 +36,7 @@ class AttendanceController:
                     self._last_version_loaded = current_v
                 
                 with torch.no_grad():
+                    model.eval() # PENTING: Cegah error BN "Expected more than 1 value"
                     # --- FLIP TRICK (Alignment dengan Server Registry) ---
                     # 1. Embedding Citra Asli
                     emb_orig = model(face_tensor_ready)

@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .mobilefacenet import MobileFaceNet, ArcMarginProduct
+from .freezing import set_model_freeze
 from .preprocessing import image_processor
 from torch.utils.data import DataLoader, Dataset
 import torchvision.transforms as transforms
@@ -193,6 +194,14 @@ class LocalTrainer:
 
         dataloader = DataLoader(dataset, batch_size=16, shuffle=True, collate_fn=hybrid_collate, drop_last=True)
         
+        # --- PENERAPAN PARTIAL FREEZING ---
+        # Opsi: "none", "early", "backbone"
+        set_model_freeze(self.backbone, freeze_mode="early")
+        
+        # Head selalu aktif
+        for param in self.head.parameters():
+            param.requires_grad = True
+
         backbone_snapshot = copy.deepcopy(self.backbone.state_dict())
         head_snapshot = copy.deepcopy(self.head.state_dict())
         global_ref = copy.deepcopy(self.backbone.state_dict())
@@ -213,6 +222,7 @@ class LocalTrainer:
         head_decay = []
         head_no_decay = []
         for name, param in self.head.named_parameters():
+            if not param.requires_grad: continue
             if 'bias' in name.lower():
                 head_no_decay.append(param)
             else:

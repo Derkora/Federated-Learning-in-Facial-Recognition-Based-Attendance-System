@@ -255,6 +255,10 @@ class AttendanceController:
                 local_db_embs = db.query(EmbeddingLocal).filter_by(is_global=False).all()
                 db_local_count = 0
                 for emb in local_db_embs:
+                    if emb.user_id in local_refs:
+                        # PENTING: Jika sudah ada di Registry (Tier 2), jangan override dengan Tier 3 (Local).
+                        # Registry dihitung dari seluruh dataset (robust), sedangkan Tier 3 hanya dari 5 gambar (refresh).
+                        continue 
                     try:
                         dec_emb = encryptor.decrypt_embedding(emb.embedding_data, emb.iv).copy()
                         v = torch.from_numpy(dec_emb).float()
@@ -263,7 +267,7 @@ class AttendanceController:
                         db_local_count += 1
                     except Exception as e:
                         print(f"[ATTENDANCE ERROR] Dekripsi lokal {emb.user_id}: {e}")
-                print(f"[ATTENDANCE] Tier 3: {db_local_count} embedding lokal (prioritas tertinggi).")
+                print(f"[ATTENDANCE] Tier 3: {db_local_count} embedding lokal baru (identitas baru).")
             except Exception as e:
                 print(f"[ATTENDANCE ERROR] Query DB lokal: {e}")
 

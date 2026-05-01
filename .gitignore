@@ -11,7 +11,6 @@ __pycache__/
 *.pdf
 centralized-learning/docker-log-cl.md
 federated-learning/docker-log-fl.md
-federated-learning-old/
 xiaoccer/
 myenv/
 build/

@@ -16,12 +16,12 @@ Kedua sistem menggunakan parameter yang identik untuk memastikan perbandingan ya
 
 | Parameter | Centralized Learning (CL) | Federated Learning (FL) |
 | :--- | :--- | :--- |
-| **Backbone** | MobileFaceNet (128-dim) | MobileFaceNet (128-dim) |
-| **Preprocessing** | **Affine Landmark Alignment** | **Affine Landmark Alignment** |
-| **Resolusi** | 112 x 96 (Portrait) | 112 x 96 (Portrait) |
-| **Optimizer** | SGD with Nesterov (0.9) | SGD with Nesterov (0.9) |
-| **Learning Rate** | Cosine Annealing (0.1 -> 1e-4) | Cosine Annealing (0.1 -> 1e-4) |
-| **Threshold** | 0.75 (High Confidence) | 0.75 (High Confidence) |
+| **Total Iterasi** | 20 Epochs | 10 Rounds x 2 Local Epochs (Total 20) |
+| **Partial Freezing**| **Mode: Early (Stage 1 & 2)** | **Mode: Early (Stage 1 & 2)** |
+| **BN Adaptation** | **Client-side Calibration** | **Inherent (Local BN Storage)** |
+| **Booster (SWA)**  | **SWA (Last 4 Epochs)** | **Snapshot Avg (Last 2 Rounds/4 Epochs)** |
+| **Centroid Data** | **Full Dataset (50 Images)** | **Full Dataset (50 Images)** |
+| **Threshold** | 0.75 (CIM: 0.85) | 0.75 (CIM: 0.85) |
 | **Metode Inferensi** | Flip Trick + Temporal Voting | Flip Trick + Temporal Voting |
 
 ## 3. Analisis Perbedaan Operasional

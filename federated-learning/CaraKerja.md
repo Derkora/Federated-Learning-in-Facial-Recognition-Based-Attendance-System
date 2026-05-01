@@ -21,20 +21,21 @@ Langkah krusial untuk kualitas input yang seragam (Identik dengan CL):
 
 ---
 
-## Tahap 3: Fase Pelatihan Terfederasi (pFedFace - Hybrid)
-Proses kolaborasi pengetahuan tanpa berbagi privasi:
-1.  **Model Initialization**: Terminal memuat MobileFaceNet (backbone) dan mengekspansi ArcMarginProduct (head) sesuai label map global.
-2.  **Backbone Only Sync (pFedFace)**: Selama ronde Flower, terminal **hanya mengirimkan parameter Backbone** ke server. Parameter BatchNorm (BN) dan Head (Classifier) tetap disimpan secara lokal agar model bisa beradaptasi dengan kondisi spesifik (kamera/cahaya) di terminal tersebut.
-3.  **FedProx Optimization**: Menggunakan parameter proximal untuk menangani variasi data antar terminal (non-IID).
-4.  **Snapshot Averaging**: Server merata-ratakan bobot backbone dari 3 ronde terakhir untuk stabilitas fitur yang lebih tinggi.
+## Tahap 3: Pelatihan Terfederasi (Federated Learning)
+1. **Partial Freezing**: Client membekukan Stage 1 & 2 secara lokal untuk efisiensi komputasi dan menjaga fitur umum.
+2. **Local Training (pFedFace)**: Client melatih Stage 3 dan Head menggunakan data lokal (10 Ronde x 2 Local Epoch).
+3. **Knowledge Sharing**: Server melakukan FedAvg pada parameter backbone bersama (Shared Parameters) setiap ronde.
+4. **Snapshot Averaging**: Menggunakan rata-rata snapshot pada 2 ronde terakhir (Setara 4 epoch) untuk stabilitas global.
 
 ---
 
-## Tahap 4: Fase Finalisasi & Pembangkitan Registry
-Konsolidasi pengetahuan global setelah pelatihan Flower selesai:
-1.  **Download Global Backbone**: Mengunduh bobot backbone hasil agregasi terbaru.
-2.  **Download Global BN**: Mengunduh statistik Batch Normalization global ("tempel di belakang") untuk menstabilkan ekstraksi fitur saat inferensi.
-3.  **Centroid Re-calculation**: Terminal menghitung ulang "titik tengah" (centroid) embedding setiap mahasiswa menggunakan kombinasi Backbone Global + BN Global untuk disimpan sebagai registri identitas universal.
+## Tahap 4: Finalisasi Registry & Inferensi
+1. **Registry Phase**: Client menghitung Centroid identitas menggunakan **50 gambar terbaik** dan mengirimkannya ke server.
+2. **Global Integration**: Server menggabungkan centroid dari seluruh client menjadi `global_embedding_registry.pth`.
+3. **Cross-Client Recognition**: Client mengunduh registry global sehingga bisa mengenali mahasiswa yang terdaftar di client lain dengan akurasi tinggi.
+ru yang sudah melalui proses federasi.
+2.  **Local BN Preservation**: Statistik Batch Normalization (mean/variance) yang telah dikalibrasi secara lokal tetap dipertahankan untuk memastikan normalisasi fitur yang optimal sesuai kondisi cahaya terminal (Inherent Personalization).
+3.  **Centroid Re-calculation**: Terminal menghitung ulang "titik tengah" (centroid) embedding setiap mahasiswa menggunakan kombinasi Backbone Global + Local BN untuk disimpan sebagai registri identitas universal.
 
 ---
 

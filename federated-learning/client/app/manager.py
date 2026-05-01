@@ -710,7 +710,7 @@ class FLClientManager:
                 if not os.path.exists(user_folder): continue
                 
                 # Pilih gambar terbaik (sudah berupa face crop 96x112 dari tahap preprocessing)
-                selected_paths = image_processor.select_best_faces(user_folder, n=5)
+                selected_paths = image_processor.select_best_faces(user_folder, n=50)
                 if not selected_paths:
                     print(f"[REFRESH] [FAILED] User {user.user_id}: Tidak ada gambar tersedia.")
                     continue

@@ -24,7 +24,7 @@ TRAINING_PARAMS = {
     "lr_schedule": "cosine", # Diganti ke Cosine Annealing
     "initial_lr": 0.1,
     "min_lr": 1e-4,
-    "swa_start_epoch": 15,    # SWA Aktif di 5 epoch terakhir
+    "swa_start_epoch": 17,    # SWA Aktif di 4 epoch terakhir (Penyelarasan dengan FL)
     "swa_lr": 0.01
 }
 

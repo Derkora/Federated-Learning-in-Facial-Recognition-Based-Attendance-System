@@ -28,3 +28,23 @@ Dokumen ini mencatat perubahan teknis krusial yang diimplementasikan selama peng
 ## 6. Integrasi Database untuk Versioning Model
 - **Sistem**: Pelacakan versi model (v1, v2, dst.) dikelola secara permanen di database PostgreSQL.
 - **Manfaat**: Konsistensi versi tetap terjaga meskipun infrastruktur server (container) dimulai ulang, memudahkan terminal dalam melakukan sinkronisasi otomatis.
+
+## 7. Partial Freezing (Stage-wise Training)
+- **Penerapan**: Membekukan lapisan `conv1` hingga `conv_3` (indeks 0-11) pada kedua sistem (CL & FL).
+- **Justifikasi**: Mencegah "Catastrophic Forgetting" pada fitur wajah dasar yang sudah sangat baik dari model pretrained. Dengan fokus hanya pada lapisan akhir, model lebih stabil dalam mengenali identitas spesifik mahasiswa tanpa merusak ekstraktor fitur umum.
+
+## 8. Adaptasi Lingkungan (Client-side BN Calibration)
+- **Update (Centralized)**: Menambahkan langkah kalibrasi BatchNorm pada client CL setelah download model global.
+- **Justifikasi**: Menghilangkan bias "Global BN" yang sering kali menyebabkan CL gagal pada pencahayaan yang berbeda dari distribusi training. Dengan kalibrasi lokal, model CL memiliki kemampuan adaptasi lingkungan yang setara dengan model pFedFace (FL).
+
+## 9. Penyelarasan Total Iterasi & SWA
+- **Detail**: CL (20 Epoch) disetarakan dengan FL (10 Round x 2 Epoch). SWA pada CL (4 epoch terakhir) disetarakan dengan Snapshot Averaging FL (2 ronde terakhir, 4 epoch total).
+- **Justifikasi**: Menjamin bahwa model pada kedua metode memiliki jumlah "pengalaman" yang sama terhadap data sebelum dibandingkan.
+
+## 10. Paritas Algoritma Inferensi (Edge Side)
+- **Detail**: Implementasi **Flip Trick** (Average Horizontal Flip) dan **Temporal Voting** (Buffer 10 frame) disamakan di tingkat kode Python.
+- **Justifikasi**: Memastikan perbedaan akurasi benar-benar berasal dari metode pembelajaran (Centralized vs Federated), bukan karena perbedaan cara mesin inferensi bekerja di client.
+
+## 11. Standarisasi Centroid Generation
+- **Detail**: Jumlah gambar untuk ekstraksi fitur final (Centroid) ditetapkan sebanyak **50 gambar terbaik** (seleksi Laplacian) untuk kedua metode.
+- **Justifikasi**: Menghilangkan bias pada Client 1 (pencipta data) yang sebelumnya hanya menggunakan 5 gambar (quick refresh), sehingga sekarang semua client memiliki kualitas referensi yang sama kuatnya (Premium Quality).

@@ -11,6 +11,7 @@ from collections import deque
 from PIL import Image
 from app.utils.mobilefacenet import MobileFaceNet
 from app.utils.preprocessing import image_processor, DEVICE
+from app.utils.freezing import calibrate_bn
 from app.controllers.management import ManagementController
 from app.controllers.attendance import AttendanceController
 
@@ -297,6 +298,11 @@ class CLClientManager:
                                 self._save_version(server_version)
                                 # EAGER RELOAD: Pastikan model terbaru masuk RAM
                                 self._reload_inference_models(force_reload=True)
+                                
+                                # --- BN ADAPTATION (LOCAL CALIBRATION) ---
+                                # Membuat model CL setara dengan pFedFace dalam hal adaptasi lingkungan.
+                                if self.model:
+                                    calibrate_bn(self.model, self.raw_data_path)
                             else:
                                 time.sleep(10)
                                 continue

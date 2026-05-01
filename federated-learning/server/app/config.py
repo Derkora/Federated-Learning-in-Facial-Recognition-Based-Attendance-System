@@ -25,7 +25,7 @@ TRAINING_PARAMS = {
     "lr_schedule": "cosine", # Diganti ke Cosine Annealing
     "initial_lr": 0.1,
     "min_lr": 1e-4,
-    "swa_start_round": 8,     # SWA Snapshot mulai ronde 8 (dari 10)
+    "swa_start_round": 9,     # SWA Snapshot mulai ronde 9 (Last 2 Rounds = 4 Epochs)
     "use_snapshot_averaging": True
 }
 
