@@ -7,10 +7,11 @@ Sistem ini dirancang untuk mencapai performa identifikasi wajah maksimal melalui
 ## Tahap 1: Data Engineering & Mandatory Preprocessing (Identik dengan FL)
 Proses penyiapan data di sisi terminal sebelum pengiriman ke server pusat:
 1.  **Laplacian Variance Selection**: Sistem secara otomatis memilih maksimal **50 citra wajah paling tajam** dari folder `raw_data/students`. Hal ini memastikan model hanya belajar dari data berkualitas tinggi.
-2.  **Face Detection (MTCNN)**: Mendeteksi lokasi wajah. Jika deteksi gagal pada citra tertajam, sistem akan mencoba gambar alternatif berikutnya (Multi-Trial).
-3.  **Affine Landmark Alignment**: Ini adalah peningkatan krusial. Sistem mendeteksi 5 titik landmark (mata, hidung, mulut) dan melakukan transformasi Affine agar posisi mata dan mulut sejajar secara horizontal.
-4.  **Portrait Resizing (112x96)**: Hasil alignment dipotong dan diubah ukurannya ke dimensi **112x96** (Portrait), yang merupakan standar emas untuk model MobileFaceNet.
-5.  **Single Normalization**: Citra dikonversi ke tensor dan dinormalisasi tepat satu kali ke rentang [-1, 1] menggunakan standar MobileFaceNet: `(x - 127.5) / 128.0`.
+2.  **Hardware-Aware Downscaling (New)**: Sebelum deteksi, gambar input di-resize ke lebar maksimal **640px**. Ini adalah langkah krusial untuk mencegah *Out of Memory* (OOM) pada perangkat seperti Raspberry Pi 3B.
+3.  **Face Detection (MTCNN)**: Mendeteksi lokasi wajah pada gambar yang sudah di-downscale.
+4.  **Affine Landmark Alignment**: Sistem mendeteksi 5 titik landmark (mata, hidung, mulut) dan melakukan transformasi Affine agar posisi mata dan mulut sejajar secara horizontal.
+5.  **Portrait Resizing (112x96)**: Hasil alignment dipotong dan diubah ukurannya ke dimensi **112x96** (Portrait), standar MobileFaceNet.
+6.  **Single Normalization**: Citra dikonversi ke tensor dan dinormalisasi ke rentang [-1, 1].
 
 ---
 
@@ -39,5 +40,7 @@ Setelah terminal mengunduh model terbaru, sistem menjalankan mesin inferensi rea
 - **Eager Loading & Isolation**: Memuat model ke RAM secara terpisah dari thread sistem agar absensi tetap berjalan meskipun ada proses background.
 - **BN Adaptation (Client Calibration)**: Fitur terbaru untuk menyamai kemampuan adaptasi FL. Setelah mengunduh model global, terminal menjalankan kalibrasi statistik BatchNorm menggunakan data lokal. Ini menyesuaikan model pusat dengan kondisi pencahayaan spesifik di terminal tersebut.
 - **Flip Trick Evaluation**: Mengambil embedding dari wajah asli dan wajah yang di-flip horizontal, lalu dirata-ratakan untuk stabilitas skor maksimal.
+- **Vectorized Classifier (New)**: Proses pencocokan wajah menggunakan operasi matriks (`torch.mm`) alih-alih loop `for`. Ini mempercepat proses dan menghemat RAM secara signifikan.
 - **Temporal Voting**: Mengumpulkan 5 frame berturut-turut untuk memastikan identitas sebelum mencatat presensi.
 - **Confident Instant Match (CIM)**: Jika skor similarity > 0.85, sistem langsung memverifikasi wajah tanpa menunggu buffer frame.
+- **Memory Management (GC)**: Sistem secara eksplisit memicu *Garbage Collection* di setiap akhir loop kamera untuk menjaga stabilitas RAM 1GB.

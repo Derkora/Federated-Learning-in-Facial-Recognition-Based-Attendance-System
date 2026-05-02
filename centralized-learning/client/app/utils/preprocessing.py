@@ -54,15 +54,33 @@ class ImageProcessor:
     def detect_face(self, img, save_path=None):
         """
         Deteksi wajah dengan Landmark Alignment.
-        Urutan: Deteksi -> Alignment -> Crop -> Resize 112x96.
+        Urutan: Downscale -> Deteksi -> Alignment -> Crop -> Resize 112x96.
         """
         try:
+            # OPTIMASI OOM: Downscale gambar jika terlalu besar (max 640px)
+            orig_w, orig_h = img.size
+            max_size = 640
+            if orig_w > max_size or orig_h > max_size:
+                scale = max_size / max(orig_w, orig_h)
+                new_size = (int(orig_w * scale), int(orig_h * scale))
+                img_detect = img.resize(new_size, Image.BILINEAR)
+                print(f"[DEBUG] [CL] Downscaling input for detection: {orig_w}x{orig_h} -> {new_size[0]}x{new_size[1]}")
+            else:
+                img_detect = img
+                scale = 1.0
+
             # Deteksi kotak dan landmark
-            boxes, probs, landmarks = self.mtcnn.detect(img, landmarks=True)
+            boxes, probs, landmarks = self.mtcnn.detect(img_detect, landmarks=True)
             
             if boxes is None or len(boxes) == 0:
                 return None, None, 0.0
             
+            # Kembalikan koordinat ke skala asli jika terjadi downscaling
+            if scale != 1.0:
+                boxes = boxes / scale
+                if landmarks is not None:
+                    landmarks = landmarks / scale
+
             face_img = None
             
             # 1. Mencoba Landmark Alignment (Metode Paling Stabil)

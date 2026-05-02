@@ -48,3 +48,18 @@ Dokumen ini mencatat perubahan teknis krusial yang diimplementasikan selama peng
 ## 11. Standarisasi Centroid Generation
 - **Detail**: Jumlah gambar untuk ekstraksi fitur final (Centroid) ditetapkan sebanyak **50 gambar terbaik** (seleksi Laplacian) untuk kedua metode.
 - **Justifikasi**: Menghilangkan bias pada Client 1 (pencipta data) yang sebelumnya hanya menggunakan 5 gambar (quick refresh), sehingga sekarang semua client memiliki kualitas referensi yang sama kuatnya (Premium Quality).
+
+---
+
+## 12. Evolusi dari Proposal Awal (Revisi Tugas Akhir)
+Berikut adalah perubahan signifikan dibandingkan dengan dokumen **5027221021-Steven Figo-Revisi Proposal.pdf**:
+
+| Fitur | Rencana Awal (Proposal) | Implementasi Saat Ini (Update) | Justifikasi Perubahan |
+| :--- | :--- | :--- | :--- |
+| **Hardware Edge** | Raspberry Pi 4 (RAM 4GB) | **Raspberry Pi 3B (RAM 1GB)** | Menguji ketahanan algoritma pada hardware yang lebih terbatas (*lower-end*). |
+| **Preprocessing** | MTCNN Bbox Crop | **Affine Landmark Alignment** | Meningkatkan akurasi pada wajah miring secara signifikan. |
+| **Resolusi Input** | Standar (112x112 / Square) | **Portrait (96x112)** | Fokus fitur pada area wajah, lebih optimal untuk MobileFaceNet. |
+| **Framework FL** | Framework Flower (flwr) | **Custom Lightweight FL** | Mengurangi dependensi library berat agar lebih stabil di RAM 1GB Raspi 3B. |
+| **Efisiensi Memori**| Tidak disebutkan secara detail | **Input Downscaling & Vectorization** | Wajib dilakukan agar MTCNN tidak menyebabkan OOM pada RAM 1GB. |
+| **Inference Mode** | Standar Loop | **Vectorized (Matrix Multiplication)** | Mengurangi beban CPU dan latency saat pencocokan wajah massal. |
+| **Adaptasi Lokal** | Sinkronisasi penuh | **pFedFace (Personalized FL)** | Mengatasi masalah *non-IID* data antar terminal yang berbeda. |

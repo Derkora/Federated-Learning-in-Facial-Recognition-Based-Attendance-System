@@ -131,6 +131,9 @@ class FLClientManager:
         
         # Ambang Batas Inferensi (Dinamis dari Server)
         self.inference_threshold = 0.75
+        
+        # Inisialisasi Kontroler Absensi (FIX: Agar tidak error di run_camera_loop)
+        self.attendance = AttendanceController(self)
 
     def _load_identity(self):
         """Memuat atau membuat identitas unik client yang tersimpan di volume data."""
@@ -398,7 +401,8 @@ class FLClientManager:
         virtual_images = []
         virtual_idx = 0
         
-        attendance_engine = AttendanceController(self)
+        # PENTING: Gunakan instance terpusat dari manager
+        attendance_engine = self.attendance
         
         while self.is_camera_running:
             ret, frame = False, None
@@ -477,7 +481,10 @@ class FLClientManager:
                 except Exception as e:
                     pass
             
-            if not virtual_mode: time.sleep(0.5)
+            # Explicit cleanup per loop to keep memory stable
+            if not virtual_mode: 
+                time.sleep(0.5)
+                gc.collect()
         
         cap.release()
 
@@ -907,6 +914,10 @@ class FLClientManager:
             self.download_backbone()
             self.download_bn(max_wait=10)
             
+            # PENTING: Cleanup sebelum mulai hitung embedding/training
+            gc.collect()
+            if torch.cuda.is_available(): torch.cuda.empty_cache()
+
             self.report_status("Siap Training")
             self.refresh_local_embeddings()
             

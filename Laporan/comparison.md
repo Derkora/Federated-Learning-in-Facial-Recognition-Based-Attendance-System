@@ -23,6 +23,7 @@ Kedua sistem menggunakan parameter yang identik untuk memastikan perbandingan ya
 | **Centroid Data** | **Full Dataset (50 Images)** | **Full Dataset (50 Images)** |
 | **Threshold** | 0.75 (CIM: 0.85) | 0.75 (CIM: 0.85) |
 | **Metode Inferensi** | Flip Trick + Temporal Voting | Flip Trick + Temporal Voting |
+| **Res. Management** | **Downscale 640px + Vectorization** | **Downscale 640px + Vectorization** |
 
 ## 3. Analisis Perbedaan Operasional
 

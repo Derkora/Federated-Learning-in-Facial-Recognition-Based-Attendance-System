@@ -246,7 +246,9 @@ class CLClientManager:
                     print(f"[ERROR] Pemrosesan kamera gagal: {e}")
             
             # Beri jeda agar tidak memakan CPU terlalu tinggi (FPS ~2-5 cukup untuk presensi)
-            if not virtual_mode: time.sleep(0.5)
+            if not virtual_mode: 
+                time.sleep(0.5)
+                gc.collect()
         
         cap.release()
 

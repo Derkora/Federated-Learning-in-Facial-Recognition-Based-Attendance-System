@@ -55,24 +55,33 @@ class AttendanceController:
             query_emb_tensor = query_emb_tensor.view(1, -1)
             
             # --- LOGIKA TEMPORAL VOTING & CIM (Confident Instant Match) ---
-            # 1. Cek Kemiripan Instant Frame (Untuk Menghilangkan "Pemanasan")
-            best_match_instant, max_sim_instant = "Unknown", -1
-            for nrp, ref_emb in reference_embeddings.items():
-                if not isinstance(ref_emb, torch.Tensor):
-                    ref_emb = torch.tensor(ref_emb).to(DEVICE)
-                ref_emb = ref_emb.view(1, -1)
-                sim = F.cosine_similarity(query_emb_tensor, ref_emb).item()
-                if sim > max_sim_instant:
-                    max_sim_instant, best_match_instant = sim, nrp
+            # 1. Cek Kemiripan Instant Frame (Vektorisasi)
+            user_ids = list(reference_embeddings.keys())
+            ref_list = []
+            for nrp in user_ids:
+                ref = reference_embeddings[nrp]
+                if not isinstance(ref, torch.Tensor):
+                    ref = torch.tensor(ref).to(DEVICE)
+                ref_list.append(ref.view(1, -1))
+            
+            # Stack semua referensi menjadi matriks (N, 128)
+            ref_matrix = torch.cat(ref_list, dim=0)
+            ref_matrix = F.normalize(ref_matrix, p=2, dim=1)
+            
+            # Hitung skor instant sekaligus
+            scores_instant = torch.mm(query_emb_tensor, ref_matrix.t())
+            max_sim_instant, max_idx_instant = torch.max(scores_instant, dim=1)
+            confidence_instant = max_sim_instant.item()
+            best_match_instant = user_ids[max_idx_instant.item()]
 
             # CIM Bypass: Jika skor sangat tinggi (> 0.85), anggap valid langsung dan reset buffer
-            if max_sim_instant > 0.85:
-                print(f"[CIM] Instant Match Confident! {best_match_instant} (Sim: {max_sim_instant:.4f})")
+            if confidence_instant > 0.85:
+                print(f"[CIM] [CL] Instant Match Confident! {best_match_instant} (Sim: {confidence_instant:.4f})")
                 self.manager.prediction_buffer.clear()
                 self.manager.prediction_buffer.append(query_emb_tensor)
-                best_match, max_sim = best_match_instant, max_sim_instant
+                best_match, max_sim = best_match_instant, confidence_instant
             else:
-                # Jika tidak sangat tinggi, gunakan rata-rata temporal (Normal logic)
+                # Jika tidak sangat tinggi, gunakan rata-rata temporal
                 now = time.time()
                 if now - self.manager.last_face_time > 1.0:
                     self.manager.prediction_buffer.clear()
@@ -83,14 +92,11 @@ class AttendanceController:
                 mean_emb_tensor = torch.stack(list(self.manager.prediction_buffer)).mean(0)
                 mean_emb_tensor = F.normalize(mean_emb_tensor, p=2, dim=1)
                 
-                best_match, max_sim = "Unknown", -1
-                for nrp, ref_emb in reference_embeddings.items():
-                    if not isinstance(ref_emb, torch.Tensor):
-                        ref_emb = torch.tensor(ref_emb).to(DEVICE)
-                    ref_emb = ref_emb.view(1, -1)
-                    sim = F.cosine_similarity(mean_emb_tensor, ref_emb).item()
-                    if sim > max_sim:
-                        max_sim, best_match = sim, nrp
+                # Hitung skor temporal sekaligus
+                scores_temporal = torch.mm(mean_emb_tensor, ref_matrix.t())
+                max_sim_temp, max_idx_temp = torch.max(scores_temporal, dim=1)
+                max_sim = max_sim_temp.item()
+                best_match = user_ids[max_idx_temp.item()]
             
             if max_sim > threshold:
                 print(f"[SUCCESS] {best_match} (Sim: {max_sim:.4f}) [Model: v{current_v}]")
