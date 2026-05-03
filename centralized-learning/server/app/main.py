@@ -248,19 +248,36 @@ def workflow_preprocess():
 
 # Tahap 3: Pelatihan Model Global
 @app.post("/workflow/train")
-def workflow_train(epochs: int = TRAINING_PARAMS["total_epochs"]):
+def workflow_train(epochs: int = TRAINING_PARAMS["total_epochs"], dbs: Session = Depends(db.get_db)):
     if cl_manager.is_running: raise HTTPException(400, "Server sedang sibuk")
     cl_manager.start_phase("Training")
     print(f"[INFO] Memulai pelatihan model ({epochs} epoch)...", flush=True)
     try:
         res = training_controller.train_model(epochs=epochs)
         if res['status'] == 'success':
+            history = res.get('epoch_history', [])
             cl_manager.update_metrics({
                 "accuracy": res['accuracy'],
                 "training_duration_s": res['duration_s'],
                 "compute_energy_kwh": res.get('compute_energy_kwh', 0),
-                "epoch_history": res.get('epoch_history', [])
+                "epoch_history": history
             })
+            
+            # Simpan riwayat ronde ke database
+            # Hanya simpan metrik sesi (durasi, energi, bandwidth) pada ronde TERAKHIR agar tidak dobel saat agregasi
+            total_epochs = len(history)
+            for i, h in enumerate(history):
+                is_last = (i == total_epochs - 1)
+                cl_manager.save_training_round(
+                    dbs, 
+                    h['epoch'], 
+                    h['loss'], 
+                    h['accuracy'],
+                    duration=res['duration_s'] if is_last else 0,
+                    energy=res.get('compute_energy_kwh', 0) if is_last else 0,
+                    upload=cl_manager.metrics.get('upload_volume_mb', 0) if is_last else 0,
+                    download=0 # Akan diisi di workflow_export
+                )
         return res
     finally:
         cl_manager.end_phase()
@@ -275,10 +292,20 @@ def workflow_export(dbs: Session = Depends(db.get_db)):
         res = training_controller.generate_reference_and_eval(dbs=dbs)
         if res['status'] == 'success':
             cl_manager.increment_version()
+            download_mb = res.get('download_volume_mb', 0)
             cl_manager.update_metrics({
-                "download_volume_mb": res.get('download_volume_mb', 0),
+                "download_volume_mb": download_mb,
                 "total_round_time_s": round(time.time() - cl_manager.start_time, 2)
             })
+            
+            # Update data download_mb ke ronde terakhir di database
+            try:
+                from app.db import models
+                last_round = dbs.query(models.TrainingRound).order_by(models.TrainingRound.round_id.desc()).first()
+                if last_round:
+                    last_round.download_volume_mb = float(download_mb)
+                    dbs.commit()
+            except: pass
         return res
     finally:
         cl_manager.end_phase()
@@ -290,13 +317,13 @@ def workflow_full_lifecycle(dbs: Session = Depends(db.get_db)):
     
     try:
         cl_manager.update_logs("Memulai siklus pelatihan penuh (Full Lifecycle)...")
-        res_import = workflow_import(dbs)
+        res_import = workflow_import(dbs=dbs)
         if res_import.get('status') != 'success': return res_import
         
         res_pre = workflow_preprocess()
         if res_pre.get('status') != 'success': return res_pre
         
-        res_train = workflow_train()
+        res_train = workflow_train(dbs=dbs)
         if res_train.get('status') != 'success': return res_train
         
         res_export = workflow_export(dbs=dbs)

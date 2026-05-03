@@ -278,7 +278,7 @@ class CLClientManager:
                     ip = socket.gethostbyname(socket.gethostname())
                     if self.management.register_client(ip):
                         self.is_registered = True
-                        print(f"[SUCCESS] Client berhasil terdaftar pada server.")
+                        self._log_to_file(f"SUCCESS: Terminal terdaftar pada server (IP: {ip})")
                     else: 
                         time.sleep(5)
                         continue
@@ -299,7 +299,7 @@ class CLClientManager:
                         
                         # Sinkronisasi jika versi lokal tertinggal
                         if not self.has_assets or server_version > self.current_model_version:
-                            print(f"[INFO] Sinkronisasi model (Lokal: v{self.current_model_version}, Server: v{server_version}).")
+                            self._log_to_file(f"SYNC: Memperbarui model (Lokal: v{self.current_model_version}, Server: v{server_version})")
                             
                             # Pastikan model sudah terinisialisasi (Lazy Load Guard)
                             if self.model is None:
@@ -327,14 +327,16 @@ class CLClientManager:
                         
                         # 3. Menangani Permintaan Pengunggahan Dataset
                         if upload_requested:
-                            self.is_training_phase = True # Masuk mode hemat daya
-                            print(f"[INFO] Server meminta unggah dataset.")
+                            if not self.is_training_phase:
+                                self._log_to_file("UPLOAD: Menerima instruksi unggah dataset dari server.")
+                            self.is_training_phase = True 
+                            
                             success, msg = self.management.package_and_upload()
                             if success:
-                                print(f"[SUCCESS] Unggah dataset berhasil. Menunggu proses pelatihan selesai...")
-                                time.sleep(60) # Beri jeda lebih lama jika baru saja mengunggah
+                                self._log_to_file("SUCCESS: Dataset berhasil diunggah ke server.")
+                                time.sleep(60) 
                             else:
-                                print(f"[ERROR] Gagal mengunggah dataset: {msg}")
+                                self._log_to_file(f"ERROR: Gagal mengunggah dataset: {msg}")
                         else:
                             self.is_training_phase = False # Kembali ke mode normal
 

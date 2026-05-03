@@ -210,7 +210,7 @@ class FLClientManager:
                                 emb_count += 1
                                 
                     db.commit()
-                    print(f"[SUCCESS] Berhasil sinkronisasi {sync_count} identitas dan {emb_count} embedding global.")
+                    self._log_to_file(f"INIT: Berhasil sinkronisasi {sync_count} identitas dan {emb_count} embedding global.")
                 except Exception as db_err:
                     print(f"[ERROR] Gagal sinkronisasi basis data: {db_err}")
                     db.rollback()
@@ -219,23 +219,25 @@ class FLClientManager:
         except Exception as e:
             print(f"[ERROR] Gagal mengambil identitas dari server: {e}")
 
-    def _apply_backbone_weights(self, loaded, ignore_bn=True):
+    def _apply_backbone_weights(self, loaded, ignore_bn=True, target_model=None):
         """Menerapkan bobot ke backbone secara aman (mendukung state_dict dan list parameter)."""
         try:
-            # Lazy Load Guard: Pastikan model sudah ada di RAM sebelum diisi bobot
-            self._ensure_models_loaded()
+            # Jika target_model tidak ditentukan, gunakan self.backbone
+            model = target_model if target_model is not None else self.backbone
             
-            if self.backbone is None:
-                # Fallback jika file checkpoint belum ada, buat model kosong
-                print("[INFO] Inisialisasi backbone baru (Tanpa Checkpoint)...")
-                self.backbone = MobileFaceNet().to(self.device)
-                self.backbone.eval()
+            if model is None:
+                # Fallback: Buat model baru jika belum ada
+                print("[INFO] Inisialisasi backbone baru untuk aplikasi bobot...")
+                model = MobileFaceNet().to(self.device)
+                model.eval()
+                if target_model is None:
+                    self.backbone = model
                 if hasattr(self, 'client'):
-                    self.client.model = self.backbone
-                    self.client.trainer.backbone = self.backbone
+                    self.client.model = model
+                    self.client.trainer.backbone = model
 
             if isinstance(loaded, list):
-                new_sd = self.backbone.state_dict()
+                new_sd = model.state_dict()
                 all_keys = list(new_sd.keys())
                 
                 # Identifikasi kunci konvolusi (untuk pFedFace/Flower NDArrays)
@@ -257,10 +259,10 @@ class FLClientManager:
                 else:
                     print(f"[ERROR] Ketidakcocokan kunci: {len(loaded)} params vs {len(shared_keys)}/{len(all_keys)} keys.")
                 
-                self.backbone.load_state_dict(new_sd, strict=False)
+                model.load_state_dict(new_sd, strict=False)
             else:
-                self.backbone.load_state_dict(loaded, strict=False)
-                print(f"[SUCCESS] Backbone state-dict applied (BN ignored: {ignore_bn})")
+                model.load_state_dict(loaded, strict=False)
+                print(f"[SUCCESS] Backbone state-dict applied to target model (BN ignored: {ignore_bn})")
             
             return True
         except Exception as e:
@@ -297,7 +299,8 @@ class FLClientManager:
         if not self._models_loaded or force_reload:
             if os.path.exists(self.save_path):
                 try:
-                    self.backbone.load_state_dict(torch.load(self.save_path, map_location=self.device))
+                    loaded = torch.load(self.save_path, map_location=self.device)
+                    self._apply_backbone_weights(loaded, ignore_bn=True)
                 except Exception as e:
                     print(f"[LOAD ERROR] Backbone file mismatch: {e}")
                     
@@ -333,7 +336,8 @@ class FLClientManager:
             
             if os.path.exists(self.save_path):
                 print(f"[RELOAD] Loading backbone from {self.save_path}...")
-                new_backbone.load_state_dict(torch.load(self.save_path, map_location=self.device))
+                loaded = torch.load(self.save_path, map_location=self.device)
+                self._apply_backbone_weights(loaded, ignore_bn=True, target_model=new_backbone)
                 
                 # PERSISTENCE FIX: Muat statistik BN hasil aggregasi jika ada
                 bn_path = os.path.join(self.data_path, "models", "global_bn_combined.pth")
@@ -1019,16 +1023,16 @@ class FLClientManager:
             res = requests.post(f"{self.server_api_url}/api/training/registry_assets", json=payload, timeout=60)
             
             if res.status_code == 200:
-                print(f"[INFO] Pengiriman aset berhasil. Menunggu agregasi global...")
+                self._log_to_file("SUCCESS: Pengiriman aset lokal berhasil. Menunggu agregasi global...")
                 self.report_status("Processing: Menunggu Agregasi Global...")
                 
                 # 4. TUNGGU & UNDUH HASIL GLOBAL
                 # Ini memastikan setiap client memiliki BN dan Registry yang SAMA
                 if self.download_bn(max_wait=120):
-                    print("[REGISTRY] Global BN Synced.")
+                    self._log_to_file("REGISTRY: Global BN Synced.")
                 
                 if self._download_global_registry(max_wait=120):
-                    print("[REGISTRY] Global Registry Synced.")
+                    self._log_to_file("REGISTRY: Global Registry Synced.")
                     
                     # 5. ATOMIC VERSION SYNC: Pastikan versi diupdate SEBELUM reload
                     try:

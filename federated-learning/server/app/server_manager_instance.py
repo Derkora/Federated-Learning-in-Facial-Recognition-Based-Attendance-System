@@ -13,7 +13,9 @@ from datetime import datetime, timedelta, timezone
 from app.db.db import SessionLocal
 from app.db.models import FLRound, GlobalModel, UserGlobal, AttendanceRecap, Client
 from app.utils.mobilefacenet import MobileFaceNet
-from app.config import ECONOMICS, TRAINING_PARAMS, FALLBACK_MODEL_PATH
+from app.config import ECONOMICS, TRAINING_PARAMS, FALLBACK_MODEL_PATH, CODECARBON_AVAILABLE
+if CODECARBON_AVAILABLE:
+    from codecarbon import OfflineEmissionsTracker
 
 # Fungsi rata-rata tertimbang untuk metrik
 def weighted_average(metrics: list) -> dict:
@@ -73,10 +75,46 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
             return None, {}
 
         aggregated_parameters, aggregated_metrics = super().aggregate_fit(server_round, valid_results, failures)
+        
+        # MANUALLY CAPTURE CLIENT METRICS (Because weighted_average only returns global averages)
+        clients_data = {}
+        for i, (client_proxy, fit_res) in enumerate(valid_results):
+            cid = fit_res.metrics.get("hostname") or getattr(client_proxy, "cid", f"client-{i}")
+            clients_data[cid] = {
+                "num_samples": fit_res.num_examples,
+                "accuracy": fit_res.metrics.get("accuracy", 0.0),
+                "loss": fit_res.metrics.get("loss", 0.0),
+                "val_accuracy": fit_res.metrics.get("val_accuracy", 0.0),
+                "epoch_history": fit_res.metrics.get("epoch_history", [])
+            }
+        
+        # Attach to aggregated_metrics so record_round_data can see it
+        if aggregated_metrics is None: aggregated_metrics = {}
+        aggregated_metrics["clients"] = clients_data
+
+        if aggregated_parameters is None:
+            print(f"[STRATEGY] [WARNING] Agregasi Ronde {server_round} menghasilkan None (Tidak cukup data?).")
+            return None, aggregated_metrics
+            
+        print(f"[STRATEGY] Agregasi Ronde {server_round} Berhasil.")
+
+        self.manager.current_round = server_round
+        
+        # Populate unique_client_ids early to ensure client tables show up in UI
+        for i, (client_proxy, fit_res) in enumerate(results):
+            cid = fit_res.metrics.get("hostname") or getattr(client_proxy, "cid", f"client-{i}")
+            if cid not in self.manager.metrics["unique_client_ids"]:
+                self.manager.metrics["unique_client_ids"].append(cid)
+                print(f"[MANAGER] New client detected: {cid}")
 
         if aggregated_parameters is not None:
+            if self.manager.tracker:
+                try: self.manager.tracker.start()
+                except: pass
+            
             print(f"[SUCCESS] Agregasi ronde {server_round} selesai. Akurasi: {aggregated_metrics.get('accuracy', 0):.4f}")
             try:
+                db = SessionLocal()
                 params_np = fl.common.parameters_to_ndarrays(aggregated_parameters)
                 final_loss = aggregated_metrics.get("loss", 0.0)
                 
@@ -85,7 +123,7 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                 global_model_instance = MobileFaceNet()
                 global_model = db.query(GlobalModel).order_by(GlobalModel.last_updated.desc()).first()
                 if global_model and global_model.weights:
-                    sd = global_model.get_state_dict()
+                    sd = torch.load(io.BytesIO(global_model.weights), map_location="cpu")
                     print("[INFO] Menggunakan bobot model terakhir sebagai basis agregasi (Preserving BN).")
                 else:
                     sd = global_model_instance.state_dict()
@@ -139,8 +177,7 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                     except Exception as e:
                         print(f"[WARN] Gagal menyimpan global_head: {e}")
 
-                # Simpan hasil ke database
-                db = SessionLocal()
+                # Simpan hasil ke database (db sudah diinisialisasi di awal try)
                 try:
                     new_round = FLRound(
                         session_id=self.session_id,
@@ -168,27 +205,52 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                     
                     db.commit()
                     
-                    # Simpan salinan file fisik untuk backup & ONNX export stability
-                    try:
-                        os.makedirs("data", exist_ok=True)
-                        # Simpan versi murni (Shared Keys Only) untuk referensi internal jika perlu
-                        torch.save(sd, "data/backbone_pure.pth")
+                    # 4. PERSISTENSI KE MANAGER (Untuk Dashboard UI)
+                    client_stats = aggregated_metrics.get("clients", {})
+                    self.manager.record_round_data(server_round, aggregated_metrics, client_stats, db=db)
+                    
+                    # Update Total Waktu (Aktif)
+                    self.manager.metrics["total_round_time_s"] = round(datetime.now().timestamp() - self.manager.start_time, 2)
+                    
+                    if self.manager.tracker:
+                        try:
+                            self.manager.tracker.stop()
+                            # Simpan energi server saja (Real dari tracker)
+                            if hasattr(self.manager.tracker, '_total_energy'):
+                                self.manager.metrics["server_energy_kwh"] = self.manager.tracker._total_energy.kWh
+                        except: pass
+
+                    # LOGGING BENAR (Sesuai Permintaan)
+                    self.manager.update_logs(f"SERVER LOG: Ronde {server_round} selesai. Akurasi: {aggregated_metrics.get('accuracy', 0):.4f} | Loss: {aggregated_metrics.get('loss', 0):.4f}")
+                    print(f"[MANAGER] Ronde {server_round} tercatat di Dashboard.")
+
+                except Exception as e:
+                    print(f"[ERROR] Gagal menyimpan hasil agregasi ke database: {e}")
+                    db.rollback()
+                finally:
+                    db.close()
+                    
+                # Simpan salinan file fisik untuk backup & ONNX export stability
+                try:
+                    os.makedirs("data", exist_ok=True)
+                    # Simpan versi murni (Shared Keys Only) untuk referensi internal jika perlu
+                    torch.save(sd, "data/backbone_pure.pth")
+                    
+                    # Gabungkan BN jika sudah ada dari fase sebelumnya untuk konsistensi download client
+                    bn_path = "data/global_bn_combined.pth"
+                    if os.path.exists(bn_path):
+                        try:
+                            bn_params = torch.load(bn_path, map_location="cpu")
+                            sd.update(bn_params)
+                            print("[INFO] Backbone global kini diperkuat dengan statistik BN.")
+                        except: pass
                         
-                        # Gabungkan BN jika sudah ada dari fase sebelumnya untuk konsistensi download client
-                        bn_path = "data/global_bn_combined.pth"
-                        if os.path.exists(bn_path):
-                            try:
-                                bn_params = torch.load(bn_path, map_location="cpu")
-                                sd.update(bn_params)
-                                print("[INFO] Backbone global kini diperkuat dengan statistik BN.")
-                            except: pass
-                            
-                        # ATOMIC WRITE
-                        with tempfile.NamedTemporaryFile(delete=False, dir="data") as tmp:
-                            torch.save(sd, tmp.name)
-                            shutil.move(tmp.name, "data/backbone.pth")
-                    except Exception as e:
-                        print(f"[ERROR] Gagal menyimpan file murni/BN: {e}")
+                    # ATOMIC WRITE
+                    with tempfile.NamedTemporaryFile(delete=False, dir="data") as tmp:
+                        torch.save(sd, tmp.name)
+                        shutil.move(tmp.name, "data/backbone.pth")
+                except Exception as e:
+                    print(f"[ERROR] Gagal menyimpan file murni/BN: {e}")
 
                     # --- SWA / SNAPSHOT AVERAGING ---
                     if server_round >= TRAINING_PARAMS.get("swa_start_round", 8):
@@ -218,29 +280,40 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                     print(f"[ERROR] Gagal menyimpan ronde {server_round} ke DB: {e}")
                     db.rollback()
                 finally:
+                    # PROSES DATA CLIENT DAN SIMPAN RONDE KE DB
+                    if results:
+                        client_data = {}
+                        for i, (client_proxy, fit_res) in enumerate(results):
+                            # Prioritaskan hostname dari metrik (ID asli client)
+                            cid = fit_res.metrics.get("hostname")
+                            proxy_id = getattr(client_proxy, "cid", "")
+                            
+                            # Jika hostname tidak ada, gunakan proxy_id tapi log peringatan
+                            if not cid:
+                                cid = proxy_id or f"client-{i}"
+                                print(f"[STRATEGY WARN] Menggunakan Proxy ID {cid} karena hostname kosong.")
+                            
+                            m = fit_res.metrics.copy()
+                            m["num_samples"] = fit_res.num_examples
+                            eh = fit_res.metrics.get("epoch_history", "[]")
+                            if isinstance(eh, str):
+                                try: m["epoch_history"] = json.loads(eh)
+                                except: m["epoch_history"] = []
+                            else: m["epoch_history"] = eh
+                            client_data[cid] = m
+                        
+                        print(f"[STRATEGY] Memanggil record_round_data untuk ronde {server_round}...")
+                        self.manager.record_round_data(server_round, aggregated_metrics or {}, client_data, db=db)
+                        print(f"[STRATEGY] record_round_data selesai.")
+                    
                     db.close()
             except Exception as e:
                 print(f"[ERROR] Gagal memproses parameter agregasi: {e}")
-                
-        if results:
-            client_data = {}
-            for i, (client_proxy, fit_res) in enumerate(results):
-                # CID default atau gunakan hostname jika ada di metrik
-                cid = fit_res.metrics.get("hostname") or getattr(client_proxy, "cid", f"client-{i}")
-                m = fit_res.metrics.copy()
-                m["num_samples"] = fit_res.num_examples
-                eh = fit_res.metrics.get("epoch_history", "[]")
-                if isinstance(eh, str):
-                    try: m["epoch_history"] = json.loads(eh)
-                    except: m["epoch_history"] = []
-                else: m["epoch_history"] = eh
-                client_data[cid] = m
-            
-            self.manager.record_round_data(server_round, aggregated_metrics or {}, client_data)
-            if aggregated_metrics:
-                self.manager.update_metrics(aggregated_metrics)
-                loss = aggregated_metrics.get('loss', 0.0)
-                self.manager.update_logs(f"Ronde {server_round} selesai. Acc: {aggregated_metrics.get('accuracy', 0):.4f} | Loss: {loss:.4f}")
+        
+        if aggregated_metrics:
+            self.manager.update_metrics(aggregated_metrics)
+            loss = aggregated_metrics.get('loss', 0.0)
+            self.manager.update_logs(f"Ronde {server_round} selesai. Acc: {aggregated_metrics.get('accuracy', 0):.4f} | Loss: {loss:.4f}")
 
 
         return aggregated_parameters, aggregated_metrics
@@ -265,7 +338,17 @@ class FLServerManager:
         self.current_phase = "idle"
         self.start_time = 0
         self.current_logs = []
+        self.current_round = 0
         self.model_version = 0
+        self.tracker = None
+        if CODECARBON_AVAILABLE:
+            try:
+                self.tracker = OfflineEmissionsTracker(
+                    project_name="Federated_Learning_Server",
+                    output_dir="/app/data/",
+                    country_iso_code="IDN"
+                )
+            except: pass
         self.default_rounds = TRAINING_PARAMS["total_rounds"]
         self.default_epochs = TRAINING_PARAMS["epochs_per_round"]
         self.default_min_clients = 2
@@ -289,56 +372,138 @@ class FLServerManager:
             "convergence_round": None
         }
         # Inisialisasi File Log
-        self.log_path = "data/server_training.log"
+        self.log_path = "/app/data/server_training.log"
+        self._load_log_from_file() # Muat log lama ke UI
+        self.update_logs("=== Server Started / Restarted ===")
+        
+        self.settings_path = "/app/data/settings.json"
+        self.load_settings()
         self._load_persistence()
 
-    def _load_persistence(self):
-        """Memuat ulang status dari database untuk persistensi log & versi."""
-        print("[PERSISTENCE] Loading server state from database...")
-        db = SessionLocal()
+    def load_settings(self):
+        """Memuat pengaturan server dari file JSON."""
+        if os.path.exists(self.settings_path):
+            try:
+                with open(self.settings_path, "r") as f:
+                    settings = json.load(f)
+                    self.inference_threshold = settings.get("inference_threshold", 0.75)
+                    self.default_batch_size = settings.get("batch_size", 32)
+                print(f"[SETTINGS] Pengaturan dimuat dari {self.settings_path}")
+            except Exception as e:
+                print(f"[SETTINGS ERROR] Gagal memuat pengaturan: {e}")
+
+    def save_settings(self):
+        """Menyimpan pengaturan server ke file JSON."""
         try:
-            # 1. Muat Versi Model Terbaru
-            latest_model = db.query(GlobalModel).order_by(GlobalModel.last_updated.desc()).first()
-            if latest_model:
-                self.model_version = latest_model.version
-                print(f"[PERSISTENCE] Loaded Model Version: v{self.model_version}")
-
-            # 2. Muat Riwayat Ronde
-            rounds = db.query(FLRound).order_by(FLRound.timestamp.asc()).all()
-            if rounds:
-                self.metrics["round_history"] = []
-                self.metrics["unique_client_ids"] = []
-                
-                for r in rounds:
-                    try:
-                        m = json.loads(r.metrics)
-                        # Reconstruct round data
-                        # Note: clients metrics per round aren't fully stored in FLRound.metrics 
-                        # but we can reconstruct the global history.
-                        entry = {
-                            "round": r.round_number,
-                            "server": m,
-                            "clients": m.get("clients", {}) # Fallback
-                        }
-                        self.metrics["round_history"].append(entry)
-                        
-                        # Update global metrics to the latest round
-                        self.metrics["accuracy"] = m.get("accuracy", 0)
-                        self.metrics["loss"] = m.get("loss", 0)
-                        
-                        if self.metrics["convergence_round"] is None and m.get("accuracy", 0) > 0.90:
-                            self.metrics["convergence_round"] = r.round_number
-                            
-                    except Exception as e:
-                        print(f"[PERSISTENCE WARN] Failed to parse round {r.round_number}: {e}")
-
-                # 3. Update estimasi biaya/transmisi berdasarkan history yang dimuat
-                self.update_metrics({})
-                print(f"[PERSISTENCE] Loaded {len(rounds)} rounds from history.")
+            settings = {
+                "inference_threshold": self.inference_threshold,
+                "batch_size": getattr(self, 'default_batch_size', 32)
+            }
+            with open(self.settings_path, "w") as f:
+                json.dump(settings, f, indent=4)
         except Exception as e:
-            print(f"[PERSISTENCE ERROR] Failed to load history: {e}")
-        finally:
-            db.close()
+            print(f"[SETTINGS ERROR] Gagal menyimpan pengaturan: {e}")
+
+    def _load_log_from_file(self):
+        """Memuat 100 baris terakhir dari file log ke memori (untuk Dashboard UI)."""
+        if os.path.exists(self.log_path):
+            try:
+                with open(self.log_path, "r") as f:
+                    lines = f.readlines()
+                    self.current_logs = [line.strip() for line in lines[-100:]]
+                print(f"[PERSISTENCE] Berhasil memuat {len(self.current_logs)} baris log dari disk.")
+            except Exception as e:
+                print(f"[ERROR] Gagal memuat log persisten: {e}")
+        else:
+            print(f"[INFO] File log belum ada di {self.log_path}")
+
+    def _load_persistence(self):
+        """Memuat ulang status dari database dengan logika retry dan logging yang sangat detail."""
+        print("[PERSISTENCE] Memulai pemulihan status server Federated...")
+        
+        max_retries = 10
+        retry_delay = 5
+        
+        for i in range(max_retries):
+            db = SessionLocal()
+            try:
+                # 1. Muat Versi Model Terbaru
+                latest_model = db.query(GlobalModel).order_by(GlobalModel.last_updated.desc()).first()
+                if latest_model:
+                    self.model_version = latest_model.version
+                    print(f"[PERSISTENCE] Database terhubung. Versi Model saat ini: v{self.model_version}")
+
+                # 2. Muat riwayat ronde (Hanya sesi terbaru agar tidak duplikat)
+                latest_round = db.query(FLRound).order_by(FLRound.timestamp.desc()).first()
+                if latest_round:
+                    latest_session_id = latest_round.session_id
+                    rounds = db.query(FLRound).filter_by(session_id=latest_session_id).order_by(FLRound.round_number.asc()).all()
+                    print(f"[PERSISTENCE] Menemukan {len(rounds)} ronde federated dari sesi {latest_session_id}.")
+                else:
+                    rounds = []
+                    print("[PERSISTENCE] Tidak ada riwayat ronde di database.")
+                
+                if rounds:
+                    history = []
+                    total_energy = 0
+                    total_duration = 0
+                    
+                    for r in rounds:
+                        try:
+                            m = json.loads(r.metrics) if r.metrics else {}
+                            clients = m.get("clients", {})
+                            # Ensure epoch_history in each client is parsed if it's a string
+                            for cid, c_data in clients.items():
+                                if "epoch_history" in c_data and isinstance(c_data["epoch_history"], str):
+                                    try:
+                                        c_data["epoch_history"] = json.loads(c_data["epoch_history"])
+                                    except:
+                                        pass
+
+                            history.append({
+                                "round": r.round_number if r.round_number is not None else 0,
+                                "server": m,
+                                "clients": clients
+                            })
+                            # Update global metrics
+                            self.metrics["accuracy"] = float(m.get("accuracy", 0))
+                            self.metrics["loss"] = float(m.get("loss", 0))
+                            
+                            # Agregasi Ekonomi (NEW)
+                            total_energy += m.get("compute_energy_kwh", 0)
+                            total_duration += m.get("total_round_time_s", 0)
+                            
+                            if self.metrics["convergence_round"] is None and m.get("accuracy", 0) > 0.90:
+                                self.metrics["convergence_round"] = r.round_number
+                                
+                        except Exception as e:
+                            print(f"[PERSISTENCE WARN] Failed to parse round {r.round_number}: {e}")
+
+                    self.metrics["round_history"] = history
+                    self.metrics["compute_energy_kwh"] = total_energy
+                    self.metrics["total_round_time_s"] = total_duration
+                    
+                    # RECOVERY: Populate unique_client_ids from history
+                    unique_ids = set()
+                    for r in history:
+                        if "clients" in r:
+                            unique_ids.update(r["clients"].keys())
+                    self.metrics["unique_client_ids"] = list(unique_ids)
+                    
+                    # 3. Update estimasi biaya/transmisi berdasarkan history yang dimuat
+                    self.update_metrics({})
+                    print(f"[PERSISTENCE] Berhasil memulihkan {len(history)} ronde ke dashboard FL.")
+                    print(f"[PERSISTENCE] Ditemukan {len(unique_ids)} client aktif dari riwayat: {list(unique_ids)}")
+                
+                db.close()
+                return # SUCCESS
+            except Exception as e:
+                print(f"[PERSISTENCE] Percobaan {i+1}/{max_retries} gagal: {e}")
+                db.close()
+                if i < max_retries - 1:
+                    time.sleep(retry_delay)
+                else:
+                    print("[PERSISTENCE ERROR] Gagal total memulihkan status FL. Dashboard mungkin akan kosong.")
 
     def increment_version(self):
         self.model_version += 1
@@ -390,10 +555,21 @@ class FLServerManager:
         print(f"SERVER LOG: {msg}")
 
     def update_metrics(self, new_data):
+        # Memperbarui metrik performa dan estimasi biaya
+        # KHUSUS: Jika ada round_history baru, jangan timpa yang lama, tapi gabungkan.
+        if "round_history" in new_data:
+            new_history = new_data.pop("round_history")
+            existing_rounds = [h["round"] for h in self.metrics["round_history"]]
+            for h in new_history:
+                if h["round"] not in existing_rounds:
+                    self.metrics["round_history"].append(h)
+
         self.metrics.update(new_data)
-        
+        self.update_economics({})
+
+    def update_economics(self, new_data):
         # 1. Transmisi (Estimatif berdasarkan Ronde & Client yang terhubung)
-        current_rounds = len(self.metrics.get("round_history", []))
+        current_rounds = max(self.current_round, len(self.metrics.get("round_history", [])))
         num_clients = len(self.metrics.get("unique_client_ids", []))
         bb_size = ECONOMICS["estimated_backbone_size_mb"]
         reg_size = ECONOMICS["estimated_registry_size_mb"]
@@ -403,47 +579,93 @@ class FLServerManager:
         self.metrics["registry_sync_mb"] = round(num_clients * reg_size, 2)
         
         total_mb = self.metrics["backbone_sync_mb"] + self.metrics["registry_sync_mb"]
-        # Hitung biaya berdasarkan per-MB (Rp 3,25 / MB)
-        self.metrics["transmission_cost_idr"] = round(total_mb * 3.25, 2)
+        self.metrics["transmission_cost_idr"] = round(total_mb * ECONOMICS["transmission_cost_per_mb"], 2)
         
-        # 2. Komputasi (Server + Aggregate Clients)
-        energy_kwh = self.metrics.get("compute_energy_kwh", 0)
-        if energy_kwh == 0:
-            duration_s = self.metrics.get("total_round_time_s", 0)
-            if duration_s == 0:
-                # Fallback jika waktu belum tercatat, ambil rata-rata 3 menit per ronde
-                duration_s = current_rounds * 180
-            
-            duration_h = duration_s / 3600
-            server_p = ECONOMICS["estimated_server_power_kw"]
-            client_p = ECONOMICS["estimated_client_power_kw"]
-            
-            # Daya total = Daya Server + (Jumlah Client * Daya per Client)
-            energy_kwh = duration_h * (server_p + num_clients * client_p)
-            self.metrics["compute_energy_kwh"] = round(energy_kwh, 6)
-            
-        cost_per_kwh = ECONOMICS["compute_cost_per_kwh"] # Rp 1.444,70
-        self.metrics["compute_cost_idr"] = round(energy_kwh * cost_per_kwh, 2)
+        # 2. Komputasi: Total = Server (Real/Est) + Clients (Est)
+        duration_s = self.metrics.get("total_round_time_s", 0)
+        if duration_s == 0:
+            duration_s = current_rounds * 180
+        duration_h = duration_s / 3600
 
-    def record_round_data(self, round_num, server_metrics, client_metrics):
-        print(f"[MANAGER] Recording round {round_num} data...")
+        server_p = ECONOMICS["estimated_server_power_kw"]
+        client_p = ECONOMICS["estimated_client_power_kw"]
+
+        # Ambil energi server (Gunakan data tracker jika ada, jika tidak gunakan estimasi)
+        server_energy = self.metrics.get("server_energy_kwh", duration_h * server_p)
+        
+        # Selalu tambahkan estimasi client (karena tracker hanya di sisi server)
+        client_energy_est = duration_h * (num_clients * client_p)
+        total_energy = server_energy + client_energy_est
+        
+        self.metrics["compute_energy_kwh"] = round(total_energy, 6)
+        
+        cost_per_kwh = ECONOMICS["compute_cost_per_kwh"]
+        self.metrics["compute_cost_idr"] = round(total_energy * cost_per_kwh, 2)
+
+    def record_round_data(self, round_num, server_metrics, client_metrics, db=None):
+        # Mencegah redundansi jika fungsi ini dipanggil ulang untuk ronde yang sama
+        existing_rounds = [h["round"] for h in self.metrics["round_history"]]
+        if round_num in existing_rounds:
+            print(f"[MANAGER] Ronde {round_num} sudah ada di history, memperbarui data...")
+            # Update data yang sudah ada (opsional, tapi lebih aman)
+            for h in self.metrics["round_history"]:
+                if h["round"] == round_num:
+                    h["server"] = server_metrics
+                    h["clients"] = client_metrics
+            return
+
+        print(f"[MANAGER] Recording round {round_num} data with {len(client_metrics)} clients...")
         entry = {
             "round": round_num,
             "server": server_metrics,
             "clients": client_metrics
         }
         self.metrics["round_history"].append(entry)
-        print(f"[MANAGER] Round history now has {len(self.metrics['round_history'])} entries.")
         
+        # Update unique_client_ids from actual recorded data
+        # Prefer meaningful IDs over random UUIDs if both exist
+        new_cid = None
+        for cid in client_metrics.keys():
+            # Jika ID terlihat seperti UUID acak (panjang 32+), coba cari apakah ada ID lain
+            is_uuid = len(cid) >= 32 and cid.isalnum()
+            if not is_uuid:
+                new_cid = cid
+            
+            if cid not in self.metrics["unique_client_ids"]:
+                self.metrics["unique_client_ids"].append(cid)
+                print(f"[MANAGER] Client {cid} added to unique_client_ids")
+
+        # Pembersihan berkala: Hanya simpan ID yang beneran ada di round_history
+        all_active_ids = set()
+        for r in self.metrics["round_history"]:
+            all_active_ids.update(r["clients"].keys())
+        
+        # Sinkronkan unique_client_ids agar tidak ada ID sampah
+        self.metrics["unique_client_ids"] = [cid for cid in self.metrics["unique_client_ids"] if cid in all_active_ids]
+        
+        # PERSISTENSI KE DATABASE
+        if db:
+            try:
+                new_fl_round = FLRound(
+                    round_number=round_num,
+                    loss=float(server_metrics.get('loss', 0.0)),
+                    metrics=json.dumps(server_metrics),
+                    timestamp=datetime.now(timezone(timedelta(hours=7)))
+                )
+                db.add(new_fl_round)
+                db.commit()
+                print(f"[PERSISTENCE] Ronde {round_num} berhasil disimpan ke database.")
+            except Exception as e:
+                print(f"[ERROR] Gagal menyimpan ronde ke database: {e}")
+                db.rollback()
+
         # Memperbarui pelacakan client unik
         for cid in client_metrics.keys():
             if cid not in self.metrics["unique_client_ids"]:
                 self.metrics["unique_client_ids"].append(cid)
-        print(f"[MANAGER] Unique clients tracked: {len(self.metrics['unique_client_ids'])}")
         
         # Cek Konvergensi
         if self.metrics["convergence_round"] is None and server_metrics.get("accuracy", 0) > 0.90:
-            # Ambang batas sederhana untuk konvergensi
             self.metrics["convergence_round"] = round_num
 
     def _get_lr_for_round(self, server_round):
@@ -472,6 +694,7 @@ class FLServerManager:
             return lr
 
     def get_status(self, db=None):
+        print(f"[DEBUG] get_status called. round_history len: {len(self.metrics.get('round_history', []))}")
         attendance_count = 0
         active_clients = []
         if db:
@@ -513,28 +736,29 @@ class FLServerManager:
             try:
                 model = MobileFaceNet()
                 loaded = torch.load(fallback_path, map_location="cpu")
+                match_count = 0
                 # Seeding harus konsisten dengan get_parameters (Hanya shared keys)
                 current_sd = model.state_dict()
                 shared_keys = [k for k in current_sd.keys() if 
                                not any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked'])
                                and any(x in k.lower() for x in ['weight', 'bias'])]
                 
-                weights_np = []
-                match_count = 0
+                # Pastikan yang disimpan ke DB adalah STATE_DICT, bukan list
+                final_sd = {}
                 if isinstance(loaded, dict):
                     for key in shared_keys:
-                        if key in loaded: 
-                            weights_np.append(loaded[key].cpu().numpy())
+                        if key in loaded:
+                            final_sd[key] = loaded[key]
                             match_count += 1
-                        else: 
-                            weights_np.append(current_sd[key].cpu().numpy())
-                    print(f"[SUCCESS] GlobalModel seeded dengan {len(weights_np)} parameters ({match_count} weights cocok dari file).")
-                else: 
-                    weights_np = loaded
-                    print(f"[SUCCESS] GlobalModel seeded dengan list parameters mentah.")
+                        else:
+                            final_sd[key] = current_sd[key]
+                    print(f"[SUCCESS] GlobalModel seeded dengan state_dict ({match_count} weights cocok).")
+                else:
+                    final_sd = current_sd
+                    print(f"[SUCCESS] GlobalModel seeded dengan default state_dict.")
                 
                 buf = io.BytesIO()
-                torch.save(weights_np, buf)
+                torch.save(final_sd, buf)
                 new_model = GlobalModel(version=0, weights=buf.getvalue())
                 db.add(new_model)
                 db.commit()

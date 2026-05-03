@@ -99,10 +99,16 @@ async def start_fl_training(rounds: int = None, min_clients: int = None, epochs:
 @app.post("/api/fl/reset")
 async def reset_fl_state():
     fl_manager.is_running = False
+    # Jangan hapus round_history agar tetap persisten di UI
+    # fl_manager.metrics["round_history"] = [] 
+    
+    # Reset metrik sesi berjalan saja
+    fl_manager.metrics["compute_energy_kwh"] = 0
+    fl_manager.metrics["total_round_time_s"] = 0
+    fl_manager.metrics["accuracy"] = 0
+    fl_manager.metrics["loss"] = 0
+    
     fl_manager.start_phase("Idle")
-    fl_manager.current_logs = []
-    fl_manager.registry_submissions.clear()
-    fl_manager.ready_clients.clear()
     fl_manager.discovery_clients.clear()
     fl_manager.update_logs("[INFO] Status server telah di-reset secara manual.")
     return {"status": "reset_ok"}

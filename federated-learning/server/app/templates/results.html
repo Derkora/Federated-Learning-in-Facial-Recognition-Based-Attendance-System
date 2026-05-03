@@ -34,7 +34,7 @@
                 {% endfor %}
                 {% else %}
                 <tr>
-                    <td colspan="5" style="text-align: center;">Belum ada ronde pelatihan yang selesai.</td>
+                    <td colspan="3" style="text-align: center;">Belum ada ronde pelatihan yang selesai.</td>
                 </tr>
                 {% endif %}
             </tbody>
@@ -46,53 +46,58 @@
 {% for cid in status.metrics.unique_client_ids %}
 <div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <h2 style="color: var(--accent);">Performa Client: {{ cid }}</h2>
+        <h2 style="color: var(--accent);">{{ loop.index + 1 }}. Performa Client: {{ cid }}</h2>
         <button class="btn btn-primary" onclick="copyTable('table-{{ cid }}')">Salin Tabel</button>
     </div>
-    <div style="overflow-x: auto;">
-        <table id="table-{{ cid }}" class="result-table">
-            <thead>
-                <tr>
-                    <th>Ronde</th>
-                    <th>Samples</th>
-                    <th>Loss Akhir</th>
-                    <th>Akurasi Akhir (%)</th>
-                    <th>Riwayat Epoch (Loss / Acc)</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for r in status.metrics.round_history %}
-                {% if cid in r.clients %}
-                {% set c = r.clients[cid] %}
-                <tr>
-                    <td>{{ r.round }}</td>
-                    <td>{{ c.num_samples }}</td>
-                    <td>{{ "%.4f"|format(c.loss) }}</td>
-                    <td>{{ "%.2f"|format(c.accuracy * 100) }}%</td>
-                    <td style="font-size: 0.85rem; font-family: 'JetBrains Mono';">
-                        {% if c.epoch_history %}
-                        <div style="max-height: 100px; overflow-y: auto;">
-                            {% for eh in c.epoch_history %}
-                            E{{ eh.epoch }}: {{ "%.3f"|format(eh.loss) }} / {{ "%.1f"|format(eh.accuracy * 100) }}%<br>
-                            {% endfor %}
-                        </div>
-                        {% else %}
-                        -
-                        {% endif %}
-                    </td>
-                </tr>
-                {% endif %}
-                {% endfor %}
-            </tbody>
-        </table>
+        <div style="overflow-x: auto;">
+            <table id="table-{{ cid }}" class="result-table">
+                <thead>
+                    <tr>
+                        <th>Ronde</th>
+                        <th>Samples</th>
+                        <th>Loss Akhir</th>
+                        <th>Akurasi Akhir (%)</th>
+                        <th>Riwayat Epoch (Loss / Acc)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in status.metrics.round_history %}
+                    {% if cid in r.clients %}
+                    {% set c = r.clients[cid] %}
+                    <tr>
+                        <td>{{ r.round }}</td>
+                        <td>{{ c.num_samples }}</td>
+                        <td>{{ "%.4f"|format(c.loss) }}</td>
+                        <td>{{ "%.2f"|format(c.accuracy * 100) }}%</td>
+                        <td style="font-size: 0.85rem; font-family: 'JetBrains Mono';">
+                            {% if c.epoch_history %}
+                            <div style="max-height: 100px; overflow-y: auto;">
+                                {% for eh in c.epoch_history %}
+                                {# Ensure eh is a dictionary before accessing properties #}
+                                {% if eh is mapping %}
+                                    E{{ eh.epoch }}: {{ "%.3f"|format(eh.loss) if eh.loss is defined else "-" }} / {{ "%.1f"|format(eh.accuracy * 100) if eh.accuracy is defined else "-" }}%<br>
+                                {% else %}
+                                    {{ eh }}<br>
+                                {% endif %}
+                                {% endfor %}
+                            </div>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endif %}
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     </div>
-</div>
 {% endfor %}
 
-<!-- Table 3: Economic & Operational Metrics -->
+<!-- Table: Economic & Operational Metrics -->
 <div class="glass" style="padding: 2rem;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <h2 style="color: var(--accent);">2. Nilai Ekonomi & Operasional (Federated)</h2>
+        <h2 style="color: var(--accent);">{{ status.metrics.unique_client_ids|length + 2 }}. Nilai Ekonomi & Operasional (Federated)</h2>
         <button class="btn btn-primary" onclick="copyTable('economic-table')">Salin Tabel</button>
     </div>
     <div style="overflow-x: auto;">

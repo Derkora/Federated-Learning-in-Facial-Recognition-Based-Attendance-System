@@ -56,7 +56,6 @@
 </style>
 
 <script>
-    let lossChart;
     let pollInterval = null;
 
     async function startTraining() {
@@ -88,7 +87,7 @@
 
             // 1. Update Phase & Running Status
             const phaseEl = document.getElementById('status-phase');
-            const phaseText = data.current_phase || 'Standby';
+            const phaseText = data.phase || 'Standby';
             phaseEl.innerText = "Status: " + (data.is_running ? "Sedang Berjalan (" + phaseText + ")" : "Standby");
             phaseEl.style.color = (data.is_running) ? 'var(--accent)' : 'var(--text-muted)';
 
@@ -159,6 +158,7 @@
         document.getElementById('log-modal').style.display = 'none';
     }
 
+    // Initial load
     updateUIState();
 </script>
 

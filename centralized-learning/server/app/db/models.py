@@ -54,12 +54,18 @@ class ModelVersion(Base):
 class TrainingRound(Base):
     __tablename__ = "training_rounds"
     # Tabel Training Rounds
-    round_id = Column(Integer, primary_key=True) 
+    round_id = Column(Integer, primary_key=True, autoincrement=True) 
     round_number = Column(Integer)
     start_time = Column(DateTime, default=datetime.utcnow)
     end_time = Column(DateTime, nullable=True)
     global_loss = Column(Float)
     global_accuracy = Column(Float)
+    
+    # Metrik Ekonomi & Operasional (NEW)
+    training_duration_s = Column(Float, default=0.0)
+    compute_energy_kwh = Column(Float, default=0.0)
+    upload_volume_mb = Column(Float, default=0.0)
+    download_volume_mb = Column(Float, default=0.0)
     
     # Relasi ke versi model yang dihasilkan ronde ini
     model_version_id = Column(Integer, ForeignKey("model_versions.version_id"))

@@ -101,13 +101,7 @@
             const resStatus = await fetch('/api/status');
             const status = await resStatus.json();
 
-            // Update Logs & Phase
-            const terminal = document.getElementById('training-terminal');
-            if (status.current_logs && status.current_logs.length > 0) {
-                terminal.innerHTML = status.current_logs.join('<br>');
-                terminal.scrollTop = terminal.scrollHeight;
-            }
-
+            // 1. Update Phase & Running Status
             const phaseEl = document.getElementById('status-phase');
             const phaseText = status.current_phase || 'Standby';
             phaseEl.innerText = "Status: " + (status.is_running ? "Sedang Berjalan (" + phaseText + ")" : "Standby");
@@ -119,7 +113,14 @@
                 btn.innerText = status.is_running ? "SEDANG BERJALAN..." : "Mulai";
             }
 
-            // 3. Update Active Terminals
+            // 3. Update Logs (Terminal)
+            const terminal = document.getElementById('training-terminal');
+            if (status.current_logs && status.current_logs.length > 0) {
+                terminal.innerHTML = status.current_logs.join('<br>');
+                terminal.scrollTop = terminal.scrollHeight;
+            }
+
+            // 4. Update Active Terminals
             const terminalContainer = document.getElementById('active-terminals');
             if (status.active_clients && status.active_clients.length > 0) {
                 terminalContainer.innerHTML = status.active_clients.map(client => `
