@@ -116,10 +116,13 @@
                                 ${client.status}
                             </span>
                         </div>
-                        <div style="font-size: 0.8rem; color: var(--text-muted);">
+                        <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1rem;">
                             IP: ${client.ip}<br>
                             Terakhir: ${client.last_seen}
                         </div>
+                        <button class="btn btn-sm btn-outline-primary" onclick="viewClientLogs('${client.id}')" style="width: 100%; font-size: 0.75rem;">
+                            View Logs
+                        </button>
                     </div>
                 `).join('');
             } else {
@@ -133,6 +136,40 @@
         } catch (e) { console.error("Poll error:", e); }
     }
 
+    async function viewClientLogs(clientId) {
+        const modal = document.getElementById('log-modal');
+        const modalTitle = document.getElementById('log-modal-title');
+        const modalBody = document.getElementById('log-modal-body');
+        
+        modalTitle.innerText = `Client Logs: ${clientId}`;
+        modalBody.innerText = "Loading logs...";
+        modal.style.display = 'flex';
+        
+        try {
+            const res = await fetch(`/api/clients/logs/${clientId}`);
+            const data = await res.json();
+            modalBody.innerText = data.logs || "No logs found.";
+            modalBody.scrollTop = modalBody.scrollHeight;
+        } catch (e) {
+            modalBody.innerText = "Error fetching logs: " + e.message;
+        }
+    }
+
+    function closeModal() {
+        document.getElementById('log-modal').style.display = 'none';
+    }
+
     updateUIState();
 </script>
+
+<!-- LOG MODAL -->
+<div id="log-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; justify-content: center; align-items: center; backdrop-filter: blur(5px);">
+    <div class="glass" style="width: 80%; max-width: 800px; height: 70vh; display: flex; flex-direction: column; padding: 2rem; position: relative; border: 1px solid rgba(255,255,255,0.1);">
+        <button onclick="closeModal()" style="position: absolute; top: 1rem; right: 1rem; background: none; border: none; color: #fff; font-size: 1.5rem; cursor: pointer;">&times;</button>
+        <h2 id="log-modal-title" style="color: var(--accent); margin-top: 0; margin-bottom: 1.5rem;">Client Logs</h2>
+        <div id="log-modal-body" style="flex: 1; background: #000; color: #0f0; padding: 1rem; border-radius: 8px; font-family: 'Fira Code', monospace; font-size: 0.85rem; overflow-y: auto; white-space: pre-wrap; border: 1px solid rgba(0,255,0,0.2);">
+            Loading...
+        </div>
+    </div>
+</div>
 {% endblock %}

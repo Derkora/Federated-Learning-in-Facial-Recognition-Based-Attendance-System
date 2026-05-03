@@ -37,6 +37,10 @@ class CentralizedServerManager:
         self.default_epochs = TRAINING_PARAMS["total_epochs"]
         self.default_batch_size = TRAINING_PARAMS["batch_size"]
         self.inference_threshold = 0.75
+        
+        # Inisialisasi File Log
+        self.log_path = "data/server_training.log"
+        
         self.load_settings()
         self._load_persistence()
 
@@ -120,8 +124,16 @@ class CentralizedServerManager:
         # Mencatat aktivitas sistem ke dalam log dashboard (WIB Sync)
         tz_wib = timezone(timedelta(hours=7))
         ts = datetime.now(tz_wib).strftime('%H:%M:%S')
-        self.current_logs.append(f"[{ts}] {msg}")
+        log_entry = f"[{ts}] {msg}"
+        self.current_logs.append(log_entry)
         if len(self.current_logs) > 100: self.current_logs.pop(0)
+        
+        # Tulis ke file persisten
+        try:
+            with open(self.log_path, "a") as f:
+                f.write(f"[{datetime.now(tz_wib).strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
+        except: pass
+        
         print(f"SERVER LOG: {msg}")
 
     def update_received_data(self, upload_dir):

@@ -52,6 +52,18 @@ class CLClientManager:
         self.latest_result = {"matched": "Standby", "confidence": 0, "latency_ms": 0, "is_virtual": False}
         self.is_camera_running = False
         self.threshold = 0.75
+        
+        # Inisialisasi File Log
+        self.log_path = os.path.join(self.data_path, "client_activity.log")
+        self._log_to_file("=== CL Client Started / Restarted ===")
+
+    def _log_to_file(self, message):
+        """Mencatat pesan ke file log persisten."""
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with open(self.log_path, "a") as f:
+                f.write(f"[{timestamp}] {message}\n")
+        except: pass
 
     def _load_identity(self):
         """Memuat atau membuat identitas unik client yang tersimpan di volume data."""
@@ -242,6 +254,10 @@ class CLClientManager:
                         "model_version": self.current_model_version,
                         "is_virtual": virtual_mode
                     }
+                    
+                    # LOGGING: Catat hasil cocok
+                    if matched != "Unknown" and matched != "Error":
+                        self._log_to_file(f"INFERENCE SUCCESS: {matched} (Conf: {confidence:.4f})")
                 except Exception as e:
                     print(f"[ERROR] Pemrosesan kamera gagal: {e}")
             

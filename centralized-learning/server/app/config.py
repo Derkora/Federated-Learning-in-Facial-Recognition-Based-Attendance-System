@@ -19,11 +19,11 @@ EMISSIONS_DIR = os.path.join(DATA_ROOT, "emissions")
 # Parameter Pelatihan (Penyelarasan dengan Optimized SGD Strategy)
 TRAINING_PARAMS = {
     "total_epochs": 20,
-    "batch_size": 32,
+    "batch_size": 16,
     "label_smoothing": 0.0, # Pure CrossEntropy for better margin expansion
     "lr_schedule": "cosine", # Diganti ke Cosine Annealing
-    "initial_lr": 0.1,
-    "min_lr": 1e-4,
+    "initial_lr": 0.05,
+    "min_lr": 5e-5,
     "swa_start_epoch": 17,    # SWA Aktif di 4 epoch terakhir (Penyelarasan dengan FL)
     "swa_lr": 0.01
 }

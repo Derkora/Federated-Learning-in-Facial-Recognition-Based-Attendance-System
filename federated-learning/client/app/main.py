@@ -108,6 +108,18 @@ async def register_user(user_id: str, name: str, image_base64: str, db: Session 
 async def get_latest_result():
     return fl_manager.latest_result
 
+@app.get("/api/logs")
+async def get_logs():
+    """Mengambil 100 baris terakhir dari file log."""
+    if not os.path.exists(fl_manager.log_path):
+        return {"logs": "Belum ada aktivitas tercatat."}
+    try:
+        with open(fl_manager.log_path, "r") as f:
+            lines = f.readlines()
+            return {"logs": "".join(lines[-100:])}
+    except Exception as e:
+        return {"logs": f"Error membaca log: {str(e)}"}
+
 @app.on_event("startup")
 def startup_event():
     fl_manager.start_time = time.time()

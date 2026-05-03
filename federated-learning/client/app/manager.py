@@ -134,6 +134,18 @@ class FLClientManager:
         
         # Inisialisasi Kontroler Absensi (FIX: Agar tidak error di run_camera_loop)
         self.attendance = AttendanceController(self)
+        
+        # Inisialisasi File Log
+        self.log_path = os.path.join(self.data_path, "client_activity.log")
+        self._log_to_file("=== Client Started / Restarted ===")
+
+    def _log_to_file(self, message):
+        """Mencatat pesan ke file log persisten di /app/data."""
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with open(self.log_path, "a") as f:
+                f.write(f"[{timestamp}] {message}\n")
+        except: pass
 
     def _load_identity(self):
         """Memuat atau membuat identitas unik client yang tersimpan di volume data."""
@@ -478,6 +490,10 @@ class FLClientManager:
                         "model_version": status_str,
                         "is_virtual": virtual_mode
                     }
+                    
+                    # LOGGING: Catat hanya jika ada hasil cocok
+                    if matched != "Unknown" and matched != "Error":
+                        self._log_to_file(f"INFERENCE SUCCESS: {matched} (Conf: {confidence:.4f})")
                 except Exception as e:
                     pass
             
@@ -488,8 +504,11 @@ class FLClientManager:
         
         cap.release()
 
+
     def report_status(self, status=None):
-        if status: self.fl_status = status
+        if status:
+            self.fl_status = status
+            self._log_to_file(f"STATUS UPDATE: {status}")
         now = time.time()
         
         try:

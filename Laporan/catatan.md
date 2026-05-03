@@ -1,6 +1,4 @@
-# Catatan Implementasi & Revisi (Prime State)
-
-Dokumen ini mencatat perubahan teknis krusial yang diimplementasikan selama pengembangan untuk mencapai stabilitas sistem. Poin-poin ini disarankan untuk diupdate pada Buku Laporan/Skripsi (Bab 3 dan Bab 4).
+# Catatan Perubahan & Metodologi Riset
 
 ## 1. Upgrade Preprocessing: Affine Landmark Alignment
 - **Semula (Proposal)**: Hanya menggunakan MTCNN Bounding Box Crop.
@@ -49,17 +47,44 @@ Dokumen ini mencatat perubahan teknis krusial yang diimplementasikan selama peng
 - **Detail**: Jumlah gambar untuk ekstraksi fitur final (Centroid) ditetapkan sebanyak **50 gambar terbaik** (seleksi Laplacian) untuk kedua metode.
 - **Justifikasi**: Menghilangkan bias pada Client 1 (pencipta data) yang sebelumnya hanya menggunakan 5 gambar (quick refresh), sehingga sekarang semua client memiliki kualitas referensi yang sama kuatnya (Premium Quality).
 
----
+## 12. Perbandingan dengan Proposal Awal
+| Komponen | Proposal (Awal) | Implementasi (Aktual) | Alasan Perubahan |
+|----------|-----------------|-----------------------|------------------|
+| Hardware | Raspberry Pi 4 | Raspberry Pi 3B / Jetson | Menyesuaikan ketersediaan alat & menguji batas bawah hardware. |
+| Perangkat | 3 Client | 2 Client | Fokus pada validasi orkestrasi & stabilitas jaringan. |
+| Model | Facenet | MobileFaceNet (Xiaomi) | Efisiensi parameter & kompatibilitas Mobile SDK. |
+| Dashboard | Streamlit | FastAPI + Vanilla JS | Latensi UI lebih rendah & kendali penuh atas request lifecycle. |
 
-## 12. Evolusi dari Proposal Awal (Revisi Tugas Akhir)
-Berikut adalah perubahan signifikan dibandingkan dengan dokumen **5027221021-Steven Figo-Revisi Proposal.pdf**:
+## 13. Metodologi Pengumpulan Data
 
-| Fitur | Rencana Awal (Proposal) | Implementasi Saat Ini (Update) | Justifikasi Perubahan |
-| :--- | :--- | :--- | :--- |
-| **Hardware Edge** | Raspberry Pi 4 (RAM 4GB) | **Raspberry Pi 3B (RAM 1GB)** | Menguji ketahanan algoritma pada hardware yang lebih terbatas (*lower-end*). |
-| **Preprocessing** | MTCNN Bbox Crop | **Affine Landmark Alignment** | Meningkatkan akurasi pada wajah miring secara signifikan. |
-| **Resolusi Input** | Standar (112x112 / Square) | **Portrait (96x112)** | Fokus fitur pada area wajah, lebih optimal untuk MobileFaceNet. |
-| **Framework FL** | Framework Flower (flwr) | **Custom Lightweight FL** | Mengurangi dependensi library berat agar lebih stabil di RAM 1GB Raspi 3B. |
-| **Efisiensi Memori**| Tidak disebutkan secara detail | **Input Downscaling & Vectorization** | Wajib dilakukan agar MTCNN tidak menyebabkan OOM pada RAM 1GB. |
-| **Inference Mode** | Standar Loop | **Vectorized (Matrix Multiplication)** | Mengurangi beban CPU dan latency saat pencocokan wajah massal. |
-| **Adaptasi Lokal** | Sinkronisasi penuh | **pFedFace (Personalized FL)** | Mengatasi masalah *non-IID* data antar terminal yang berbeda. |
+### A. Perhitungan Bandwidth (Data Transmission)
+Dihitung berdasarkan *Payload Size* pada lapisan aplikasi (Application Layer):
+- **Centralized Learning (CL)**: 
+  - Mengukur total ukuran gambar mentah (Images) yang diunggah dari terminal ke server.
+  - Rumus: `Total = Ukuran_Gambar_x_Jumlah_Data`.
+- **Federated Learning (FL)**:
+  - **Sync Phase**: Mengukur transmisi bobot model (upload & download) selama N ronde.
+  - **Registry Phase**: Mengukur ukuran file registri centroid yang diunduh client di akhir fase.
+  - **Rumus FL**: `Total = (Model_Weights_Size * 2 * Num_Rounds * Num_Clients) + (Registry_Size * Num_Clients)`.
+
+### B. Perhitungan Konsumsi Energi (kWh) via CodeCarbon
+- **Metode**: Menggunakan pustaka **CodeCarbon** dengan tracker `OfflineEmissionsTracker`.
+- **Cara Kerja**: Mendeteksi TDP (Thermal Design Power) dan utilisasi CPU/GPU secara real-time selama proses training/agregasi berlangsung.
+- **Akurasi**: 
+  - **Tinggi (Intel/AMD)**: Menggunakan sensor **RAPL** (Running Average Power Limit) untuk pembacaan konsumsi daya aktual.
+  - **Estimasi (ARM/Edge)**: Menggunakan profil konsumsi daya referensi berdasarkan model chipset jika sensor hardware tidak tersedia.
+- **Justifikasi**: Penggunaan kWh memberikan dimensi baru dalam riset, yaitu **Environmental Impact** dan **Operational Cost**, yang membuktikan bahwa FL tidak hanya lebih privat tetapi juga bisa lebih hemat biaya operasional jangka panjang dibandingkan CL yang memerlukan server GPU besar secara terus-menerus.
+
+## 14. Persistensi Log & Auditabilitas Data (Riset)
+Untuk menjamin integritas data selama pengujian berulang (10x trial), sistem dilengkapi mekanisme penyimpanan log permanen:
+
+- **Log File System**: Semua aktivitas teknis (Training, Inference, Aggregation) disimpan dalam file `.log` di dalam direktori `/app/data/`. Log ini bersifat persisten dan tidak akan hilang meskipun container Docker dimatikan.
+- **Centralized Client Monitoring**: Server dashboard kini memiliki kemampuan untuk menarik log dari terminal edge secara remote. Hal ini memudahkan peneliti (mahasiswa) dalam memantau kesehatan sistem di Raspberry Pi tanpa harus mengakses terminal SSH secara manual.
+- **Inference Audit**: Setiap hasil pengenalan wajah yang berhasil (Inference Success) dicatat dengan timestamp dan skor kepercayaan, memberikan bukti autentik untuk hasil yang dilaporkan pada Bab 4.
+
+## 15. Analisis Anomali Akurasi (FL Client 1 vs 2)
+Dalam pengujian, ditemukan bahwa Client 2 (tanpa data pendaftar) memiliki akurasi lebih tinggi (±90%) dibanding Client 1 (±80%). Analisis teknis menunjukkan:
+
+- **Validasi Citra Asli (Client 1)**: Client 1 menguji model menggunakan data citra asli (mentah) yang memiliki variansi sudut dan *noise*. Ini adalah pengujian yang "jujur" dan berat.
+- **Validasi Hybrid Embedding (Client 2)**: Karena Client 2 tidak memiliki data lokal subjek tertentu, ia menggunakan **Global Embeddings** (fitur yang sudah bersih) untuk validasi kelas tersebut. Mengenali fitur matang jauh lebih mudah daripada citra mentah, sehingga skor akurasi terlihat lebih tinggi.
+- **Kesimpulan**: Akurasi Client 1 lebih representatif terhadap performa di lapangan, sementara akurasi Client 2 mencerminkan keberhasilan mekanisme *Knowledge Sharing* dalam mempertahankan memori global.

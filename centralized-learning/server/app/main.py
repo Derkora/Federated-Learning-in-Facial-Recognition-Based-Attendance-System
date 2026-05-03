@@ -2,6 +2,8 @@ import os
 import shutil
 import time
 import torch
+import requests
+import json
 from datetime import datetime, time as dt_time, timedelta, timezone
 from fastapi import FastAPI, Depends, Request, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -67,6 +69,29 @@ async def update_settings(data: dict):
         return {"status": "success", "message": "Settings updated"}
     else:
         raise HTTPException(status_code=500, detail="Failed to save settings")
+
+@app.post("/api/clients/ready")
+async def report_client_ready(data: dict):
+    # Digunakan untuk koordinasi sinkronisasi data
+    return {"status": "ok"}
+
+# Endpoint Baru: Ambil Log Jarak Jauh dari Client (Proxy)
+@app.get("/api/clients/logs/{client_id}")
+async def get_client_logs(client_id: str, dbs: Session = Depends(db.get_db)):
+    """Mengambil log aktivitas dari client tertentu secara remote."""
+    client = dbs.query(models.Client).filter_by(edge_id=client_id).first()
+    
+    if not client or not client.ip_address:
+        raise HTTPException(status_code=404, detail="Client tidak ditemukan atau IP tidak terdaftar.")
+    
+    try:
+        # Panggil endpoint /api/logs di sisi client
+        res = requests.get(f"http://{client.ip_address}:8080/api/logs", timeout=3)
+        if res.status_code == 200:
+            return res.json()
+        return {"logs": f"Gagal mengambil log dari client: HTTP {res.status_code}"}
+    except Exception as e:
+        return {"logs": f"Client {client_id} tidak merespon: {str(e)}"}
 
 # API Status Sistem
 @app.get("/api/status")

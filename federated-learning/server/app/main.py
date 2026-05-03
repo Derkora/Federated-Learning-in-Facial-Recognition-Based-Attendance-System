@@ -1,6 +1,7 @@
 import os
 import time
 import json
+import requests
 import uvicorn
 import base64
 import torch
@@ -139,6 +140,24 @@ async def report_client_ready(data: dict):
     if cid:
         fl_manager.ready_clients.add(cid)
     return {"status": "ok"}
+
+# Endpoint Baru: Ambil Log Jarak Jauh dari Client
+@app.get("/api/clients/logs/{client_id}")
+async def get_client_logs(client_id: str):
+    """Mengambil log dari client tertentu via API client tersebut."""
+    client_data = fl_manager.registered_clients.get(client_id)
+    if not client_data:
+        raise HTTPException(status_code=404, detail="Client tidak terdaftar atau offline.")
+    
+    ip = client_data.get("ip_address")
+    try:
+        # Panggil endpoint /api/logs di sisi client
+        res = requests.get(f"http://{ip}:8080/api/logs", timeout=3)
+        if res.status_code == 200:
+            return res.json()
+        return {"logs": f"Gagal mengambil log: HTTP {res.status_code}"}
+    except Exception as e:
+        return {"logs": f"Client tidak merespon: {str(e)}"}
 
 # --- AKSES MODEL DAN ASET ---
 

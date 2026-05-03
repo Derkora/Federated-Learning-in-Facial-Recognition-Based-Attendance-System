@@ -24,6 +24,10 @@ Kedua sistem menggunakan parameter yang identik untuk memastikan perbandingan ya
 | **Threshold** | 0.75 (CIM: 0.85) | 0.75 (CIM: 0.85) |
 | **Metode Inferensi** | Flip Trick + Temporal Voting | Flip Trick + Temporal Voting |
 | **Res. Management** | **Downscale 640px + Vectorization** | **Downscale 640px + Vectorization** |
+| **Batch Size** | 16 (Optimized for 1GB RAM) | 8 per Client (Optimized for 1GB RAM) |
+| **Learning Rate** | 0.05 (Cosine Decay) | 0.05 (Cosine Decay) |
+| **Basis Validasi** | Citra Asli (Real Images) | Hybrid (Citra Asli + Global Embeddings) |
+| **Auditabilitas** | Server Training Log | Dual-Logging (Server + Remote Client Log) |
 
 ## 3. Analisis Perbedaan Operasional
 

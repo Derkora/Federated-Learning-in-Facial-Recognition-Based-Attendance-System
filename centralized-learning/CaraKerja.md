@@ -24,9 +24,10 @@ Proses penyiapan data di sisi terminal sebelum pengiriman ke server pusat:
 ---
 
 ### Tahap 3: Pelatihan Terpusat (Centralized Training)
-1. **Partial Freezing**: Server membekukan Stage 1 & 2 (`conv1` hingga `blocks[0-11]`) untuk menjaga fitur umum wajah.
-2. **Transfer Learning**: Server melatih backbone Stage 3 dan ArcMargin head menggunakan SGD (Nesterov) & Cosine Annealing (20 Epoch).
-3. **Optimasi Akhir**: Menggunakan **SWA (Stochastic Weight Averaging)** pada 4 epoch terakhir untuk stabilitas bobot.
+1. **Resource-Aware Training**: Batch Size diatur ke **16** untuk menjaga stabilitas memori server/edge saat menangani dataset besar.
+2. **Partial Freezing**: Server membekukan Stage 1 & 2 (`conv1` hingga `blocks[0-11]`) untuk menjaga fitur umum wajah.
+3. **Transfer Learning**: Server melatih backbone Stage 3 dan ArcMargin head menggunakan SGD (Nesterov) & Cosine Annealing (20 Epoch) dengan Initial LR **0.05**.
+4. **Optimasi Akhir**: Menggunakan **SWA (Stochastic Weight Averaging)** pada 4 epoch terakhir untuk stabilitas bobot.
 
 ### Tahap 4: Deployment & Adaptasi Lokal
 1. **Sinkronisasi**: Client mengunduh model global dan referensi embedding identitas.

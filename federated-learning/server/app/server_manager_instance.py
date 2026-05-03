@@ -288,6 +288,8 @@ class FLServerManager:
             "unique_client_ids": [], # Pelacakan ID unik client yang berkontribusi
             "convergence_round": None
         }
+        # Inisialisasi File Log
+        self.log_path = "data/server_training.log"
         self._load_persistence()
 
     def _load_persistence(self):
@@ -375,8 +377,16 @@ class FLServerManager:
         # Gunakan Waktu Indonesia Barat (UTC+7)
         tz_wib = timezone(timedelta(hours=7))
         ts = datetime.now(tz_wib).strftime("%H:%M:%S")
-        self.current_logs.append(f"[{ts}] {msg}")
+        log_entry = f"[{ts}] {msg}"
+        self.current_logs.append(log_entry)
         if len(self.current_logs) > 100: self.current_logs.pop(0)
+        
+        # Tulis ke file persisten
+        try:
+            with open(self.log_path, "a") as f:
+                f.write(f"[{datetime.now(tz_wib).strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
+        except: pass
+        
         print(f"SERVER LOG: {msg}")
 
     def update_metrics(self, new_data):

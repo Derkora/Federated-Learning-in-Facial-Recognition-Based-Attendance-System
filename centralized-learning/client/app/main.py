@@ -80,6 +80,18 @@ async def video_feed():
 async def get_latest_result():
     return cl_client.latest_result
 
+@app.get("/api/logs")
+async def get_logs():
+    """Mengambil 100 baris terakhir dari file log."""
+    if not os.path.exists(cl_client.log_path):
+        return {"logs": "Belum ada aktivitas tercatat."}
+    try:
+        with open(cl_client.log_path, "r") as f:
+            lines = f.readlines()
+            return {"logs": "".join(lines[-100:])}
+    except Exception as e:
+        return {"logs": f"Error membaca log: {str(e)}"}
+
 # API Permintaan Data dari Server
 @app.post("/api/request-data")
 async def request_data():
