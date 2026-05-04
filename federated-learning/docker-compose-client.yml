@@ -8,10 +8,10 @@ services:
     container_name: client_fl_balanced
     privileged: true
     ports:
-      - "8081:8080"
+      - "8082:8080"
     environment:
       - DATABASE_URL=sqlite:////app/data/client.db
-      - SERVER_API_URL=http://${SERVER_IP}:8080
+      - SERVER_API_URL=http://${SERVER_IP}:8081
       - FL_SERVER_ADDRESS=${SERVER_IP}:8085
       - PYTHONUNBUFFERED=1
       - HOSTNAME=${CLIENT_ID}

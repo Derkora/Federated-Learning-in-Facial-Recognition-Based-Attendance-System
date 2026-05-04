@@ -23,7 +23,7 @@ services:
     ports:
       - "8082:8080"
     environment:
-      CL_SERVER_ADDRESS: http://server-cl:8080
+      CL_SERVER_ADDRESS: http://server-cl:8081
       PYTHONUNBUFFERED: 1
     volumes:
       - ../datasets/client1_data:/app/raw_data
@@ -38,7 +38,7 @@ services:
     ports:
       - "8083:8080"
     environment:
-      CL_SERVER_ADDRESS: http://server-cl:8080
+      CL_SERVER_ADDRESS: http://server-cl:8081
       PYTHONUNBUFFERED: 1
     volumes:
       - ../datasets/client2_data:/app/raw_data

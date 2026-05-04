@@ -8,7 +8,7 @@ services:
     container_name: client_cl_balanced
     privileged: true
     ports:
-      - "8081:8080"
+      - "8082:8080"
     environment:
       - CL_SERVER_ADDRESS=http://${SERVER_IP}:8081
       - PYTHONUNBUFFERED=1

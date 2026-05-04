@@ -25,7 +25,7 @@ services:
       - "8082:8080"
     environment:
       DATABASE_URL: sqlite:////app/data/client.db
-      SERVER_API_URL: http://server-fl:8080
+      SERVER_API_URL: http://server-fl:8081
       FL_SERVER_ADDRESS: server-fl:8085
       PYTHONUNBUFFERED: 1
     volumes:
@@ -42,7 +42,7 @@ services:
       - "8083:8080"
     environment:
       DATABASE_URL: sqlite:////app/data/client.db
-      SERVER_API_URL: http://server-fl:8080
+      SERVER_API_URL: http://server-fl:8081
       FL_SERVER_ADDRESS: server-fl:8085
       PYTHONUNBUFFERED: 1
     volumes:
