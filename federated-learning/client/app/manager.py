@@ -139,6 +139,45 @@ class FLClientManager:
         self.log_path = os.path.join(self.data_path, "client_activity.log")
         self._log_to_file("=== Client Started / Restarted ===")
 
+    def _log(self, message):
+        """Log message with timestamp."""
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        print(f"[{timestamp}] {message}")
+        self._log_to_file(message)
+
+    def _safe_request(self, method, url, max_retries=3, **kwargs):
+        """Helper to perform requests with retry logic."""
+        for attempt in range(max_retries):
+            try:
+                # Set a default timeout if not provided
+                if 'timeout' not in kwargs:
+                    kwargs['timeout'] = 10
+                
+                response = requests.request(method, url, **kwargs)
+                response.raise_for_status()
+                return response
+            except Exception as e:
+                # self._log(f"[RETRY {attempt+1}/{max_retries}] Gagal {method} {url}: {str(e)}")
+                if attempt == max_retries - 1:
+                    raise e
+                time.sleep(2)
+        return None
+
+    def register_to_server(self):
+        """Mendaftarkan client ke server API."""
+        try:
+            response = self._safe_request("POST", f"{self.server_api_url}/api/clients/register", json={
+                "client_id": self.client_id,
+                "ip_address": socket.gethostbyname(socket.gethostname()),
+                "port": int(os.getenv("CLIENT_PORT", 8080))
+            })
+            if response and response.status_code == 200:
+                self._log(f"[SUCCESS] Client {self.client_id} berhasil terdaftar di server.")
+                return True
+        except Exception as e:
+            self._log(f"[ERROR] Gagal registrasi ke server: {str(e)}")
+        return False
+
     def _log_to_file(self, message):
         """Mencatat pesan ke file log persisten di /app/data."""
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -174,8 +213,8 @@ class FLClientManager:
         """
         try:
             print("[INIT] Sinkronisasi informasi identitas global dari server...")
-            res = requests.get(f"{self.server_api_url}/api/training/identities", timeout=10)
-            if res.status_code == 200:
+            res = self._safe_request("GET", f"{self.server_api_url}/api/training/identities")
+            if res and res.status_code == 200:
                 identities = res.json()
                 db = SessionLocal()
                 try:
@@ -523,11 +562,13 @@ class FLClientManager:
                 "port": int(os.getenv("CLIENT_PORT", 8080)),
                 "fl_status": self.fl_status,
                 "last_seen": now
-            })
+            }
+            response = self._safe_request("POST", f"{self.server_api_url}/api/clients/register", json=payload, timeout=2)
             if response and response.status_code == 200:
                 self.is_registered = True
                 print(f"[SUCCESS] Client {self.client_id} berhasil terdaftar di server.")
-        except:
+        except Exception as e:
+            # self._log(f"[DEBUG] Heartbeat fail: {e}")
             self.is_registered = False
 
     def run_background_sync(self):
@@ -1019,9 +1060,9 @@ class FLClientManager:
             payload = {
                 "client_id": self.client_id, "bn_params": serialized_bn, "centroids": serialized_centroids
             }
-            res = requests.post(f"{self.server_api_url}/api/training/registry_assets", json=payload, timeout=60)
+            res = self._safe_request("POST", f"{self.server_api_url}/api/training/registry_assets", json=payload, timeout=60)
             
-            if res.status_code == 200:
+            if res and res.status_code == 200:
                 self._log_to_file("SUCCESS: Pengiriman aset lokal berhasil. Menunggu agregasi global...")
                 self.report_status("Processing: Menunggu Agregasi Global...")
                 
@@ -1035,8 +1076,8 @@ class FLClientManager:
                     
                     # 5. ATOMIC VERSION SYNC: Pastikan versi diupdate SEBELUM reload
                     try:
-                        resp = requests.get(f"{self.server_api_url}/api/status", timeout=5)
-                        if resp.status_code == 200:
+                        resp = self._safe_request("GET", f"{self.server_api_url}/api/status", timeout=5)
+                        if resp and resp.status_code == 200:
                             v = resp.json().get("model_version", 1)
                             print(f"[REGISTRY] Syncing local version to v{v}")
                             self._save_version(v)
@@ -1064,8 +1105,8 @@ class FLClientManager:
         deadline = time.time() + max_wait
         while time.time() < deadline:
             try:
-                res = requests.get(registry_url, timeout=15)
-                if res.status_code == 200:
+                res = self._safe_request("GET", registry_url, timeout=15)
+                if res and res.status_code == 200:
                     save_path = os.path.join(self.data_path, "models", "global_embedding_registry.pth")
                     with open(save_path, "wb") as f:
                         f.write(res.content)
