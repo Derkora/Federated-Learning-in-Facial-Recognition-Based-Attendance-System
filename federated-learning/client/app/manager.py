@@ -523,9 +523,8 @@ class FLClientManager:
                 "port": int(os.getenv("CLIENT_PORT", 8080)),
                 "fl_status": self.fl_status,
                 "last_seen": now
-            }
-            res = requests.post(f"{self.server_api_url}/api/clients/register", json=payload, timeout=2)
-            if res.status_code == 200:
+            })
+            if response and response.status_code == 200:
                 self.is_registered = True
                 print(f"[SUCCESS] Client {self.client_id} berhasil terdaftar di server.")
         except:
@@ -538,8 +537,8 @@ class FLClientManager:
                 self.report_status()
                 
                 # 2. Cek Versi Model
-                resp = requests.get(f"{self.server_api_url}/api/training/status", timeout=2)
-                if resp.status_code == 200:
+                resp = self._safe_request("GET", f"{self.server_api_url}/api/training/status")
+                if resp and resp.status_code == 200:
                     data = resp.json()
                     phase = data.get("current_phase", "idle")
                     server_version = data.get("model_version", 0)
@@ -586,8 +585,8 @@ class FLClientManager:
         if (self.last_phase == "training" or self.last_phase == "registry generation" or self.last_phase == "idle") and (phase == "completed" or phase == "idle"):
             # Cek apakah memang ada kenaikan versi di server
             try:
-                resp = requests.get(f"{self.server_api_url}/api/status", timeout=2)
-                server_v = resp.json().get("model_version", self.model_version) if resp.status_code == 200 else self.model_version
+                resp = self._safe_request("GET", f"{self.server_api_url}/api/status")
+                server_v = resp.json().get("model_version", self.model_version) if resp and resp.status_code == 200 else self.model_version
                 if server_v <= self.model_version and not (phase == "completed"):
                     return # Tidak perlu sync jika sudah up to date dan bukan fase completion eksplisit
             except: pass
@@ -609,8 +608,8 @@ class FLClientManager:
                         
                     # 4. Ambil versi terbaru dan update metadata
                     try:
-                        resp = requests.get(f"{self.server_api_url}/api/status", timeout=5)
-                        if resp.status_code == 200:
+                        resp = self._safe_request("GET", f"{self.server_api_url}/api/status")
+                        if resp and resp.status_code == 200:
                             v = resp.json().get("model_version", self.model_version)
                             print(f"[SYNC] Menetapkan versi lokal ke v{v}")
                             self._save_version(v)
@@ -633,17 +632,17 @@ class FLClientManager:
     def _save_version(self, v):
         self.model_version = v
         v_path = os.path.join(self.data_path, "models", "model_version.txt")
+        os.makedirs(os.path.dirname(v_path), exist_ok=True)
         with open(v_path, "w") as f:
             f.write(str(v))
 
     def download_backbone(self):
         """Mengambil StateDict Backbone hasil agregasi dari server."""
         try:
-            url_bb = f"{self.server_api_url}/api/model/backbone"
-            print(f"[INFO] Mengambil backbone global dari server...")
-            res_bb = requests.get(url_bb, timeout=30)
-            if res_bb.status_code == 200:
+            res_bb = self._safe_request("GET", f"{self.server_api_url}/api/model/backbone")
+            if res_bb and res_bb.status_code == 200:
                 save_path = os.path.join(self.data_path, "models", "backbone.pth")
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
                 with open(save_path, "wb") as f:
                     size = f.write(res_bb.content)
                 print(f"[SYNC] Berhasil mengunduh backbone ({size} bytes).")
@@ -651,8 +650,6 @@ class FLClientManager:
                 # EAGER RELOAD: Terapkan backbone global ke RAM
                 self._reload_inference_models(force_reload=True)
                 return True
-            else:
-                print(f"[SYNC ERROR] Server returned status code {res_bb.status_code} for backbone.")
         except Exception as e:
             print(f"[SYNC ERROR] Backbone fetch failed: {e}")
         return False
@@ -661,12 +658,13 @@ class FLClientManager:
         """Mengambil statistik BN (Running Mean/Var) hasil agregasi untuk konsistensi global."""
         path = os.path.join(self.data_path, "models", "global_bn_combined.pth")
         url = f"{self.server_api_url}/api/model/bn"
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         
         deadline = time.time() + max_wait
         while time.time() < deadline:
             try:
-                res = requests.get(url, timeout=10)
-                if res.status_code == 200:
+                res = self._safe_request("GET", url)
+                if res and res.status_code == 200:
                     with open(path, "wb") as f:
                         f.write(res.content)
                     
@@ -678,10 +676,9 @@ class FLClientManager:
                         return True
                     except Exception as e:
                         print(f"[ERROR] Berkas BN tidak valid, mencoba kembali: {e}")
-                elif res.status_code == 202 or res.status_code == 404:
+                elif res and (res.status_code == 202 or res.status_code == 404):
                     print(f"[INFO] BN belum siap di server (Status {res.status_code}), menunggu...")
                 else:
-                    print(f"[ERROR] Unduhan BN gagal dengan status: {res.status_code}")
                     return False
             except Exception as e:
                 print(f"[ERROR] Gagal mengunduh BN: {e}")
@@ -691,16 +688,14 @@ class FLClientManager:
     def download_registry_assets(self):
         """Unduh centroid identifikasi gabungan untuk inferensi offline."""
         try:
-            url_reg = f"{self.server_api_url}/api/model/registry"
-            res_reg = requests.get(url_reg, timeout=20)
-            if res_reg.status_code == 200:
+            res_reg = self._safe_request("GET", f"{self.server_api_url}/api/model/registry")
+            if res_reg and res_reg.status_code == 200:
                 reg_path = os.path.join(self.data_path, "models", "global_embedding_registry.pth")
+                os.makedirs(os.path.dirname(reg_path), exist_ok=True)
                 with open(reg_path, "wb") as f:
                     f.write(res_reg.content)
                 print("[SUCCESS] Registry Centroid berhasil diperbarui.")
                 return True
-            else:
-                print(f"[INFO] Unduhan registry dilewati (Status {res_reg.status_code})")
         except Exception as e:
             print(f"[ERROR] Gagal memperbarui Registry: {e}")
         return False
@@ -712,8 +707,8 @@ class FLClientManager:
 
         db = SessionLocal()
         try:
-            res = requests.get(f"{self.server_api_url}/api/users/global", timeout=10)
-            if res.status_code == 200:
+            res = self._safe_request("GET", f"{self.server_api_url}/api/users/global")
+            if res and res.status_code == 200:
                 global_users = res.json()
                 for u in global_users:
                     user = db.query(UserLocal).filter_by(user_id=u['nrp']).first()
@@ -815,7 +810,7 @@ class FLClientManager:
                         "nrp": user.user_id, "name": user.name, "client_id": self.client_id,
                         "embedding": base64.b64encode(embedding_np.tobytes()).decode('utf-8')
                     }
-                    requests.post(f"{self.server_api_url}/api/training/get_label", json=payload, timeout=5)
+                    self._safe_request("POST", f"{self.server_api_url}/api/training/get_label", json=payload)
                 except: pass
             
             print("[REFRESH] Local embeddings refresh complete.")
@@ -840,9 +835,9 @@ class FLClientManager:
                 name = folder.split('_')[1] if "_" in folder else nrp
                 
                 try:
-                    requests.post(f"{self.server_api_url}/api/training/get_label", json={
+                    self._safe_request("POST", f"{self.server_api_url}/api/training/get_label", json={
                         "nrp": nrp, "name": name, "client_id": self.client_id
-                    }, timeout=5)
+                    })
                 except: pass
                 
                 db = SessionLocal()
@@ -853,7 +848,7 @@ class FLClientManager:
                         db.commit()
                 finally: db.close()
             
-            requests.post(f"{self.server_api_url}/api/clients/discovery_done", json={"client_id": self.client_id}, timeout=5)
+            self._safe_request("POST", f"{self.server_api_url}/api/clients/discovery_done", json={"client_id": self.client_id})
             self.report_status("Discovery Selesai: Menunggu Global Map...")
         except Exception as e:
             print(f"[DISCOVERY ERROR] {e}")
@@ -862,8 +857,8 @@ class FLClientManager:
     def sync_label_map(self):
         try:
             self._ensure_models_loaded()
-            res = requests.get(f"{self.server_api_url}/api/training/label_map", timeout=10)
-            if res.status_code == 200:
+            res = self._safe_request("GET", f"{self.server_api_url}/api/training/label_map")
+            if res and res.status_code == 200:
                 self.client.label_map = res.json()
                 self.num_classes = len(self.client.label_map)
                 print(f"[SYNC] Peta label global berhasil disinkronkan. Total identitas: {self.num_classes}")
@@ -876,8 +871,10 @@ class FLClientManager:
                         new_label_map = {nrp: idx for idx, nrp in enumerate(self.client.label_map)}
                         self.head = self.client.trainer.update_head(self.num_classes, new_label_map)
 
-                map_path = os.path.join(self.data_path, "models", "label_map.json")
-                with open(map_path, "w") as f:
+                label_map_path = os.path.join(self.data_path, "models", "label_map.json")
+                os.makedirs(os.path.dirname(label_map_path), exist_ok=True)
+                
+                with open(label_map_path, "w") as f:
                     json.dump(self.client.label_map, f)
                 return True
         except Exception as e:
@@ -946,7 +943,8 @@ class FLClientManager:
             self.refresh_local_embeddings()
             
             try:
-                requests.post(f"{self.server_api_url}/api/clients/ready", json={"client_id": self.client_id}, timeout=5)
+                self._log_to_file(f"[PREPROCESS] Client {self.client_id} is READY for training.")
+                self._safe_request("POST", f"{self.server_api_url}/api/clients/ready", json={"client_id": self.client_id})
             except: pass
             
             num_classes = sum(1 for sub in os.listdir(processed_dir) if os.path.isdir(os.path.join(processed_dir, sub)) and len(os.listdir(os.path.join(processed_dir, sub))) > 0)
@@ -964,7 +962,7 @@ class FLClientManager:
         else:
             self.report_status("Siap Training (No Data)")
             try:
-                requests.post(f"{self.server_api_url}/api/clients/ready", json={"client_id": self.client_id}, timeout=5)
+                self._safe_request("POST", f"{self.server_api_url}/api/clients/ready", json={"client_id": self.client_id})
             except: pass
 
     def run_registry_phase(self):
