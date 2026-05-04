@@ -190,9 +190,11 @@ class FLController:
     def _trigger_clients(self, endpoint):
         for cid, data in self.fl_manager.registered_clients.items():
             ip = data.get("ip_address")
+            port = data.get("port", 8080)
             if ip:
                 try:
-                    requests.post(f"http://{ip}:8080{endpoint}", timeout=2)
+                    # Gunakan port yang dilaporkan client saat registrasi
+                    requests.post(f"http://{ip}:{port}{endpoint}", timeout=2)
                 except: pass
 
     def _wait_for_condition(self, condition_func, timeout):

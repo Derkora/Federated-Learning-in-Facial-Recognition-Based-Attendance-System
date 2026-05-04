@@ -115,10 +115,14 @@ async def reset_fl_state():
 
 # Pendaftaran Terminal (Client) Baru
 @app.post("/api/clients/register")
-async def register_client(data: dict, db: Session = Depends(get_db)):
+async def register_client(request: Request, data: dict, db: Session = Depends(get_db)):
     cid = data.get("id")
-    ip = data.get("ip_address", "0.0.0.0")
+    # Gunakan IP pengirim request (request.client.host) agar bisa dihubungi balik oleh server
+    # Jika berada di belakang proxy, bisa gunakan header X-Forwarded-For
+    ip = request.client.host
+    
     if cid:
+        data["ip_address"] = ip # Update data dengan IP asli
         fl_manager.registered_clients[cid] = data
         client = db.query(Client).filter_by(edge_id=cid).first()
         if not client:
@@ -129,7 +133,7 @@ async def register_client(data: dict, db: Session = Depends(get_db)):
             client.status = "online"
             client.last_seen = datetime.now(timezone(timedelta(hours=7)))
         db.commit()
-    return {"status": "ok", "server_time": time.time()}
+    return {"status": "ok", "server_time": time.time(), "detected_ip": ip}
 
 # Laporan Penyelesaian Tahap Discovery dari Terminal
 @app.post("/api/clients/discovery_done")

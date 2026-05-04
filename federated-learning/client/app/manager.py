@@ -520,6 +520,7 @@ class FLClientManager:
             payload = {
                 "id": self.client_id,
                 "ip_address": socket.gethostbyname(socket.gethostname()),
+                "port": int(os.getenv("CLIENT_PORT", 8080)),
                 "fl_status": self.fl_status,
                 "last_seen": now
             }
