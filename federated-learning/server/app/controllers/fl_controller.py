@@ -108,8 +108,8 @@ class FLController:
             self._trigger_clients("/api/request-preprocess")
             
             # Tunggu client lapor 'Ready' (Preprocessing selesai)
-            self._log("SERVER LOG: Menunggu laporan 'Ready' dari seluruh terminal...")
-            if not self._wait_for_ready_clients(min_clients, timeout=1200):
+            self._log("SERVER LOG: Menunggu laporan 'Ready' dari seluruh terminal (Timeout: 1 Jam)...")
+            if not self._wait_for_ready_clients(min_clients, timeout=3600):
                 self._log("[ERROR] Gagal: Tahap Preprocessing melampaui batas waktu.")
                 return
             
@@ -208,13 +208,16 @@ class FLController:
     def _wait_for_ready_clients(self, min_clients, timeout):
         start = time.time()
         last_log = 0
+        last_ready_count = -1
         while len(self.fl_manager.ready_clients) < min_clients:
             if time.time() - start > timeout: return False
             
-            # Log status setiap 10 detik
-            if time.time() - last_log > 10:
-                self._log(f"SERVER LOG: Terminal siap: {len(self.fl_manager.ready_clients)}/{min_clients}...")
+            current_ready_count = len(self.fl_manager.ready_clients)
+            # Log hanya jika jumlah berubah ATAU setiap 10 menit (600 detik)
+            if current_ready_count != last_ready_count or time.time() - last_log > 600:
+                self._log(f"SERVER LOG: Status Terminal: {current_ready_count}/{min_clients} siap.")
                 last_log = time.time()
+                last_ready_count = current_ready_count
 
             # Cek status via heartbeat sebagai cadangan jika sinyal API terlewat
             for cid, data in list(self.fl_manager.registered_clients.items()):

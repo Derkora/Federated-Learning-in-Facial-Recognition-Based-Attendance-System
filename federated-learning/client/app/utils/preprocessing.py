@@ -65,7 +65,7 @@ class ImageProcessor:
                 scale = max_size / max(orig_w, orig_h)
                 new_size = (int(orig_w * scale), int(orig_h * scale))
                 img_detect = img.resize(new_size, Image.BILINEAR)
-                print(f"[DEBUG] Downscaling input for detection: {orig_w}x{orig_h} -> {new_size[0]}x{new_size[1]}")
+                # print(f"[DEBUG] Downscaling input for detection: {orig_w}x{orig_h} -> {new_size[0]}x{new_size[1]}")
             else:
                 img_detect = img
                 scale = 1.0
@@ -97,7 +97,7 @@ class ImageProcessor:
                                                 flags=cv2.INTER_LINEAR, 
                                                 borderMode=cv2.BORDER_REPLICATE)
                         face_img = Image.fromarray(cv2.cvtColor(aligned, cv2.COLOR_BGR2RGB))
-                        print("[OK] Wajah berhasil disejajarkan menggunakan landmark (Alignment).")
+                        # print("[OK] Wajah berhasil disejajarkan menggunakan landmark (Alignment).")
                 except Exception as e:
                     print(f"[DEBUG] Gagal melakukan alignment: {e}")
             

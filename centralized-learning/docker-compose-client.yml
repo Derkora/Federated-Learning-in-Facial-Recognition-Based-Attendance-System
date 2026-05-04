@@ -21,7 +21,7 @@ services:
       - /dev/video0:/dev/video0
     volumes:
       - ./client/data:/app/data
-      - ${RAW_DATA_PATH_CLIENT}:/app/raw_data
+      - ${RAW_DATA_PATH_CLIENT}:/app/raw_data/students
     networks:
       - cl-network
 

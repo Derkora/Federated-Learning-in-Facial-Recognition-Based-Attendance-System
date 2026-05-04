@@ -867,8 +867,10 @@ class FLClientManager:
         try:
             student_path = os.path.join(self.raw_data_path, "students")
             if not os.path.exists(student_path):
-                self.report_status("Error: Folder student tidak ditemukan")
-                return
+                # self.report_status("Error: Folder student tidak ditemukan")
+                # return
+                self._log(f"[DEBUG] Subfolder 'students' tidak ada, mencoba menggunakan root: {self.raw_data_path}")
+                student_path = self.raw_data_path
 
             folders = [f for f in os.listdir(student_path) if os.path.isdir(os.path.join(student_path, f))]
             for folder in sorted(folders):
@@ -930,10 +932,14 @@ class FLClientManager:
             return
 
         students_dir = os.path.join(self.raw_data_path, "students")
+        if not os.path.exists(students_dir):
+            self._log(f"[DEBUG] Subfolder 'students' tidak ada, mencoba menggunakan root: {self.raw_data_path}")
+            students_dir = self.raw_data_path
+            
         processed_dir = os.path.join(self.data_path, "processed")
         os.makedirs(processed_dir, exist_ok=True)
         
-        if not os.path.exists(students_dir):
+        if not os.path.exists(students_dir) or not os.listdir(students_dir):
             self.report_status("Siap Training (No Data)")
             return
 

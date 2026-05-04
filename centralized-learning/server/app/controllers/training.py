@@ -43,15 +43,16 @@ class TrainingController:
         os.makedirs(MODEL_DIR, exist_ok=True)
 
 
-    def fetch_data(self, wait_timeout=600, expected_clients=None):
+    def fetch_data(self, wait_timeout=3600, expected_clients=None):
         # Tahap 1: Sinkronisasi dan Menunggu Unggahan Data dari Terminal
-        print(f"[INIT] Memulai pemantauan unggahan data di {UPLOAD_DIR}...", flush=True)
+        print(f"[INIT] Memulai pemantauan unggahan data di {UPLOAD_DIR} (Timeout: 1 Jam)...", flush=True)
         if expected_clients:
             print(f"[OK] Menunggu data dari minimal {expected_clients} terminal.", flush=True)
             
         start_time = time.time()
         last_img_count = -1
         stable_since = None
+        last_log_time = 0
         STABILIZATION_TIME = 15 # Detekasi kestabilan data (tidak ada perubahan jumlah berkas)
         
         while (time.time() - start_time) < wait_timeout:
@@ -78,9 +79,13 @@ class TrainingController:
                             cl_manager.update_logs(msg)
                             break
                         else:
-                            print(f"[INFO] Menunggu kestabilan data... ({int(STABILIZATION_TIME - elapsed_stable)} detik lagi)", flush=True)
+                            if time.time() - last_log_time > 60:
+                                print(f"[INFO] Menunggu kestabilan data... ({int(STABILIZATION_TIME - elapsed_stable)} detik lagi)", flush=True)
+                                last_log_time = time.time()
                 else:
-                    print(f"[INFO] Menunggu unggahan pertama... (Durasi: {int(time.time() - start_time)} detik)", flush=True)
+                    if time.time() - last_log_time > 60:
+                        print(f"[INFO] Menunggu unggahan pertama... (Durasi: {int(time.time() - start_time)} detik)", flush=True)
+                        last_log_time = time.time()
             except Exception as e:
                 print(f"[ERROR] Kesalahan saat pengecekan data: {e}", flush=True)
             
