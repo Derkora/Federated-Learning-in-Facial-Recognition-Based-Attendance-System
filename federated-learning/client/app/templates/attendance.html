@@ -22,9 +22,9 @@
     Memindai wajah...
 </div>
 
-<button id="btn-browser-cam" class="btn"
-    style="width: 100%; height: 60px; margin-top: 1rem; background: rgba(255,255,255,0.03); color: var(--text-muted); border: 1px solid rgba(255,255,255,0.08); font-size: 1rem; display: flex; align-items: center; justify-content: center; gap: 0.5rem;">
-    📷 Aktifkan Kamera Lokal
+<button id="btn-toggle-hw" class="btn"
+    style="width: 100%; height: 60px; margin-top: 1rem; background: var(--accent); color: white; font-weight: bold; font-size: 1.1rem; border-radius: 12px; border: none; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
+    🎥 Aktifkan Kamera Edge
 </button>
 </div>
 
@@ -41,15 +41,29 @@
 
 <script>
     const statusCard = document.getElementById('status-card');
-    const bVideo = document.createElement('video');
-    const bCanvas = document.createElement('canvas');
-    let bStream = null;
-    let bBusy = false;
+    const toggleBtn = document.getElementById('btn-toggle-hw');
+    let camActive = false;
 
-    document.getElementById('btn-browser-cam').onclick = () => {
-        if (!bStream) startBrowserCam();
-        else alert("Kamera browser sudah aktif.");
+    toggleBtn.onclick = async () => {
+        try {
+            const res = await fetch('/api/camera/toggle', { method: 'POST' });
+            const data = await res.json();
+            camActive = data.is_on;
+            updateButtonState();
+        } catch (e) {
+            alert("Gagal mengontrol kamera: " + e);
+        }
     };
+
+    function updateButtonState() {
+        if (camActive) {
+            toggleBtn.innerHTML = "🛑 Matikan Kamera Edge";
+            toggleBtn.style.background = "#ef4444";
+        } else {
+            toggleBtn.innerHTML = "🎥 Aktifkan Kamera Edge";
+            toggleBtn.style.background = "var(--accent)";
+        }
+    }
 
     async function pollResults() {
         try {
@@ -60,52 +74,31 @@
                 document.getElementById('model-badge').innerText = `Model v${data.model_version}`;
             }
 
-            if (data.is_virtual) {
-                document.getElementById('virtual-indicator').style.display = 'inline';
-                if (!bStream && !bBusy) startBrowserCam();
-            } else {
-                document.getElementById('virtual-indicator').style.display = 'none';
+            // Sync tombol dengan status internal jika diperlukan
+            if (data.matched === "CAMERA OFF" && camActive) {
+                camActive = false;
+                updateButtonState();
+            } else if (data.matched !== "CAMERA OFF" && data.matched !== "TRAINING PHASE..." && data.matched !== "TRAINING..." && data.matched !== "CAMERA DISABLED" && !camActive) {
+                camActive = true;
+                updateButtonState();
             }
 
             if (data.matched && data.matched !== "Standby") {
-                if (data.matched !== "Unknown") {
+                if (data.matched === "CAMERA OFF") {
+                    statusCard.innerHTML = `<span style="color: #94a3b8;">Kamera: PADAM</span>`;
+                } else if (data.matched === "TRAINING PHASE..." || data.matched === "TRAINING...") {
+                    statusCard.innerHTML = `<span style="color: var(--accent);">Status: TRAINING...</span>`;
+                } else if (data.matched !== "Unknown") {
                     statusCard.innerHTML = `<span style="color: #10b981;">Diterima: ${data.matched}</span> <br><small>${(data.confidence * 100).toFixed(1)}% | ${data.latency_ms}ms</small>`;
                 } else {
                     statusCard.innerText = "Memindai wajah...";
                     statusCard.style.color = "#f8fafc";
                 }
             } else {
-                statusCard.innerText = "Kamera: Menunggu Model...";
+                statusCard.innerText = "Kamera: Menunggu Instruksi...";
             }
         } catch (e) {
             console.error("Poll Error:", e);
-        }
-    }
-
-    async function startBrowserCam() {
-        try {
-            bBusy = true;
-            bStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
-            bVideo.srcObject = bStream;
-            bVideo.play();
-
-            setInterval(async () => {
-                if (bStream) {
-                    bCanvas.width = 640; bCanvas.height = 480;
-                    bCanvas.getContext('2d').drawImage(bVideo, 0, 0, 640, 480);
-                    const b64 = bCanvas.toDataURL('image/jpeg', 0.4).split(',')[1];
-                    try {
-                        await fetch('/api/inference', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ image: b64 })
-                        });
-                    } catch (e) { }
-                }
-            }, 1000);
-        } catch (e) {
-            console.warn("[BROWSER CAM] Failed:", e);
-            bBusy = false;
         }
     }
 

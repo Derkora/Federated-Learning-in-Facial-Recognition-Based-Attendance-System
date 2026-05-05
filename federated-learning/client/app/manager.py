@@ -422,17 +422,33 @@ class FLClientManager:
     def start_background_tasks(self):
         print(f"[INIT] Memulai tugas latar belakang untuk client: {self.client_id}")
         threading.Thread(target=self.run_background_sync, daemon=True).start()
+        # Biarkan run_camera_loop mengecek status awal (PADAM/NYALA)
         threading.Thread(target=self.run_camera_loop, daemon=True).start()
 
-    def run_camera_loop(self):
-        # PENTING: Cek apakah kamera diaktifkan via .env
-        # Default dirubah ke FALSE agar hemat RAM saat awal startup
-        enable_camera = os.getenv("ENABLE_CAMERA", "false").lower() == "true"
-        if not enable_camera:
-            print("[CAMERA] Kamera dalam posisi PADAM (Default). Aktifkan via ENABLE_CAMERA=true.")
+    def toggle_camera(self):
+        """Menyalakan atau mematikan hardware kamera secara dinamis."""
+        if self.is_camera_running:
+            print("[CAMERA] Mematikan hardware kamera...")
             self.is_camera_running = False
             self.latest_result["matched"] = "CAMERA OFF"
-            return
+            return False
+        else:
+            print("[CAMERA] Menyalakan hardware kamera...")
+            self.is_camera_running = True
+            threading.Thread(target=self.run_camera_loop, daemon=True).start()
+            return True
+
+    def run_camera_loop(self):
+        # PENTING: Jika is_camera_running dipaksa True (via tombol), abaikan pengecekan env awal
+        # Tapi jika startup murni, ikuti aturan PADAM default
+        if not self.is_camera_running:
+            enable_camera = os.getenv("ENABLE_CAMERA", "false").lower() == "true"
+            if not enable_camera:
+                print("[CAMERA] Kamera dalam posisi PADAM (Default). Aktifkan via ENABLE_CAMERA=true atau tombol UI.")
+                self.latest_result["matched"] = "CAMERA OFF"
+                return
+
+        self.is_camera_running = True
 
         # Loop kamera mandiri (Headless Mode)
         cam_idx = self.camera_index

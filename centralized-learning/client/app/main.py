@@ -80,6 +80,11 @@ async def video_feed():
 async def get_latest_result():
     return cl_client.latest_result
 
+@app.post("/api/camera/toggle")
+async def toggle_camera():
+    is_on = cl_client.toggle_camera()
+    return {"status": "success", "is_on": is_on}
+
 @app.get("/api/logs")
 async def get_logs():
     """Mengambil 100 baris terakhir dari file log."""

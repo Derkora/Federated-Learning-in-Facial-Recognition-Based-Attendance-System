@@ -158,6 +158,19 @@ class CLClientManager:
         threading.Thread(target=self.run_background_sync, daemon=True).start()
         threading.Thread(target=self.run_camera_loop, daemon=True).start()
 
+    def toggle_camera(self):
+        """Menyalakan atau mematikan hardware kamera secara dinamis."""
+        if self.is_camera_running:
+            print("[CAMERA] Mematikan hardware kamera...")
+            self.is_camera_running = False
+            self.latest_result["matched"] = "CAMERA OFF"
+            return False
+        else:
+            print("[CAMERA] Menyalakan hardware kamera...")
+            self.is_camera_running = True
+            threading.Thread(target=self.run_camera_loop, daemon=True).start()
+            return True
+
     def run_camera_loop(self):
         # PENTING: Cek apakah kamera diaktifkan via .env
         # Default dirubah ke FALSE agar hemat RAM saat awal startup

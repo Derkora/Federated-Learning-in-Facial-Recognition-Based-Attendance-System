@@ -108,6 +108,11 @@ async def register_user(user_id: str, name: str, image_base64: str, db: Session 
 async def get_latest_result():
     return fl_manager.latest_result
 
+@app.post("/api/camera/toggle")
+async def toggle_camera():
+    is_on = fl_manager.toggle_camera()
+    return {"status": "success", "is_on": is_on}
+
 @app.get("/api/logs")
 async def get_logs():
     """Mengambil 100 baris terakhir dari file log."""
