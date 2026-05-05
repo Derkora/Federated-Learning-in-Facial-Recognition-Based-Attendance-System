@@ -122,7 +122,8 @@ class FLController:
             self.fl_manager.start_phase("Registry Generation")
             self._log("Fase 3: Menggabungkan fitur wajah (Centroids) secara global...")
             
-            if self._wait_for_registry_submissions(len(self.fl_manager.ready_clients), timeout=300):
+            # Tunggu pengumpulan aset (Timeout ditingkatkan ke 1 Jam / 3600 detik)
+            if self._wait_for_registry_submissions(len(self.fl_manager.ready_clients), timeout=3600):
                 self._log("[SUCCESS] Semua data fitur wajah telah diterima.")
             else:
                 self._log("[WARNING] Batas waktu habis, memproses data fitur yang tersedia.")
@@ -229,9 +230,19 @@ class FLController:
 
     def _wait_for_registry_submissions(self, expected_count, timeout):
         start = time.time()
+        last_log = 0
+        last_count = -1
         while True:
             files = [f for f in os.listdir(SUBMISSIONS_DIR) if f.endswith("_assets.pth")] if os.path.exists(SUBMISSIONS_DIR) else []
-            if len(files) >= expected_count: return True
+            current_count = len(files)
+            
+            # Log progres setiap ada perubahan atau setiap 60 detik
+            if current_count != last_count or time.time() - last_log > 60:
+                self._log(f"SERVER LOG: Aset fitur diterima: {current_count}/{expected_count}")
+                last_log = time.time()
+                last_count = current_count
+                
+            if current_count >= expected_count: return True
             if time.time() - start > timeout: return False
             time.sleep(5)
 

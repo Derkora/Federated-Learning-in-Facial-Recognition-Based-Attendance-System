@@ -151,7 +151,7 @@ class FLClientManager:
             try:
                 # Set a default timeout if not provided
                 if 'timeout' not in kwargs:
-                    kwargs['timeout'] = 10
+                    kwargs['timeout'] = 30
                 
                 response = requests.request(method, url, **kwargs)
                 response.raise_for_status()
@@ -425,13 +425,22 @@ class FLClientManager:
         threading.Thread(target=self.run_camera_loop, daemon=True).start()
 
     def run_camera_loop(self):
+        # PENTING: Cek apakah kamera diaktifkan via .env
+        # Default dirubah ke FALSE agar hemat RAM saat awal startup
+        enable_camera = os.getenv("ENABLE_CAMERA", "false").lower() == "true"
+        if not enable_camera:
+            print("[CAMERA] Kamera dalam posisi PADAM (Default). Aktifkan via ENABLE_CAMERA=true.")
+            self.is_camera_running = False
+            self.latest_result["matched"] = "CAMERA OFF"
+            return
+
         # Loop kamera mandiri (Headless Mode)
         cam_idx = self.camera_index
         cam_width = int(os.getenv("CAMERA_WIDTH", 1280))
         cam_height = int(os.getenv("CAMERA_HEIGHT", 720))
         cam_format = os.getenv("CAMERA_FORMAT", "MJPG").upper()
 
-        print(f"[CAMERA] Menjalankan loop kamera otomatis (FL) pada index {cam_idx}...")
+        print(f"[CAMERA] Menjalankan hardware kamera pada index {cam_idx}...")
         cap = cv2.VideoCapture(cam_idx)
         
         # Optimasi Jetson/Raspi: Paksa format MJPG jika didukung (lebih ringan dari YUYV)
@@ -444,51 +453,29 @@ class FLClientManager:
         # Beri waktu hardware inisialisasi
         time.sleep(1)
 
-        if not cap.isOpened() and cam_idx == 0:
-            print(f"[CAMERA] Gagal akses hardware pada index 0. Mencoba index 1...")
-            cap = cv2.VideoCapture(1)
-            
+        if not cap.isOpened():
+            print(f"[CAMERA ERROR] Gagal akses hardware pada index {cam_idx}.")
+            self.is_camera_running = False
+            self.latest_result["matched"] = "CAMERA ERROR"
+            return
+
         self.is_camera_running = True
-        virtual_mode = not cap.isOpened()
-        if virtual_mode:
-            print("[CAMERA] Tidak ada hardware terdeteksi. Menggunakan Mode Virtual (Foto).")
-            
-        virtual_images = []
-        virtual_idx = 0
+        print(f"[CAMERA] Akses hardware berhasil (Index {cam_idx}).")
         
         # PENTING: Gunakan instance terpusat dari manager
         attendance_engine = self.attendance
         
         while self.is_camera_running:
-            ret, frame = False, None
-            if not virtual_mode:
-                ret, frame = cap.read()
-                if not ret:
-                    print("[ERROR] Gagal akses hardware. Beralih ke mode VIRTUAL CAMERA.")
-                    virtual_mode = True
-                    # Pindai gambar virtual
-                    root_dir = os.path.join(self.raw_data_path, "students")
-                    if os.path.exists(root_dir):
-                        for root, dirs, files in os.walk(root_dir):
-                            for f in files:
-                                if f.lower().endswith(('.jpg', '.jpeg', '.png')):
-                                    virtual_images.append(os.path.join(root, f))
-                    if not virtual_images:
-                        print("[ERROR] Tidak ada dataset lokal untuk simulasi.")
-            
-            if virtual_mode and virtual_images:
-                img_path = virtual_images[virtual_idx]
-                frame = cv2.imread(img_path)
-                if frame is not None:
-                    ret = True
-                    virtual_idx = (virtual_idx + 1) % len(virtual_images)
-                    # Beri penanda virtual di frame
-                    cv2.putText(frame, "VIRTUAL MODE (FL)", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
-                time.sleep(1.0) # Lambatkan simulasi
+            # Re-check enable_camera in case it changes or we want to stop
+            if not self.is_camera_running: break
+
+            ret, frame = cap.read()
             
             if not ret:
-                if not virtual_mode: print("[ERROR] Gagal membaca frame dari kamera. Periksa /dev/video0.")
+                print(f"[ERROR] Gagal membaca frame dari kamera {cam_idx}. Mencoba ulang dlm 5 detik...")
+                cap.release()
                 time.sleep(5)
+                cap = cv2.VideoCapture(cam_idx)
                 continue
             
             # Training/Preprocessing Guard
@@ -500,7 +487,7 @@ class FLClientManager:
                 time.sleep(5)
                 continue
             else:
-                if not cap.isOpened() and not virtual_mode:
+                if not cap.isOpened():
                     print("[CAMERA] Mengaktifkan kembali hardware kamera...")
                     cap = cv2.VideoCapture(cam_idx)
 
@@ -531,7 +518,7 @@ class FLClientManager:
                         "confidence": confidence,
                         "latency_ms": int((time.time() - start_time) * 1000),
                         "model_version": status_str,
-                        "is_virtual": virtual_mode
+                        "is_virtual": False
                     }
                     
                     # LOGGING: Catat hanya jika ada hasil cocok
@@ -541,9 +528,8 @@ class FLClientManager:
                     pass
             
             # Explicit cleanup per loop to keep memory stable
-            if not virtual_mode: 
-                time.sleep(0.5)
-                gc.collect()
+            time.sleep(0.5)
+            gc.collect()
         
         cap.release()
 
@@ -704,8 +690,11 @@ class FLClientManager:
         deadline = time.time() + max_wait
         while time.time() < deadline:
             try:
-                res = self._safe_request("GET", url)
-                if res and res.status_code == 200:
+                # Jangan biarkan raise_for_status() melempar eksepsi untuk 404/202 di sini
+                # agar kita bisa menanganinya dengan log yang lebih sopan.
+                res = requests.get(url, timeout=10)
+                
+                if res.status_code == 200:
                     with open(path, "wb") as f:
                         f.write(res.content)
                     
@@ -717,12 +706,14 @@ class FLClientManager:
                         return True
                     except Exception as e:
                         print(f"[ERROR] Berkas BN tidak valid, mencoba kembali: {e}")
-                elif res and (res.status_code == 202 or res.status_code == 404):
-                    print(f"[INFO] BN belum siap di server (Status {res.status_code}), menunggu...")
+                elif res.status_code == 202 or res.status_code == 404:
+                    # Log sebagai INFO saja, bukan ERROR, karena wajar jika belum ada di awal training
+                    print(f"[INFO] BN global belum tersedia di server (Status {res.status_code}), menunggu...")
                 else:
-                    return False
+                    res.raise_for_status() # Lempar untuk kode error lain (500, dll)
             except Exception as e:
-                print(f"[ERROR] Gagal mengunduh BN: {e}")
+                # Kurangi kebisingan log untuk masalah koneksi/timeout sementara
+                pass
             time.sleep(5)
         return False
 
@@ -1074,10 +1065,10 @@ class FLClientManager:
                 
                 # 4. TUNGGU & UNDUH HASIL GLOBAL
                 # Ini memastikan setiap client memiliki BN dan Registry yang SAMA
-                if self.download_bn(max_wait=120):
+                if self.download_bn(max_wait=3600):
                     self._log_to_file("REGISTRY: Global BN Synced.")
                 
-                if self._download_global_registry(max_wait=120):
+                if self._download_global_registry(max_wait=3600):
                     self._log_to_file("REGISTRY: Global Registry Synced.")
                     
                     # 5. ATOMIC VERSION SYNC: Pastikan versi diupdate SEBELUM reload
@@ -1106,7 +1097,7 @@ class FLClientManager:
             self.is_sending_registry = False
             self.refresh_local_embeddings() # Final refresh with global BN
 
-    def _download_global_registry(self, max_wait=60):
+    def _download_global_registry(self, max_wait=3600):
         registry_url = f"{self.server_api_url}/api/model/registry"
         deadline = time.time() + max_wait
         while time.time() < deadline:

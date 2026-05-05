@@ -159,13 +159,22 @@ class CLClientManager:
         threading.Thread(target=self.run_camera_loop, daemon=True).start()
 
     def run_camera_loop(self):
+        # PENTING: Cek apakah kamera diaktifkan via .env
+        # Default dirubah ke FALSE agar hemat RAM saat awal startup
+        enable_camera = os.getenv("ENABLE_CAMERA", "false").lower() == "true"
+        if not enable_camera:
+            print("[CAMERA] Kamera dalam posisi PADAM (Default). Aktifkan via ENABLE_CAMERA=true.")
+            self.is_camera_running = False
+            self.latest_result["matched"] = "CAMERA OFF"
+            return
+
         # Loop kamera mandiri (Headless Mode)
         cam_idx = self.camera_index
         cam_width = int(os.getenv("CAMERA_WIDTH", 1280))
         cam_height = int(os.getenv("CAMERA_HEIGHT", 720))
         cam_format = os.getenv("CAMERA_FORMAT", "MJPG").upper()
 
-        print(f"[CAMERA] Mencoba membuka kamera hardware (Index: {cam_idx}, {cam_width}x{cam_height})...")
+        print(f"[CAMERA] Menjalankan hardware kamera pada index {cam_idx}...")
         cap = cv2.VideoCapture(cam_idx)
         
         # Optimasi Jetson/Raspi: Paksa format MJPG jika dikonfigurasi (lebih ringan dari YUYV)
@@ -177,49 +186,27 @@ class CLClientManager:
         
         # Beri waktu hardware inisialisasi
         time.sleep(1)
-        
-        if not cap.isOpened() and cam_idx == 0:
-            print(f"[CAMERA] Gagal akses hardware pada index 0. Mencoba index 1...")
-            cap = cv2.VideoCapture(1)
-            
+
+        if not cap.isOpened():
+            print(f"[CAMERA ERROR] Gagal akses hardware pada index {cam_idx}.")
+            self.is_camera_running = False
+            self.latest_result["matched"] = "CAMERA ERROR"
+            return
+
         self.is_camera_running = True
-        virtual_mode = not cap.isOpened()
-        if virtual_mode:
-            print("[CAMERA] Tidak ada hardware terdeteksi. Menggunakan Mode Virtual (Foto).")
-            
-        virtual_images = []
-        virtual_idx = 0
+        print(f"[CAMERA] Akses hardware berhasil (Index {cam_idx}).")
         
         while self.is_camera_running:
-            ret, frame = False, None
-            if not virtual_mode:
-                ret, frame = cap.read()
-                if not ret:
-                    print("[ERROR] Gagal akses hardware. Beralih ke mode VIRTUAL CAMERA.")
-                    virtual_mode = True
-                    # Scan for virtual images
-                    root_dir = os.path.join(self.raw_data_path, "students")
-                    if os.path.exists(root_dir):
-                        for root, dirs, files in os.walk(root_dir):
-                            for f in files:
-                                if f.lower().endswith(('.jpg', '.jpeg', '.png')):
-                                    virtual_images.append(os.path.join(root, f))
-                    if not virtual_images:
-                        print("[ERROR] Tidak ada dataset lokal untuk simulasi.")
-            
-            if virtual_mode and virtual_images:
-                img_path = virtual_images[virtual_idx]
-                frame = cv2.imread(img_path)
-                if frame is not None:
-                    ret = True
-                    virtual_idx = (virtual_idx + 1) % len(virtual_images)
-                    # Beri penanda virtual di frame
-                    cv2.putText(frame, "VIRTUAL MODE", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                time.sleep(1.0) # Lambatkan simulasi agar tidak spam
+            # Re-check enable_camera in case we want to stop
+            if not self.is_camera_running: break
+
+            ret, frame = cap.read()
             
             if not ret:
-                if not virtual_mode: print("[ERROR] Gagal membaca frame dari kamera. Periksa /dev/video0.")
+                print(f"[ERROR] Gagal membaca frame dari kamera {cam_idx}. Mencoba ulang dlm 5 detik...")
+                cap.release()
                 time.sleep(5)
+                cap = cv2.VideoCapture(cam_idx)
                 continue
             
             # Update status training untuk mematikan beban kerja berat
@@ -252,19 +239,18 @@ class CLClientManager:
                         "confidence": confidence,
                         "latency_ms": int((time.time() - start_time) * 1000),
                         "model_version": self.current_model_version,
-                        "is_virtual": virtual_mode
+                        "is_virtual": False
                     }
                     
                     # LOGGING: Catat hasil cocok
                     if matched != "Unknown" and matched != "Error":
                         self._log_to_file(f"INFERENCE SUCCESS: {matched} (Conf: {confidence:.4f})")
                 except Exception as e:
-                    print(f"[ERROR] Pemrosesan kamera gagal: {e}")
+                    pass
             
-            # Beri jeda agar tidak memakan CPU terlalu tinggi (FPS ~2-5 cukup untuk presensi)
-            if not virtual_mode: 
-                time.sleep(0.5)
-                gc.collect()
+            # Explicit cleanup per loop to keep memory stable
+            time.sleep(0.5)
+            gc.collect()
         
         cap.release()
 
