@@ -16,16 +16,17 @@ Kedua sistem menggunakan parameter yang identik untuk memastikan perbandingan ya
 
 | Parameter | Centralized Learning (CL) | Federated Learning (FL) |
 | :--- | :--- | :--- |
-| **Total Iterasi** | 20 Epochs | 10 Rounds x 2 Local Epochs (Total 20) |
+| **Total Iterasi** | 10 Epochs | 10 Rounds x 1 Local Epoch (Total 10) |
 | **Partial Freezing**| **Mode: Early (Stage 1 & 2)** | **Mode: Early (Stage 1 & 2)** |
 | **BN Adaptation** | **Client-side Calibration** | **Inherent (Local BN Storage)** |
-| **Booster (SWA)**  | **SWA (Last 4 Epochs)** | **Snapshot Avg (Last 2 Rounds/4 Epochs)** |
+| **Booster (SWA)**  | **SWA (Last 3 Epochs: 8, 9, 10)** | **Snapshot Avg (Last 3 Rounds: 8, 9, 10)** |
 | **Centroid Data** | **Full Dataset (50 Images)** | **Full Dataset (50 Images)** |
-| **Threshold** | 0.75 (CIM: 0.85) | 0.75 (CIM: 0.85) |
+| **Threshold** | **0.7 (CIM: 0.85)** | **0.7 (CIM: 0.85)** |
 | **Metode Inferensi** | Flip Trick + Temporal Voting | Flip Trick + Temporal Voting |
 | **Res. Management** | **Downscale 640px + Vectorization** | **Downscale 640px + Vectorization** |
-| **Batch Size** | 16 (Optimized for 1GB RAM) | 8 per Client (Optimized for 1GB RAM) |
-| **Learning Rate** | 0.05 (Cosine Decay) | 0.05 (Cosine Decay) |
+| **Batch Size** | 8 (Optimized for 1GB RAM) | 4 per Client (Optimized for 1GB RAM) |
+| **Learning Rate** | **0.01 (Cosine Decay)** | **0.01 (Cosine Decay)** |
+| **Augmentasi** | **Enhanced (Autocontrast + ColorJitter)** | **Enhanced (Autocontrast + ColorJitter)** |
 | **Basis Validasi** | Citra Asli (Real Images) | Hybrid (Citra Asli + Global Embeddings) |
 | **Auditabilitas** | Server Training Log | Dual-Logging (Server + Remote Client Log) |
 

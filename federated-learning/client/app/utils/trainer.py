@@ -161,8 +161,9 @@ class LocalTrainer:
             transforms.Resize((112, 96), interpolation=InterpolationMode.BILINEAR),
             transforms.RandomHorizontalFlip(),
             transforms.RandomRotation(degrees=15),
-            transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
-            transforms.RandomGrayscale(p=0.1),
+            transforms.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.4, hue=0.1),
+            transforms.RandomGrayscale(p=0.2),
+            transforms.RandomAutocontrast(p=0.2),
             transforms.RandomApply([transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0))], p=0.3),
             transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.2),
             transforms.ToTensor(),
@@ -177,10 +178,48 @@ class LocalTrainer:
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.50196, 0.50196, 0.50196])
         ])
 
+    def save_checkpoint(self, round_num, epoch, history):
+        """Menyimpan checkpoint darurat antar epoch untuk pemulihan setelah crash."""
+        try:
+            checkpoint_dir = os.path.join(os.path.dirname(self.data_path), "models")
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            checkpoint_path = os.path.join(checkpoint_dir, "training_checkpoint.pth")
+            torch.save({
+                'round_num': round_num,
+                'epoch': epoch,
+                'backbone_state_dict': self.backbone.state_dict(),
+                'head_state_dict': self.head.state_dict(),
+                'history': history
+            }, checkpoint_path)
+            print(f"  [CHECKPOINT] Progress disimpan (Ronde {round_num}, Epoch {epoch+1})")
+        except Exception as e:
+            print(f"  [CHECKPOINT] Gagal menyimpan: {e}")
+
     def train(self, epochs=5, lr=0.0001, round_num=0, global_embeddings=None, label_map=None, mu=0.05, lam=0.1):
         if self.backbone is None or self.head is None:
              print("[TRAINER] Model belum terinisialisasi..")
              return 0.0, 0.0, 0, []
+
+        epoch_history = []
+        
+        # --- PEMULIHAN CHECKPOINT ---
+        start_epoch = 0
+        checkpoint_path = os.path.join(os.path.dirname(self.data_path), "models", "training_checkpoint.pth")
+        if os.path.exists(checkpoint_path):
+            try:
+                ckpt = torch.load(checkpoint_path, map_location=self.device)
+                if ckpt.get('round_num') == round_num:
+                    self.backbone.load_state_dict(ckpt['backbone_state_dict'])
+                    self.head.load_state_dict(ckpt['head_state_dict'])
+                    start_epoch = ckpt.get('epoch', -1) + 1
+                    epoch_history = ckpt.get('history', [])
+                    if start_epoch < epochs:
+                        print(f"[TRAINER] Melanjutkan dari checkpoint (Ronde {round_num}, Mulai Epoch {start_epoch+1})")
+                    else:
+                        print(f"[TRAINER] Checkpoint menunjukkan ronde {round_num} sudah selesai.")
+                        return 0.0, 0.0, 0, epoch_history
+            except Exception as e:
+                print(f"[TRAINER] Gagal memuat checkpoint: {e}")
 
         dataset = FaceDataset(self.data_path, global_embeddings=global_embeddings, transform=self.transform, mode="train", label_map=label_map)
         if len(dataset) < 2:
@@ -299,6 +338,9 @@ class LocalTrainer:
             avg_epoch_loss = epoch_loss / len(dataloader) if len(dataloader) > 0 else 0.0
             print(f"  > Epoch {epoch+1}/{epochs} | Loss: {avg_epoch_loss:.4f} | Acc: {acc:.4f}")
             epoch_history.append({"epoch": epoch + 1, "loss": avg_epoch_loss, "accuracy": acc})
+            
+            # Simpan progres setelah setiap epoch
+            self.save_checkpoint(round_num, epoch, epoch_history)
                 
         avg_loss = total_loss / (len(dataloader) * epochs) if len(dataloader) > 0 else 0.0
         accuracy = correct / total if total > 0 else 0.0

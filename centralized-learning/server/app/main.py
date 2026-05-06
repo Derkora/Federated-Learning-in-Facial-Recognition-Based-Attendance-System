@@ -248,7 +248,7 @@ def workflow_preprocess():
 
 # Tahap 3: Pelatihan Model Global
 @app.post("/workflow/train")
-def workflow_train(epochs: int = TRAINING_PARAMS["total_epochs"], dbs: Session = Depends(db.get_db)):
+def workflow_train(epochs: int = TRAINING_PARAMS["epochs"], dbs: Session = Depends(db.get_db)):
     if cl_manager.is_running: raise HTTPException(400, "Server sedang sibuk")
     cl_manager.start_phase("Training")
     print(f"[INFO] Memulai pelatihan model ({epochs} epoch)...", flush=True)
@@ -291,7 +291,7 @@ def workflow_export(dbs: Session = Depends(db.get_db)):
     try:
         res = training_controller.generate_reference_and_eval(dbs=dbs)
         if res['status'] == 'success':
-            cl_manager.increment_version()
+            # cl_manager.increment_version() # HAPUS: Sudah di-handle di generate_reference_and_eval (DB)
             download_mb = res.get('download_volume_mb', 0)
             cl_manager.update_metrics({
                 "download_volume_mb": download_mb,

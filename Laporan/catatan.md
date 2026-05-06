@@ -21,7 +21,7 @@
 ## 5. Implementasi Flip Trick & CIM pada Inferensi
 - **Flip Trick**: Mengevaluasi wajah asli dan mirror (rata-rata embedding) untuk stabilitas skor.
 - **Confident Instant Match (CIM)**: Bypass temporal voting jika skor > 0.85 untuk respons instan.
-- **Justifikasi**: Meningkatkan *User Experience* (kecepatan absensi) tanpa mengorbankan keamanan (keamanan tetap terjaga melalui threshold 0.75 untuk kasus umum).
+- **Justifikasi**: Meningkatkan *User Experience* (kecepatan absensi) tanpa mengorbankan keamanan (keamanan tetap terjaga melalui threshold 0.7 untuk kasus umum).
 
 ## 6. Integrasi Database untuk Versioning Model
 - **Sistem**: Pelacakan versi model (v1, v2, dst.) dikelola secara permanen di database PostgreSQL.
@@ -36,8 +36,8 @@
 - **Justifikasi**: Menghilangkan bias "Global BN" yang sering kali menyebabkan CL gagal pada pencahayaan yang berbeda dari distribusi training. Dengan kalibrasi lokal, model CL memiliki kemampuan adaptasi lingkungan yang setara dengan model pFedFace (FL).
 
 ## 9. Penyelarasan Total Iterasi & SWA
-- **Detail**: CL (20 Epoch) disetarakan dengan FL (10 Round x 2 Epoch). SWA pada CL (4 epoch terakhir) disetarakan dengan Snapshot Averaging FL (2 ronde terakhir, 4 epoch total).
-- **Justifikasi**: Menjamin bahwa model pada kedua metode memiliki jumlah "pengalaman" yang sama terhadap data sebelum dibandingkan.
+- **Detail**: CL (10 Epoch) disetarakan dengan FL (10 Round x 1 Epoch). SWA pada CL (3 epoch terakhir: 8, 9, 10) disetarakan dengan Snapshot Averaging FL (3 ronde terakhir).
+- **Justifikasi**: Menjamin bahwa model pada kedua metode memiliki jumlah "pengalaman" yang sama terhadap data sebelum dibandingkan. Pengurangan total iterasi dari 20 ke 10 dilakukan untuk mencegah overfitting pada dataset kecil (50 foto/user).
 
 ## 10. Paritas Algoritma Inferensi (Edge Side)
 - **Detail**: Implementasi **Flip Trick** (Average Horizontal Flip) dan **Temporal Voting** (Buffer 10 frame) disamakan di tingkat kode Python.
@@ -54,6 +54,7 @@
 | Perangkat | 3 Client | 2 Client | Fokus pada validasi orkestrasi & stabilitas jaringan. |
 | Model | Facenet | MobileFaceNet (Xiaomi) | Efisiensi parameter & kompatibilitas Mobile SDK. |
 | Dashboard | Streamlit | FastAPI + Vanilla JS | Latensi UI lebih rendah & kendali penuh atas request lifecycle. |
+| LR / Batch | 0.05 / 32 | 0.01 / 4-8 | Mengatasi osilasi gradient pada dataset kecil & RAM 1GB. |
 
 ## 13. Metodologi Pengumpulan Data
 
@@ -88,3 +89,11 @@ Dalam pengujian, ditemukan bahwa Client 2 (tanpa data pendaftar) memiliki akuras
 - **Validasi Citra Asli (Client 1)**: Client 1 menguji model menggunakan data citra asli (mentah) yang memiliki variansi sudut dan *noise*. Ini adalah pengujian yang "jujur" dan berat.
 - **Validasi Hybrid Embedding (Client 2)**: Karena Client 2 tidak memiliki data lokal subjek tertentu, ia menggunakan **Global Embeddings** (fitur yang sudah bersih) untuk validasi kelas tersebut. Mengenali fitur matang jauh lebih mudah daripada citra mentah, sehingga skor akurasi terlihat lebih tinggi.
 - **Kesimpulan**: Akurasi Client 1 lebih representatif terhadap performa di lapangan, sementara akurasi Client 2 mencerminkan keberhasilan mekanisme *Knowledge Sharing* dalam mempertahankan memori global.
+
+## 16. Peningkatan Augmentasi Cahaya (Lighting Robustness)
+- **Update**: Menambahkan `RandomAutocontrast` (p=0.2) dan memperkuat `ColorJitter` (brightness/contrast=0.5).
+- **Justifikasi**: Dataset asli (50 foto) diambil dalam kondisi cahaya yang seragam. Penambahan augmentasi ini memaksa model untuk mengenali fitur geometri wajah meskipun terdapat bayangan atau intensitas cahaya yang tidak merata (misal: cahaya dominan dari samping atau atas), sehingga lebih tangguh untuk penggunaan *real-world* di berbagai lokasi terminal.
+
+## 17. Penurunan Learning Rate untuk Konvergensi Halus
+- **Update**: Menurunkan `initial_lr` dari 0.03/0.05 menjadi **0.01**.
+- **Justifikasi**: Penggunaan LR tinggi pada *batch size* kecil (4-8) menyebabkan *gradient oscillation* yang membuat akurasi tidak stabil. Penurunan ke 0.01 memastikan model belajar secara bertahap dan konvergen lebih stabil tanpa melompat jauh dari titik optimal.

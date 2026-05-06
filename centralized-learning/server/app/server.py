@@ -34,9 +34,9 @@ class CentralizedServerManager:
         self.settings_path = "data/settings_cl.json"
         
         # Default dari config
-        self.default_epochs = TRAINING_PARAMS["total_epochs"]
+        self.default_epochs = TRAINING_PARAMS["epochs"]
         self.default_batch_size = TRAINING_PARAMS["batch_size"]
-        self.inference_threshold = 0.75
+        self.inference_threshold = 0.7
         
         # Inisialisasi File Log
         self.log_path = "/app/data/server_training.log"

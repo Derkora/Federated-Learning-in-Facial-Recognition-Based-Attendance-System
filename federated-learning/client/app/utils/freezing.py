@@ -1,4 +1,9 @@
 import torch.nn as nn
+import torch
+import os
+import random
+from PIL import Image
+from .preprocessing import image_processor
 
 def set_model_freeze(model, freeze_mode="early"):
     """
@@ -41,3 +46,52 @@ def set_model_freeze(model, freeze_mode="early"):
         print("[FREEZE] Mode: 'backbone'. Seluruh backbone MobileFaceNet dibekukan.")
         for param in model.parameters():
             param.requires_grad = False
+
+def calibrate_bn(model, raw_data_path, device="cpu", num_samples=100):
+    """
+    Melakukan BN Adaptation (Kalibrasi Statistik BN) pada data lokal.
+    Sangat krusial untuk pFedFace agar bobot global baru sinkron dengan statistik lokal.
+    """
+    
+    
+    print(f"[BN ADAPT] Memulai kalibrasi BN menggunakan data lokal di {raw_data_path}...")
+    
+    # 1. Kumpulkan sampel gambar lokal
+    sample_paths = []
+    root_dir = os.path.join(raw_data_path, "students")
+    if not os.path.exists(root_dir):
+        root_dir = raw_data_path # Fallback ke root jika folder students tidak ada
+        
+    if os.path.exists(root_dir):
+        for root, dirs, files in os.walk(root_dir):
+            for f in files:
+                if f.lower().endswith(('.jpg', '.jpeg', '.png')):
+                    sample_paths.append(os.path.join(root, f))
+    
+    if not sample_paths:
+        print("[BN ADAPT] [SKIP] Tidak ada data lokal untuk kalibrasi.")
+        return
+
+    # Batasi jumlah sampel agar tidak terlalu lama (Edge device performance)
+    random.shuffle(sample_paths)
+    sample_paths = sample_paths[:num_samples]
+
+    # 2. Jalankan Forward Pass dalam mode .train()
+    count = 0
+    model.train() # Pastikan mode train aktif untuk update stats
+    
+    with torch.no_grad():
+        for img_path in sample_paths:
+            try:
+                img_pil = Image.open(img_path).convert('RGB')
+                face_img, _, _ = image_processor.detect_face(img_pil)
+                if face_img:
+                    input_tensor = image_processor.prepare_for_model(face_img)
+                    if input_tensor is not None:
+                        _ = model(input_tensor.to(device))
+                        count += 1
+            except Exception as e:
+                continue
+    
+    model.eval() # Kembalikan ke mode evaluasi untuk inferensi
+    print(f"[BN ADAPT] Kalibrasi selesai menggunakan {count} wajah lokal.")

@@ -107,6 +107,13 @@ class FaceRecognitionClient(fl.client.NumPyClient):
             )
 
             status = "Success"
+            # Pembersihan Checkpoint setelah sukses
+            try:
+                ckpt_path = os.path.join(model_dir, "training_checkpoint.pth")
+                if os.path.exists(ckpt_path):
+                    os.remove(ckpt_path)
+                    print(f"  [CHECKPOINT] Pembersihan checkpoint berhasil.")
+            except: pass
         except TrainingNaNError as e:
             print(f"[CLIENT] NaN error: {e}")
             status = "NaNError"

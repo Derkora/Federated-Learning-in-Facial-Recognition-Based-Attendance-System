@@ -349,10 +349,11 @@ class FLServerManager:
                     country_iso_code="IDN"
                 )
             except: pass
-        self.default_rounds = TRAINING_PARAMS["total_rounds"]
-        self.default_epochs = TRAINING_PARAMS["epochs_per_round"]
+        self.default_rounds = 10
+        self.default_epochs = 1
         self.default_min_clients = 2
-        self.default_lr = 1e-4
+        self.default_batch_size = 4
+        self.default_lr = 0.03
         self.default_mu = 0.05
         self.default_lambda = 0.1
         self.registered_clients = {}
@@ -360,7 +361,7 @@ class FLServerManager:
         self.ready_clients = set() 
         self.received_data = []
         self.discovery_clients = set()
-        self.inference_threshold = 0.75
+        self.inference_threshold = 0.7
         self.metrics = {
             "accuracy": 0, "loss": 0, 
             "backbone_sync_mb": 0, "registry_sync_mb": 0,
@@ -386,7 +387,7 @@ class FLServerManager:
             try:
                 with open(self.settings_path, "r") as f:
                     settings = json.load(f)
-                    self.inference_threshold = settings.get("inference_threshold", 0.75)
+                    self.inference_threshold = settings.get("inference_threshold", 0.7)
                     self.default_batch_size = settings.get("batch_size", 32)
                 print(f"[SETTINGS] Pengaturan dimuat dari {self.settings_path}")
             except Exception as e:

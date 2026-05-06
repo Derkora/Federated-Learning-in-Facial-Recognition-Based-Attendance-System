@@ -56,12 +56,17 @@ h1 {
     margin-bottom: 2rem;
 }
 
-video {
+video, #hardware-stream {
     width: 100%;
     max-width: 640px;
     border-radius: 12px;
-    transform: scaleX(-1);
+    display: block;
+    margin: 0 auto;
     border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+video {
+    transform: scaleX(-1);
 }
 
 .result-card {

@@ -290,22 +290,63 @@ async def get_global_identities(db: Session = Depends(get_db)):
 @app.post("/api/attendance/sync")
 async def sync_attendance(records: List[Dict[str, Any]] = Body(...), db: Session = Depends(get_db)):
     new_records = 0
+    errors = []
     print(f"[RECAP] Menerima {len(records)} data presensi dari terminal.")
+    
     for rec in records:
-        nrp = rec['user_id']
-        user = db.query(UserGlobal).filter_by(nrp=nrp).first()
-        if not user: continue
-        
-        ts = datetime.fromisoformat(rec['timestamp'])
-        exists = db.query(AttendanceRecap).filter_by(user_id=user.user_id, timestamp=ts).first()
-        if not exists:
-            conf = rec.get('confidence', 0.0)
-            print(f"[DEBUG] Sync Attendance | Client: {rec['client_id']} | NRP: {nrp} | Sim: {conf:.4f}")
-            new_item = AttendanceRecap(user_id=user.user_id, edge_id=rec['client_id'], timestamp=ts, confidence=conf)
-            db.add(new_item)
-            new_records += 1
-    db.commit()
-    return {"status": "success", "new_records": new_records}
+        try:
+            nrp = rec.get('user_id')
+            if not nrp:
+                errors.append("Missing user_id")
+                continue
+                
+            user = db.query(UserGlobal).filter_by(nrp=nrp).first()
+            if not user:
+                print(f"[WARN] User dengan NRP {nrp} tidak ditemukan di database global.")
+                errors.append(f"User {nrp} not found")
+                continue
+            
+            # Parsing timestamp dengan lebih aman
+            try:
+                ts_str = rec['timestamp']
+                ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+            except Exception as e:
+                print(f"[ERROR] Format timestamp salah: {rec.get('timestamp')} | Error: {e}")
+                ts = datetime.utcnow()
+                
+            exists = db.query(AttendanceRecap).filter_by(user_id=user.user_id, timestamp=ts).first()
+            if not exists:
+                conf = rec.get('confidence', 0.0)
+                client_id = rec.get('client_id', 'unknown-edge')
+                
+                # Pastikan client_id ada di tabel clients untuk menghindari FK error
+                client_exists = db.query(Client).filter_by(edge_id=client_id).first()
+                if not client_exists:
+                    print(f"[FIX] Mendaftarkan client {client_id} secara otomatis untuk sinkronisasi.")
+                    new_client = Client(edge_id=client_id, name=client_id, status="online")
+                    db.add(new_client)
+                    db.flush()
+
+                print(f"[DEBUG] Sync Attendance | Client: {client_id} | NRP: {nrp} | Sim: {conf:.4f}")
+                new_item = AttendanceRecap(user_id=user.user_id, edge_id=client_id, timestamp=ts, confidence=conf)
+                db.add(new_item)
+                new_records += 1
+        except Exception as e:
+            print(f"[CRITICAL] Gagal memproses record: {e}")
+            errors.append(str(e))
+            
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"[DATABASE ERROR] Gagal commit sinkronisasi: {e}")
+        raise HTTPException(status_code=500, detail=f"Database commit failed: {str(e)}")
+
+    return {
+        "status": "success" if not errors else "partial_success", 
+        "new_records": new_records,
+        "errors": errors if errors else None
+    }
 
 # API Ketepatan/Threshold Inferensi (Dinamis dari Dashboard)
 @app.post("/api/settings")

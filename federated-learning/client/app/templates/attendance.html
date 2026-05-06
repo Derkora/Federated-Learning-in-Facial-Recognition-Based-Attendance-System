@@ -8,12 +8,17 @@
         <span class="badge" id="model-badge">Model v{{ model_version }}</span>
     </div>
     <div
-        style="position: relative; overflow: hidden; border-radius: 12px; background: #000; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
-        <img id="video-stream" src="/video_feed" style="width: 100%; height: auto; display: block;">
+        style="position: relative; overflow: hidden; border-radius: 12px; background: #000; box-shadow: 0 10px 25px rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center;">
+        <!-- Priority 1: Hardware Stream (Server-side) -->
+        <img id="hardware-stream" src="/video_feed" style="width: 100%; height: auto; display: block;">
+        
+        <!-- Priority 2: Browser Camera (Fallback) -->
+        <video id="web-video" autoplay playsinline style="width: 100%; height: auto; display: none; border-radius: 12px;"></video>
+        <canvas id="web-canvas" style="display: none;"></canvas>
+        
         <div
             style="position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,0.6); padding: 6px 12px; border-radius: 6px; font-size: 0.75rem; border: 1px solid rgba(255,255,255,0.1);">
-            🔴 <span style="font-weight: 700;">LIVE</span> <span id="virtual-indicator"
-                style="display:none; color:#f87171; margin-left:5px;">| KAMERA VIRTUAL</span>
+             <span style="font-weight: 700;" id="cam-label">LIVE STREAM</span>
         </div>
     </div>
 </div>
@@ -24,7 +29,7 @@
 
 <button id="btn-toggle-hw" class="btn"
     style="width: 100%; height: 60px; margin-top: 1rem; background: var(--accent); color: white; font-weight: bold; font-size: 1.1rem; border-radius: 12px; border: none; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
-    🎥 Aktifkan Kamera Edge
+    Nyalakan Kamera
 </button>
 </div>
 
@@ -42,66 +47,129 @@
 <script>
     const statusCard = document.getElementById('status-card');
     const toggleBtn = document.getElementById('btn-toggle-hw');
-    let camActive = false;
+    const hardwareImg = document.getElementById('hardware-stream');
+    const webVideo = document.getElementById('web-video');
+    const canvas = document.getElementById('web-canvas');
+    const camLabel = document.getElementById('cam-label');
+    
+    let serverCamActive = false;
+    let browserCamActive = false;
 
-    toggleBtn.onclick = async () => {
+    // Inisialisasi Kamera Browser (Fallback)
+    async function initBrowserCam() {
+        if (browserCamActive) return;
         try {
-            const res = await fetch('/api/camera/toggle', { method: 'POST' });
-            const data = await res.json();
-            camActive = data.is_on;
-            updateButtonState();
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { width: 640, height: 480 } 
+            });
+            webVideo.srcObject = stream;
+            webVideo.style.display = 'block';
+            hardwareImg.style.display = 'none';
+            camLabel.innerText = "BROWSER CAM (FALLBACK)";
+            browserCamActive = true;
         } catch (e) {
-            alert("Gagal mengontrol kamera: " + e);
-        }
-    };
-
-    function updateButtonState() {
-        if (camActive) {
-            toggleBtn.innerHTML = "🛑 Matikan Kamera Edge";
-            toggleBtn.style.background = "#ef4444";
-        } else {
-            toggleBtn.innerHTML = "🎥 Aktifkan Kamera Edge";
-            toggleBtn.style.background = "var(--accent)";
+            console.error("Akses kamera browser ditolak:", e);
+            statusCard.innerHTML = `<span style="color: #ef4444;">Hardware Error & Browser Cam Ditolak</span>`;
         }
     }
 
-    async function pollResults() {
+    function stopBrowserCam() {
+        if (webVideo.srcObject) {
+            webVideo.srcObject.getTracks().forEach(track => track.stop());
+        }
+        webVideo.style.display = 'none';
+        hardwareImg.style.display = 'block';
+        camLabel.innerText = "LIVE STREAM";
+        browserCamActive = false;
+    }
+
+    async function sendBrowserFrame() {
+        if (!browserCamActive) return;
+        try {
+            const ctx = canvas.getContext('2d');
+            canvas.width = 640;
+            canvas.height = 480;
+            ctx.drawImage(webVideo, 0, 0, 640, 480);
+            const imageData = canvas.toDataURL('image/jpeg', 0.7);
+            const base64Image = imageData.split(',')[1];
+
+            const res = await fetch('/api/inference', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: base64Image })
+            });
+            const data = await res.json();
+            updateResultUI(data);
+        } catch (e) {}
+    }
+
+    function updateResultUI(data) {
+        if (data.model_version !== undefined) {
+            document.getElementById('model-badge').innerText = `Model v${data.model_version}`;
+        }
+
+        if (data.matched && data.matched !== "Standby") {
+            if (data.matched === "Unknown") {
+                statusCard.innerText = "Memindai wajah...";
+                statusCard.style.color = "#f8fafc";
+            } else if (data.matched.includes("Error")) {
+                statusCard.innerHTML = `<span style="color: #ef4444;">Error: ${data.message || 'Gagal'}</span>`;
+            } else {
+                statusCard.innerHTML = `<span style="color: #10b981;">Diterima: ${data.matched}</span> <br><small>${(data.confidence * 100).toFixed(1)}% | ${data.latency_ms}ms</small>`;
+            }
+        }
+    }
+
+    async function pollServerStatus() {
         try {
             const res = await fetch('/api/results/latest');
             const data = await res.json();
 
-            if (data.model_version !== undefined) {
-                document.getElementById('model-badge').innerText = `Model v${data.model_version}`;
-            }
-
-            // Sync tombol dengan status internal jika diperlukan
-            if (data.matched === "CAMERA OFF" && camActive) {
-                camActive = false;
-                updateButtonState();
-            } else if (data.matched !== "CAMERA OFF" && data.matched !== "TRAINING PHASE..." && data.matched !== "TRAINING..." && data.matched !== "CAMERA DISABLED" && !camActive) {
-                camActive = true;
-                updateButtonState();
-            }
-
-            if (data.matched && data.matched !== "Standby") {
-                if (data.matched === "CAMERA OFF") {
-                    statusCard.innerHTML = `<span style="color: #94a3b8;">Kamera: PADAM</span>`;
-                } else if (data.matched === "TRAINING PHASE..." || data.matched === "TRAINING...") {
-                    statusCard.innerHTML = `<span style="color: var(--accent);">Status: TRAINING...</span>`;
-                } else if (data.matched !== "Unknown") {
-                    statusCard.innerHTML = `<span style="color: #10b981;">Diterima: ${data.matched}</span> <br><small>${(data.confidence * 100).toFixed(1)}% | ${data.latency_ms}ms</small>`;
-                } else {
-                    statusCard.innerText = "Memindai wajah...";
-                    statusCard.style.color = "#f8fafc";
+            // LOGIKA PRIORITAS:
+            // 1. Jika server lapor CAMERA ERROR -> Aktifkan Browser Cam (jika belum aktif)
+            if (data.matched === "CAMERA ERROR") {
+                if (!browserCamActive) {
+                    console.log("Hardware Error, beralih ke Browser Cam...");
+                    initBrowserCam();
                 }
-            } else {
-                statusCard.innerText = "Kamera: Menunggu Instruksi...";
+            } 
+            // 2. Jika server lapor CAMERA OFF -> Matikan semua
+            else if (data.matched === "CAMERA OFF") {
+                if (browserCamActive) stopBrowserCam();
+                serverCamActive = false;
+                updateButtonState();
             }
-        } catch (e) {
-            console.error("Poll Error:", e);
-        }
+            // 3. Jika hardware berjalan normal (BUKAN dari browser cam/inference API)
+            // Kita biarkan browser cam tetap jalan jika sudah aktif, 
+            // KECUALI hardware benar-benar mengirimkan frame valid (bukan CAMERA ERROR)
+            else if (data.matched !== "CAMERA ERROR" && data.matched !== "Standby" && !data.is_virtual) {
+                // Jika hardware sudah sembuh, baru matikan browser cam
+                // Namun di lingkungan Docker, biasanya hardware tidak akan sembuh sendiri
+                // Jadi kita biarkan saja browser cam mendominasi jika hardware error.
+            }
+
+            if (!browserCamActive) updateResultUI(data);
+        } catch (e) {}
     }
 
-    setInterval(pollResults, 1000);
+    toggleBtn.onclick = async () => {
+        // Coba nyalakan hardware dulu (Server-side)
+        try {
+            const res = await fetch('/api/camera/toggle', { method: 'POST' });
+            const data = await res.json();
+            if (!data.is_on && browserCamActive) stopBrowserCam();
+        } catch (e) {
+            // Jika API gagal, coba nyalakan browser cam langsung
+            if (!browserCamActive) initBrowserCam();
+        }
+    };
+
+    function updateButtonState() {
+        const isActive = browserCamActive || serverCamActive; // Kita asumsikan aktif jika salah satu jalan
+        // Namun polling akan mengupdate UI tombol secara lebih akurat
+    }
+
+    setInterval(pollServerStatus, 1000);
+    setInterval(sendBrowserFrame, 1000);
 </script>
 {% endblock %}

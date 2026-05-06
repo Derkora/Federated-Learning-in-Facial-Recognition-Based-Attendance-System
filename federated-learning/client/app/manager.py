@@ -130,7 +130,7 @@ class FLClientManager:
         self.is_camera_running = False
         
         # Ambang Batas Inferensi (Dinamis dari Server)
-        self.inference_threshold = 0.75
+        self.inference_threshold = 0.7
         
         # Inisialisasi Kontroler Absensi (FIX: Agar tidak error di run_camera_loop)
         self.attendance = AttendanceController(self)
@@ -259,50 +259,40 @@ class FLClientManager:
             print(f"[ERROR] Gagal mengambil identitas dari server: {e}")
 
     def _apply_backbone_weights(self, loaded, ignore_bn=True, target_model=None):
-        """Menerapkan bobot ke backbone secara aman (mendukung state_dict dan list parameter)."""
+        """Menerapkan bobot ke backbone secara aman dengan filter pFedFace (Local BN)."""
         try:
-            # Jika target_model tidak ditentukan, gunakan self.backbone
             model = target_model if target_model is not None else self.backbone
-            
             if model is None:
-                # Fallback: Buat model baru jika belum ada
-                print("[INFO] Inisialisasi backbone baru untuk aplikasi bobot...")
-                model = MobileFaceNet().to(self.device)
-                model.eval()
-                if target_model is None:
-                    self.backbone = model
-                if hasattr(self, 'client'):
-                    self.client.model = model
-                    self.client.trainer.backbone = model
+                model = MobileFaceNet().to(self.device).eval()
+                if target_model is None: self.backbone = model
 
+            new_sd = model.state_dict()
+            
+            # 1. Jika input adalah LIST (Flower/Numpy Arrays)
             if isinstance(loaded, list):
-                new_sd = model.state_dict()
                 all_keys = list(new_sd.keys())
-                
-                # Identifikasi kunci konvolusi (untuk pFedFace/Flower NDArrays)
                 if ignore_bn:
-                    shared_keys = [k for k in all_keys if 
-                                   not any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked'])
-                                   and any(x in k.lower() for x in ['weight', 'bias'])]
+                    shared_keys = [k for k in all_keys if not any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked']) and any(x in k.lower() for x in ['weight', 'bias'])]
                 else:
                     shared_keys = all_keys
                 
                 if len(shared_keys) == len(loaded):
                     for k, v in zip(shared_keys, loaded):
                         new_sd[k] = torch.from_numpy(v).to(self.device)
-                    print(f"[INFO] Berhasil menerapkan {len(loaded)} bobot konvolusi.")
-                elif len(all_keys) == len(loaded):
-                    for k, v in zip(all_keys, loaded):
-                        new_sd[k] = torch.from_numpy(v).to(self.device)
-                    print(f"[INFO] Berhasil menerapkan {len(loaded)} bobot full state_dict.")
                 else:
-                    print(f"[ERROR] Ketidakcocokan kunci: {len(loaded)} params vs {len(shared_keys)}/{len(all_keys)} keys.")
-                
-                model.load_state_dict(new_sd, strict=False)
-            else:
-                model.load_state_dict(loaded, strict=False)
-                print(f"[SUCCESS] Backbone state-dict applied to target model (BN ignored: {ignore_bn})")
+                    print(f"[ERROR] Weight mismatch: {len(loaded)} vs {len(shared_keys)}")
+                    return False
             
+            # 2. Jika input adalah DICT (State Dict dari .pth)
+            else:
+                for k, v in loaded.items():
+                    if ignore_bn and any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked']):
+                        continue # SKIP: Biarkan statistik BN tetap lokal
+                    if k in new_sd:
+                        new_sd[k] = v.to(self.device)
+            
+            model.load_state_dict(new_sd, strict=False)
+            print(f"[SUCCESS] Backbone weights applied (BN Ignored: {ignore_bn})")
             return True
         except Exception as e:
             print(f"[ERROR] Gagal menerapkan bobot model: {e}")
@@ -378,15 +368,12 @@ class FLClientManager:
                 loaded = torch.load(self.save_path, map_location=self.device)
                 self._apply_backbone_weights(loaded, ignore_bn=True, target_model=new_backbone)
                 
-                # PERSISTENCE FIX: Muat statistik BN hasil aggregasi jika ada
-                bn_path = os.path.join(self.data_path, "models", "global_bn_combined.pth")
-                if os.path.exists(bn_path):
-                    try:
-                        print(f"[RELOAD] Applying combined BN statistics from {bn_path}...")
-                        bn_params = torch.load(bn_path, map_location=self.device)
-                        new_backbone.load_state_dict(bn_params, strict=False)
-                    except Exception as e:
-                        print(f"[WARN] Gagal memuat BN stats: {e}")
+                # pFedFace FIX: Kalibrasi BN lokal alih-alih memuat statistik global yang tidak cocok
+                try:
+                    from .utils.freezing import calibrate_bn
+                    calibrate_bn(new_backbone, self.raw_data_path, device=self.device, num_samples=50)
+                except Exception as e:
+                    print(f"[WARN] Gagal kalibrasi BN: {e}")
 
             if new_head is not None and os.path.exists(self.head_path):
                 try:
@@ -456,8 +443,35 @@ class FLClientManager:
         cam_height = int(os.getenv("CAMERA_HEIGHT", 720))
         cam_format = os.getenv("CAMERA_FORMAT", "MJPG").upper()
 
-        print(f"[CAMERA] Menjalankan hardware kamera pada index {cam_idx}...")
+        print(f"[CAMERA] Mencoba akses hardware kamera (Mulai dari Index {cam_idx})...")
         cap = cv2.VideoCapture(cam_idx)
+        
+        # LOGIKA SMART SCAN: Cari index 0 s/d 3 jika index utama gagal
+        if not cap or not cap.isOpened():
+            found = False
+            for i in [0, 1, 2]:
+                if i == cam_idx: continue
+                if cap: cap.release()
+                print(f"[CAMERA] Mencoba alternatif Index {i}...")
+                cap = cv2.VideoCapture(i)
+                if cap.isOpened():
+                    cam_idx = i
+                    found = True
+                    break
+            
+            # FINAL FALLBACK: Mode Simulasi (Jika hardware benar-benar tidak ada di Docker)
+            if not found:
+                print("[CAMERA] [WARN] Hardware tidak ditemukan. Masuk ke MODE SIMULASI (Virtual).")
+                test_video = os.path.join(self.data_path, "test_video.mp4")
+                if os.path.exists(test_video):
+                    cap = cv2.VideoCapture(test_video)
+                    self.latest_result["is_virtual"] = True
+                else:
+                    if cap: cap.release()
+                    print("[CAMERA] [ERROR] Tidak ada hardware maupun file simulasi.")
+                    self.is_camera_running = False
+                    self.latest_result["matched"] = "CAMERA ERROR"
+                    return
         
         # Optimasi Jetson/Raspi: Paksa format MJPG jika didukung (lebih ringan dari YUYV)
         if cam_format == "MJPG":
@@ -714,11 +728,10 @@ class FLClientManager:
                     with open(path, "wb") as f:
                         f.write(res.content)
                     
-                    # Verify binary
                     try:
-                        bn_params = torch.load(path, map_location=self.device)
-                        self.backbone.load_state_dict(bn_params, strict=False)
-                        print(f"[SUCCESS] Parameter BN global berhasil diterapkan ke backbone.")
+                        # pFedFace: Simpan saja filenya, tapi JANGAN terapkan ke backbone aktif.
+                        # Kita akan menggunakan calibrate_bn lokal sebagai gantinya.
+                        print(f"[SUCCESS] Parameter BN global diunduh (Disimpan untuk referensi, tidak diterapkan).")
                         return True
                     except Exception as e:
                         print(f"[ERROR] Berkas BN tidak valid, mencoba kembali: {e}")
@@ -953,12 +966,19 @@ class FLClientManager:
         folders = sorted([f for f in os.listdir(students_dir) if os.path.isdir(os.path.join(students_dir, f))])
         for folder in folders:
             nrp = folder.split('_')[0] if "_" in folder else folder
-            print(f"[INFO] Memilih 50 wajah terbaik untuk {nrp} menggunakan Laplacian Variance...")
-            
             target_folder = os.path.join(processed_dir, nrp)
-            if os.path.exists(target_folder):
-                shutil.rmtree(target_folder, ignore_errors=True)
-            os.makedirs(target_folder, exist_ok=True)
+            
+            # RESUME LOGIC: Jika sudah ada dan isinya cukup, lewati (save time)
+            if os.path.exists(target_folder) and len(os.listdir(target_folder)) >= 5:
+                print(f"  [SKIP] {nrp} sudah diproses sebelumnya.")
+                continue
+
+            print(f"[INFO] Memilih 50 wajah terbaik untuk {nrp} (Laplacian Variance)...")
+            
+            # ATOMIC LOGIC: Gunakan folder .tmp agar tidak corrupt jika mati mendadak
+            tmp_target = target_folder + ".tmp"
+            if os.path.exists(tmp_target): shutil.rmtree(tmp_target)
+            os.makedirs(tmp_target, exist_ok=True)
             
             source_path = os.path.join(students_dir, folder)
             top_images = image_processor.select_best_faces(source_path, n=50)
@@ -968,13 +988,18 @@ class FLClientManager:
                 try:
                     img_path = os.path.join(source_path, img_name)
                     img_pil = Image.open(img_path).convert('RGB')
-                    target_path = os.path.join(target_folder, f"face_{count}.jpg")
+                    target_path = os.path.join(tmp_target, f"face_{count}.jpg")
                     
                     # Gunakan MTCNN dari image_processor (Portrait Cropping 96x112)
                     face_img, _, _ = image_processor.detect_face(img_pil, save_path=target_path)
                     if face_img is not None:
                         count += 1
                 except: pass
+            
+            # Hanya rename ke folder asli jika proses selesai tanpa interupsi
+            if os.path.exists(target_folder): shutil.rmtree(target_folder)
+            os.rename(tmp_target, target_folder)
+            print(f"  [SUCCESS] Preprocessing {nrp} selesai.")
         
         # PENTING: Unload MTCNN setelah selesai untuk menghemat RAM (~150MB)
         image_processor.unload_detector()
@@ -1029,29 +1054,23 @@ class FLClientManager:
         self.is_sending_registry = True
         self.report_status("Processing: Finalisasi Registry Identitas...")
         try:
-            # 1. SINKRONISASI BACKBONE & BN TERLEBIH DAHULU (PENTING!)
-            # Ini menjamin ekstraksi fitur menggunakan "lensa" global yang seragam.
-            print("[INFO] Fase 1: Mengunduh Backbone & BN Global dari server...")
+            # 1. SINKRONISASI BACKBONE TERLEBIH DAHULU
+            print("[INFO] Fase 1: Mengunduh Backbone Global dari server...")
             self.download_backbone()
-            # Catatan: Kita memanggil download_bn secara sinkron di sini
-            # karena kita butuh stats BN yang teragregasi ROUND SEBELUMNYA sebagai baseline yang stabil.
-            self.download_bn(max_wait=10) 
+            # pFedFace: Kita tidak lagi memuat BN global, gunakan BN lokal yang sudah ada atau dikalibrasi.
+            # self.download_bn(max_wait=10) 
             
-            # 2. HITUNG CENTROID menggunakan INFERENCE BACKBONE (PENTING!)
-            # Gunakan self.inference_backbone (dimuat dari backbone.pth + global BN)
-            # bukan self.client.trainer.backbone (bobot training lokal).
-            # Inference backbone = backbone yang SAMA persis dengan yang digunakan saat inferensi.
-            # Menggunakan trainer.backbone (meskipun di-sync ke global) dapat menyebabkan
-            # embedding space collapse karena FedAvg averaging melemahkan discriminative features.
-            print("[INFO] Fase 2: Menghitung Centroid (menggunakan Inference Backbone)...")
-            # Sync sementara inference_backbone ke trainer agar calculate_centroids bisa dipakai
+            # 2. HITUNG CENTROID menggunakan CALIBRATED BACKBONE
+            # Sangat krusial agar embedding di database (Registry) 
+            # sinkron dengan embedding saat Live Inference (pFedFace).
+            print("[INFO] Fase 2: Menghitung Centroid (menggunakan Calibrated Backbone)...")
             try:
-                inf_state = self.inference_backbone.state_dict()
-                self.client.trainer.backbone.load_state_dict(inf_state, strict=True)
+                # Pastikan backbone trainer menggunakan bobot global terbaru namun BN lokal
+                # (Ini sudah dihandle oleh download_backbone + load_state_dict dengan filter pFedFace)
                 self.client.trainer.backbone.eval()
-                print("[INFO] Trainer backbone sinkron ke inference_backbone (versi BN-applied).")
+                print("[INFO] Trainer backbone siap (Mode Eval untuk Centroid).")
             except Exception as e:
-                print(f"[WARN] Sinkronisasi inference backbone ke trainer gagal: {e}")
+                print(f"[WARN] Inisialisasi centroid gagal: {e}")
 
             bn_params = self.client.trainer.get_bn_parameters()
             centroids = self.client.trainer.calculate_centroids(label_map=self.client.label_map)
@@ -1144,13 +1163,21 @@ class FLClientManager:
         self.is_training = True
         def run_client():
             self.report_status("Training: Flower FL...")
+            success = False
             try:
                 fl.client.start_client(server_address=self.fl_server_address, client=self.client.to_client())
+                success = True
             except Exception as e:
-                self.report_status(f"Error: {str(e)[:30]}...")
+                err_msg = str(e)
+                # Deteksi error gRPC / Jaringan
+                if "Rendezvous" in err_msg or "UNAVAILABLE" in err_msg:
+                    self.report_status("Error: Koneksi Terputus")
+                else:
+                    self.report_status(f"Error: {err_msg[:30]}...")
             finally:
                 self.is_training = False
-                self.report_status("Online (Selesai)")
+                if success:
+                    self.report_status("Online (Selesai)")
                 # Reload model untuk menggunakan bobot global terbaru (EAGER RELOAD)
                 self._reload_inference_models(force_reload=True)
         threading.Thread(target=run_client, daemon=True).start()

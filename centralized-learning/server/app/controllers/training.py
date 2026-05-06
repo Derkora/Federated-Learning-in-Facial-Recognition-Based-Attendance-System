@@ -108,30 +108,45 @@ class TrainingController:
 
     def preprocess_and_balance(self):
         # Tahap 2: Menyeleksi wajah terbaik dan melakukan pemotongan (Face Cropping)
+        # VERSI RESUME-ABLE: Melanjutkan pengerjaan jika terhenti
         try:
-            print("[INIT] Memulai proses seleksi ketajaman dan pemotongan wajah...", flush=True)
-            if os.path.exists(PROCESSED_DATA): 
-                shutil.rmtree(PROCESSED_DATA)
+            print("[INIT] Memulai proses seleksi ketajaman dan pemotongan wajah (Resume-able Mode)...", flush=True)
             os.makedirs(PROCESSED_DATA, exist_ok=True)
             
             # Pindai folder NRP yang diunggah
-            folders = [f for f in os.listdir(UPLOAD_DIR) if os.path.isdir(os.path.join(UPLOAD_DIR, f))]
+            folders = sorted([f for f in os.listdir(UPLOAD_DIR) if os.path.isdir(os.path.join(UPLOAD_DIR, f))])
             total_folders = len(folders)
+            
             for i, nrp_folder in enumerate(folders):
                 src = os.path.join(UPLOAD_DIR, nrp_folder)
                 dst = os.path.join(PROCESSED_DATA, nrp_folder)
-                os.makedirs(dst, exist_ok=True)
                 
-                # 1. Seleksi Laplacian: Ambil Top 50 foto tertajam
+                # CEK APAKAH SUDAH SELESAI (Checkpoint): 
+                # Jika folder sudah ada dan berisi gambar yang cukup, skip.
+                if os.path.exists(dst) and len(os.listdir(dst)) >= 5:
+                    print(f"  [SKIP] {nrp_folder} sudah diproses sebelumnya.", flush=True)
+                    continue
+                
+                # Gunakan folder sementara agar tidak corrupt jika mati di tengah jalan
+                tmp_dst = dst + ".tmp"
+                if os.path.exists(tmp_dst): shutil.rmtree(tmp_dst)
+                os.makedirs(tmp_dst, exist_ok=True)
+                
                 top_images = face_handler.select_best_faces(src, n=50)
+                
+                if not top_images: continue
                 
                 msg = f"Memproses {len(top_images)} foto terbaik untuk {nrp_folder} ({i+1}/{total_folders})"
                 print(f"[OK] {msg}", flush=True)
                 cl_manager.update_logs(msg)
                 
                 for img_name in top_images:
-                    # 2. Deteksi & Alignment: Simpan hasil crop 112x96 dengan landmark alignment
-                    face_handler.detect_and_save(os.path.join(src, img_name), os.path.join(dst, img_name))
+                    # 2. Deteksi & Alignment: Simpan ke folder .tmp
+                    face_handler.detect_and_save(os.path.join(src, img_name), os.path.join(tmp_dst, img_name))
+                
+                # ATOMIC SWAP: Ganti folder .tmp menjadi folder final setelah SELESAI SEMUA
+                if os.path.exists(dst): shutil.rmtree(dst)
+                os.rename(tmp_dst, dst)
             
             print("[SUCCESS] Preprocessing selesai. Seluruh wajah telah disejajarkan (Aligned).")
             return {"status": "success", "message": "Seleksi Laplacian dan Landmark Alignment selesai."}
@@ -172,8 +187,9 @@ class TrainingController:
                 transforms.Resize((112, 96)),
                 transforms.RandomHorizontalFlip(),
                 transforms.RandomRotation(degrees=15),
-                transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1), # Diperkuat
-                transforms.RandomGrayscale(p=0.1),
+                transforms.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.4, hue=0.1), 
+                transforms.RandomGrayscale(p=0.2),
+                transforms.RandomAutocontrast(p=0.2),
                 transforms.RandomApply([transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0))], p=0.3),
                 transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.2),
                 transforms.ToTensor(),
@@ -245,7 +261,25 @@ class TrainingController:
             final_acc = 0
             start_time = time.time()
             
-            for epoch in range(epochs):
+            # --- PEMULIHAN CHECKPOINT CL ---
+            start_epoch = 0
+            checkpoint_path = os.path.join(MODEL_DIR, "cl_training_checkpoint.pth")
+            if os.path.exists(checkpoint_path):
+                try:
+                    ckpt = torch.load(checkpoint_path, map_location=DEVICE)
+                    model.load_state_dict(ckpt['model_state_dict'])
+                    metric_fc.load_state_dict(ckpt['metric_fc_state_dict'])
+                    start_epoch = ckpt.get('epoch', -1) + 1
+                    epoch_history = ckpt.get('history', [])
+                    if start_epoch < epochs:
+                        print(f"[TRAIN] Melanjutkan training CL dari Epoch {start_epoch+1}", flush=True)
+                        cl_manager.update_logs(f"Resuming CL Training from Epoch {start_epoch+1}")
+                    else:
+                        print("[TRAIN] Checkpoint menunjukkan training sudah selesai.", flush=True)
+                except Exception as e:
+                    print(f"[WARN] Gagal memuat checkpoint CL: {e}", flush=True)
+
+            for epoch in range(start_epoch, epochs):
                 # 4. Perbarui Learning Rate sesuai Jadwal
                 current_lr = self._get_lr(epoch)
                 for param_group in optimizer.param_groups:
@@ -328,6 +362,16 @@ class TrainingController:
                 if epoch >= swa_start:
                     print(f"[SWA] Menyimpan snapshot dari epoch {epoch+1}...", flush=True)
                     swa_snapshots.append(copy.deepcopy(model.state_dict()))
+                
+                # Simpan Checkpoint Per Epoch
+                try:
+                    torch.save({
+                        'epoch': epoch,
+                        'model_state_dict': model.state_dict(),
+                        'metric_fc_state_dict': metric_fc.state_dict(),
+                        'history': epoch_history
+                    }, checkpoint_path)
+                except: pass
             
             # --- STOCHASTIC WEIGHT AVERAGING (SWA) EXECUTION ---
             if len(swa_snapshots) > 0:
@@ -344,6 +388,9 @@ class TrainingController:
                 cl_manager.update_logs("Snapshot Averaging (SWA) berhasil diterapkan.")
             
             torch.save(model.state_dict(), MODEL_PATH)
+            
+            # Bersihkan checkpoint setelah sukses
+            if os.path.exists(checkpoint_path): os.remove(checkpoint_path)
             cl_manager.update_logs("Pelatihan selesai. Model berhasil disimpan.")
             
             # 5. Ambil data energi jika CodeCarbon aktif
@@ -371,18 +418,7 @@ class TrainingController:
         try:
             print("[INIT] Membuat basis data referensi identitas...", flush=True)
             
-            # --- PERSISTENSI VERSI (Simpan ke DB sebelum generate registry) ---
-            if dbs:
-                try:
-                    new_v = models.ModelVersion(notes=f"Dibuat pada {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                    dbs.add(new_v)
-                    dbs.commit()
-                    dbs.refresh(new_v)
-                    print(f"[SUCCESS] Versi model v{new_v.version_id} disimpan.")
-                except Exception as e:
-                    print(f"[ERROR] Gagal menyimpan versi: {e}")
-                    dbs.rollback()
-            
+            # --- PEMBUATAN REGISTRI ---
             model = MobileFaceNet().to(DEVICE)
             model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
             model.eval()
@@ -393,7 +429,7 @@ class TrainingController:
                     p = os.path.join(PROCESSED_DATA, nrp)
                     if not os.path.isdir(p): continue
                     all_files = sorted(os.listdir(p))
-                    # Gunakan 50 gambar terbaik untuk rata-rata yang lebih stabil (Hardened)
+                    # Gunakan 50 gambar terbaik untuk rata-rata yang lebih stabil (High Accuracy)
                     train_files = all_files[:50]
                     
                     embs = []
@@ -434,7 +470,20 @@ class TrainingController:
                 avg_self_sim = sum(test_results) / len(test_results) if test_results else 0
                 print(f"[SUCCESS] Uji mandiri selesai. Rata-rata Similarity: {avg_self_sim:.4f}")
             
+            print(f"[SUCCESS] Menyimpan registri identitas dengan {len(ref_db)} identitas ke {MODEL_DIR}/reference_embeddings.pth")
             torch.save(ref_db, f"{MODEL_DIR}/reference_embeddings.pth")
+
+            # --- PERSISTENSI VERSI (Simpan ke DB SETELAH file fisik aman di disk) ---
+            if dbs:
+                try:
+                    new_v = models.ModelVersion(notes=f"Dibuat pada {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                    dbs.add(new_v)
+                    dbs.commit()
+                    dbs.refresh(new_v)
+                    print(f"[SUCCESS] Versi model v{new_v.version_id} berhasil disimpan ke database.")
+                except Exception as e:
+                    print(f"[ERROR] Gagal menyimpan versi ke database: {e}")
+                    dbs.rollback()
             
             # Hitung Ukuran Aset yang akan didownload client (Model + Registri)
             download_size = 0

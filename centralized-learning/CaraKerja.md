@@ -24,10 +24,11 @@ Proses penyiapan data di sisi terminal sebelum pengiriman ke server pusat:
 ---
 
 ### Tahap 3: Pelatihan Terpusat (Centralized Training)
-1. **Resource-Aware Training**: Batch Size diatur ke **16** untuk menjaga stabilitas memori server/edge saat menangani dataset besar.
+1. **Resource-Aware Training**: Batch Size diatur ke **8** untuk menjaga stabilitas memori server/edge dan mencegah osilasi gradien pada dataset kecil.
 2. **Partial Freezing**: Server membekukan Stage 1 & 2 (`conv1` hingga `blocks[0-11]`) untuk menjaga fitur umum wajah.
-3. **Transfer Learning**: Server melatih backbone Stage 3 dan ArcMargin head menggunakan SGD (Nesterov) & Cosine Annealing (20 Epoch) dengan Initial LR **0.05**.
-4. **Optimasi Akhir**: Menggunakan **SWA (Stochastic Weight Averaging)** pada 4 epoch terakhir untuk stabilitas bobot.
+3. **Transfer Learning**: Server melatih backbone Stage 3 dan ArcMargin head menggunakan SGD (Nesterov) & Cosine Annealing (10 Epoch) dengan Initial LR **0.01**.
+4. **Lighting Augmentation**: Menggunakan `RandomAutocontrast` dan `ColorJitter` tinggi untuk menangani variasi cahaya terminal.
+5. **Optimasi Akhir**: Menggunakan **SWA (Stochastic Weight Averaging)** pada 3 epoch terakhir (8, 9, 10) untuk stabilitas bobot.
 
 ### Tahap 4: Deployment & Adaptasi Lokal
 1. **Sinkronisasi**: Client mengunduh model global dan referensi embedding identitas.
@@ -43,5 +44,5 @@ Setelah terminal mengunduh model terbaru, sistem menjalankan mesin inferensi rea
 - **Flip Trick Evaluation**: Mengambil embedding dari wajah asli dan wajah yang di-flip horizontal, lalu dirata-ratakan untuk stabilitas skor maksimal.
 - **Vectorized Classifier (New)**: Proses pencocokan wajah menggunakan operasi matriks (`torch.mm`) alih-alih loop `for`. Ini mempercepat proses dan menghemat RAM secara signifikan.
 - **Temporal Voting**: Mengumpulkan 5 frame berturut-turut untuk memastikan identitas sebelum mencatat presensi.
-- **Confident Instant Match (CIM)**: Jika skor similarity > 0.85, sistem langsung memverifikasi wajah tanpa menunggu buffer frame.
+- **Confident Instant Match (CIM)**: Jika skor similarity > 0.85, sistem langsung memverifikasi wajah tanpa menunggu buffer frame. Threshold standar ditetapkan pada **0.7**.
 - **Memory Management (GC)**: Sistem secara eksplisit memicu *Garbage Collection* di setiap akhir loop kamera untuk menjaga stabilitas RAM 1GB.

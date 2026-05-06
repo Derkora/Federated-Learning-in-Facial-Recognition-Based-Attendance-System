@@ -23,12 +23,13 @@ Langkah krusial untuk kualitas input yang seragam (Identik dengan CL):
 ---
 
 ## Tahap 3: Pelatihan Terfederasi (Federated Learning)
-1. **Low-Batch Local Training**: Client melatih model secara lokal dengan Batch Size **8** guna mencegah OOM pada perangkat Raspberry Pi 3B (1GB RAM).
+1. **Low-Batch Local Training**: Client melatih model secara lokal dengan Batch Size **4** guna mencegah OOM pada perangkat Raspberry Pi 3B (1GB RAM) dan menjaga stabilitas gradien.
 2. **Partial Freezing**: Client membekukan Stage 1 & 2 secara lokal untuk efisiensi komputasi dan menjaga fitur umum.
-3. **Local Training (pFedFace)**: Client melatih Stage 3 dan Head menggunakan SGD (Nesterov) dengan Initial LR **0.05** (10 Ronde x 2 Local Epoch).
-4. **Hybrid Validation Metrics**: Selama training, client menghitung akurasi berdasarkan data citra lokal (asli) dan **Global Embeddings** dari terminal lain. Hal ini memungkinkan terminal melaporkan akurasi tinggi (±90%) meskipun tidak memiliki data subjek tertentu secara lokal (Knowledge Sharing Proof).
-5. **Knowledge Sharing**: Server melakukan FedAvg pada parameter backbone bersama (Shared Parameters) setiap ronde.
-6. **Snapshot Averaging**: Menggunakan rata-rata snapshot pada 2 ronde terakhir (Setara 4 epoch) untuk stabilitas global.
+3. **Local Training (pFedFace)**: Client melatih Stage 3 dan Head menggunakan SGD (Nesterov) dengan Initial LR **0.01** (10 Ronde x 1 Local Epoch).
+4. **Lighting Augmentation**: Menggunakan `RandomAutocontrast` dan `ColorJitter` untuk menangani variasi cahaya terminal.
+5. **Hybrid Validation Metrics**: Selama training, client menghitung akurasi berdasarkan data citra lokal (asli) dan **Global Embeddings** dari terminal lain. 
+6. **Knowledge Sharing**: Server melakukan FedAvg pada parameter backbone bersama (Shared Parameters) setiap ronde.
+7. **Snapshot Averaging**: Menggunakan rata-rata snapshot pada 3 ronde terakhir (8, 9, 10) untuk stabilitas global.
 
 ---
 
@@ -46,5 +47,5 @@ ru yang sudah melalui proses federasi.
 1.  **Eager Loading**: Memuat model versi terbaru ke RAM secara terisolasi.
 2.  **Vectorized Identity Identification (New)**: Pencarian identitas menggunakan operasi matriks (`torch.mm`) yang jauh lebih efisien daripada loop manual.
 3.  **Flip Trick Evaluation**: Merata-ratakan embedding wajah asli dan mirror untuk hasil skor yang lebih stabil.
-4.  **Temporal Voting & CIM**: Menggunakan buffer frame untuk konfirmasi identitas, mendukung *Instant Match* jika skor > 0.85.
+4.  **Temporal Voting & CIM**: Menggunakan buffer frame untuk konfirmasi identitas, mendukung *Instant Match* jika skor > 0.85. Threshold standar ditetapkan pada **0.7**.
 5.  **Explicit Memory Cleanup (GC)**: Pembersihan RAM secara rutin melalui `gc.collect()` untuk menjaga ketersediaan memori di perangkat edge.

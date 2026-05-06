@@ -6,6 +6,7 @@ services:
       context: ./client
       dockerfile: Dockerfile
     container_name: client_cl_balanced
+    restart: unless-stopped
     privileged: true
     ports:
       - "8080:8080"

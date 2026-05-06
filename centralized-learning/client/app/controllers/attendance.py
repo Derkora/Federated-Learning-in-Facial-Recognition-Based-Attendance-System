@@ -49,7 +49,7 @@ class AttendanceController:
                     query_emb_tensor = F.normalize((emb_orig + emb_mirror) / 2, p=2, dim=1)
             except Exception as e:
                 print(f"[ERROR] Kegagalan inferensi: {e}")
-                return "Unknown", 0
+                return "Unknown", 0, False
             
             # Pastikan dimensi query_emb_tensor adalah (1, 128)
             query_emb_tensor = query_emb_tensor.view(1, -1)
@@ -65,6 +65,10 @@ class AttendanceController:
                 ref_list.append(ref.view(1, -1))
             
             # Stack semua referensi menjadi matriks (N, 128)
+            if not ref_list:
+                print("[WARNING] [CL] Tidak ada referensi identitas (Registry Kosong).")
+                return "Unknown", 0, False
+            
             ref_matrix = torch.cat(ref_list, dim=0)
             ref_matrix = F.normalize(ref_matrix, p=2, dim=1)
             
@@ -102,12 +106,12 @@ class AttendanceController:
                 print(f"[SUCCESS] {best_match} (Sim: {max_sim:.4f}) [Model: v{current_v}]")
                 nrp_only = best_match.split("_")[0] if "_" in best_match else best_match
                 self.submit_attendance(nrp_only, max_sim)
-                return nrp_only, max_sim
+                return nrp_only, max_sim, False # Status virtual diatur oleh pemanggil (API vs Hardware loop)
             else:
                 if max_sim > 0.1:
                     print(f"[DEBUG] Model v{current_v} | Terbaik: {best_match} | Sim: {max_sim:.4f} | Thres: {threshold}")
                 
-        return "Unknown", 0
+        return "Unknown", 0, False
 
     def submit_attendance(self, user_id, confidence):
         # Mengirimkan laporan presensi mahasiswa ke server pusat.

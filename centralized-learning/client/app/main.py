@@ -43,7 +43,7 @@ async def api_inference(data: dict):
         cl_client.latest_frame = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
         
         # Proses pengenalan wajah melalui controller attendance
-        matched, confidence = cl_client.attendance.process_inference(
+        matched, confidence, _ = cl_client.attendance.process_inference(
             img_pil, cl_client.model, cl_client.reference_embeddings
         )
         
@@ -53,7 +53,7 @@ async def api_inference(data: dict):
             "confidence": confidence, 
             "latency_ms": latency,
             "model_version": cl_client.current_model_version,
-            "is_virtual": False # Remote frame is considered "Real" in UI
+            "is_virtual": True # Browser frame is virtual
         }
         cl_client.latest_result = res
         return res

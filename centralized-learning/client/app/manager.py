@@ -51,7 +51,7 @@ class CLClientManager:
         self.latest_frame = None
         self.latest_result = {"matched": "Standby", "confidence": 0, "latency_ms": 0, "is_virtual": False}
         self.is_camera_running = False
-        self.threshold = 0.75
+        self.threshold = 0.7
         
         # Inisialisasi File Log
         self.log_path = os.path.join(self.data_path, "client_activity.log")
@@ -139,14 +139,26 @@ class CLClientManager:
             path_r = os.path.join(self.data_path, "models", "reference_embeddings.pth")
 
             if os.path.exists(path_m):
-                new_model.load_state_dict(torch.load(path_m, map_location=DEVICE))
+                # Muat bobot global secara penuh (termasuk BN stats)
+                # Client CL tidak melakukan pelatihan, jadi lebih aman menggunakan stats server sebagai basis.
+                loaded_sd = torch.load(path_m, map_location=DEVICE)
+                new_model.load_state_dict(loaded_sd)
+                print(f"[SYNC] Bobot global v{self.current_model_version} (Full State) diterapkan.")
+
             if os.path.exists(path_r):
                 new_refs = torch.load(path_r, map_location=DEVICE)
 
-            # 2. ATOMIC SWAP
+            # 2. ATOMIC SWAP & BN ADAPTATION
             self.model = new_model
             self.reference_embeddings = new_refs
             self.has_assets = True
+            
+            # Kalibrasi BN Lokal agar cocok dengan domain kamera perangkat ini
+            try:
+                from app.utils.freezing import calibrate_bn
+                calibrate_bn(self.model, self.raw_data_path)
+            except Exception as e:
+                print(f"[WARN] Gagal kalibrasi BN (CL): {e}")
             
             gc.collect()
             print(f"[EAGER LOAD] Model CL v{self.current_model_version} Loaded into RAM")
@@ -168,18 +180,19 @@ class CLClientManager:
         else:
             print("[CAMERA] Menyalakan hardware kamera...")
             self.is_camera_running = True
-            threading.Thread(target=self.run_camera_loop, daemon=True).start()
+            threading.Thread(target=self.run_camera_loop, args=(True,), daemon=True).start()
             return True
 
-    def run_camera_loop(self):
+    def run_camera_loop(self, manual=False):
         # PENTING: Cek apakah kamera diaktifkan via .env
-        # Default dirubah ke FALSE agar hemat RAM saat awal startup
-        enable_camera = os.getenv("ENABLE_CAMERA", "false").lower() == "true"
-        if not enable_camera:
-            print("[CAMERA] Kamera dalam posisi PADAM (Default). Aktifkan via ENABLE_CAMERA=true.")
-            self.is_camera_running = False
-            self.latest_result["matched"] = "CAMERA OFF"
-            return
+        # Jika 'manual' is True, berarti dipicu tombol UI, maka abaikan pengecekan ENV
+        if not manual:
+            enable_camera = os.getenv("ENABLE_CAMERA", "false").lower() == "true"
+            if not enable_camera:
+                print("[CAMERA] Kamera dalam posisi PADAM (Default). Aktifkan via ENABLE_CAMERA=true.")
+                self.is_camera_running = False
+                self.latest_result["matched"] = "CAMERA OFF"
+                return
 
         # Loop kamera mandiri (Headless Mode)
         cam_idx = self.camera_index
@@ -187,8 +200,35 @@ class CLClientManager:
         cam_height = int(os.getenv("CAMERA_HEIGHT", 720))
         cam_format = os.getenv("CAMERA_FORMAT", "MJPG").upper()
 
-        print(f"[CAMERA] Menjalankan hardware kamera pada index {cam_idx}...")
+        print(f"[CAMERA] Mencoba akses hardware kamera (Mulai dari Index {cam_idx})...")
         cap = cv2.VideoCapture(cam_idx)
+        
+        # LOGIKA SMART SCAN: Cari index 0 s/d 3 jika index utama gagal
+        if not cap or not cap.isOpened():
+            found = False
+            for i in [0, 1, 2]:
+                if i == cam_idx: continue
+                if cap: cap.release()
+                print(f"[CAMERA] Mencoba alternatif Index {i}...")
+                cap = cv2.VideoCapture(i)
+                if cap.isOpened():
+                    cam_idx = i
+                    found = True
+                    break
+            
+            # FINAL FALLBACK: Mode Simulasi (Jika hardware benar-benar tidak ada di Docker)
+            if not found:
+                print("[CAMERA] [WARN] Hardware tidak ditemukan. Masuk ke MODE SIMULASI (Virtual).")
+                test_video = os.path.join(self.data_path, "test_video.mp4")
+                if os.path.exists(test_video):
+                    cap = cv2.VideoCapture(test_video)
+                    self.latest_result["is_virtual"] = True
+                else:
+                    if cap: cap.release()
+                    print("[CAMERA] [ERROR] Tidak ada hardware maupun file simulasi.")
+                    self.is_camera_running = False
+                    self.latest_result["matched"] = "CAMERA ERROR"
+                    return
         
         # Optimasi Jetson/Raspi: Paksa format MJPG jika dikonfigurasi (lebih ringan dari YUYV)
         if cam_format == "MJPG":
@@ -243,7 +283,7 @@ class CLClientManager:
                     img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     img_pil = Image.fromarray(img_rgb)
                     
-                    matched, confidence = self.attendance.process_inference(
+                    matched, confidence, _ = self.attendance.process_inference(
                         img_pil, self.model, self.reference_embeddings
                     )
                     
@@ -288,7 +328,7 @@ class CLClientManager:
                     if res.status_code == 200:
                         server_info = res.json()
                         server_version = server_info.get("model_version", 0)
-                        server_threshold = server_info.get("inference_threshold", 0.75)
+                        server_threshold = server_info.get("inference_threshold", 0.7)
                         upload_requested = server_info.get("upload_requested", False)
                         
                         # Sinkronisasi threshold
@@ -313,13 +353,8 @@ class CLClientManager:
                                 self.reference_embeddings = refs
                                 self.current_model_version = server_version
                                 self._save_version(server_version)
-                                # EAGER RELOAD: Pastikan model terbaru masuk RAM
+                                # EAGER RELOAD: Pastikan model terbaru masuk RAM (Sudah termasuk BN Adaptation)
                                 self._reload_inference_models(force_reload=True)
-                                
-                                # --- BN ADAPTATION (LOCAL CALIBRATION) ---
-                                # Membuat model CL setara dengan pFedFace dalam hal adaptasi lingkungan.
-                                if self.model:
-                                    calibrate_bn(self.model, self.raw_data_path)
                             else:
                                 time.sleep(10)
                                 continue

@@ -3,6 +3,7 @@ services:
   server-cl:
     build: ./server
     container_name: centralized_server
+    restart: unless-stopped
     ports:
       - "8081:8080"
     environment:
@@ -20,10 +21,11 @@ services:
   client1-cl:
     build: ./client
     container_name: centralized_client1
+    restart: unless-stopped
     ports:
       - "8082:8080"
     environment:
-      CL_SERVER_ADDRESS: http://server-cl:8081
+      CL_SERVER_ADDRESS: http://server-cl:8080
       PYTHONUNBUFFERED: 1
     volumes:
       - ../datasets/client1_data:/app/raw_data
@@ -35,10 +37,11 @@ services:
   client2-cl:
     build: ./client
     container_name: centralized_client2
+    restart: unless-stopped
     ports:
       - "8083:8080"
     environment:
-      CL_SERVER_ADDRESS: http://server-cl:8081
+      CL_SERVER_ADDRESS: http://server-cl:8080
       PYTHONUNBUFFERED: 1
     volumes:
       - ../datasets/client2_data:/app/raw_data
@@ -49,6 +52,7 @@ services:
   # --- DATABASE SERVER ---
   server-cl-db:
     image: postgres:15-alpine
+    restart: unless-stopped
     command: postgres -c shared_buffers=64MB -c max_connections=50 -c work_mem=8MB
     environment:
       - POSTGRES_USER=admin
