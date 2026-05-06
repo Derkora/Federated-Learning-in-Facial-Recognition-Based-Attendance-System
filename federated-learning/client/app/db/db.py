@@ -1,6 +1,7 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
 import os
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker, declarative_base
+from app.utils.logging import get_logger
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:////app/data/client.db")
 
@@ -17,7 +18,6 @@ engine = create_engine(
 
 # Aktifkan WAL Mode untuk SQLite agar konkurensi lebih baik
 if DATABASE_URL.startswith("sqlite"):
-    from sqlalchemy import event
     @event.listens_for(engine, "connect")
     def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor = dbapi_connection.cursor()
@@ -32,16 +32,17 @@ def init_db():
     """Buat semua tabel jika belum ada.
     Pastikan mere pemanggil sudah di-import di file pemanggil sebelum fungsi ini dipanggil.
     """
+    logger = get_logger()
     # Pastikan direktori database ada (penting untuk SQLite)
     if DATABASE_URL.startswith("sqlite"):
         db_path = DATABASE_URL.replace("sqlite:///", "").replace("sqlite://", "")
         db_dir = os.path.dirname(db_path)
         if db_dir and not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
-            print(f"[DB] Created directory: {db_dir}")
+            logger.info(f"Database directory created: {db_dir}")
 
     Base.metadata.create_all(bind=engine)
-    print("[DB] Tables initialized.")
+    logger.info("Database tables initialized.")
 
 # Dependency FastAPI
 def get_db():

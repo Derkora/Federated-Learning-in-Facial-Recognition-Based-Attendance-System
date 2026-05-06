@@ -5,7 +5,12 @@ import torch
 import torchvision.transforms as T
 from PIL import Image
 from facenet_pytorch import MTCNN
+import json
+import time
+import gc
 from .mobilefacenet import MobileFaceNet
+
+from .logging import get_logger
 
 DEVICE = torch.device('cpu')
 
@@ -33,6 +38,7 @@ class FaceHandler:
             # Normalisasi MobileFaceNet (Standard): (x - 127.5) / 128.0
             T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.50196, 0.50196, 0.50196])
         ])
+        self.logger = get_logger()
 
     def detect_and_save(self, img_path, dst_path):
         """
@@ -45,7 +51,7 @@ class FaceHandler:
             if boxes is not None and len(boxes) > 0:
                 face_img = None
 
-                # 1. Landmark Alignment (Prioritas Utama)
+                # Landmark Alignment (Prioritas Utama)
                 if landmarks is not None and landmarks[0] is not None:
                     try:
                         src = np.array(landmarks[0], dtype=np.float32)
@@ -56,10 +62,10 @@ class FaceHandler:
                                                      flags=cv2.INTER_LINEAR,
                                                      borderMode=cv2.BORDER_REPLICATE)
                             face_img = Image.fromarray(cv2.cvtColor(aligned, cv2.COLOR_BGR2RGB))
-                    except Exception as e:
-                        print(f"[DEBUG] Alignment gagal: {e}")
+                    except: pass
 
-                # 2. Fallback: Bbox Crop
+
+                # Fallback: Bbox Crop
                 if face_img is None:
                     box = boxes[0]
                     margin = 20
@@ -71,28 +77,107 @@ class FaceHandler:
 
                 face_img.save(dst_path)
                 return True
-            else:
-                print(f"[FaceHandler] Skip: Wajah tidak terdeteksi pada {os.path.basename(img_path)}")
+
         except Exception as e:
-            print(f"[FaceHandler] ERROR pada {os.path.basename(img_path)}: {e}")
+            self.logger.error(f"ERROR deteksi/simpan pada {os.path.basename(img_path)}: {e}")
         return False
 
     def get_blur_score(self, image_path):
-        """Hitung skor Laplacian Variance."""
+        """Hitung skor Laplacian Variance dengan optimasi RAM & CPU."""
         try:
             img = cv2.imread(image_path)
             if img is None: return 0
+            
+            # Optimasi RAM & CPU: resize gambar besar jika melebihi 640px untuk penghitungan ketajaman
+            h, w = img.shape[:2]
+            max_size = 640
+            if max(h, w) > max_size:
+                scale = max_size / max(h, w)
+                img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+                
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            return cv2.Laplacian(gray, cv2.CV_64F).var()
+            # Hitung variansi Laplacian dengan kedalaman CV_32F (presisi tunggal) demi efisiensi RAM/CPU
+            return cv2.Laplacian(gray, cv2.CV_32F).var()
         except: return 0
 
     def select_best_faces(self, folder_path, n=50):
-        """Pilih N gambar terbaik berdasarkan ketajaman."""
         if not os.path.exists(folder_path): return []
-        imgs = [os.path.join(folder_path, f) for f in os.listdir(folder_path) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
-        if not imgs: return []
-        scored = sorted([(p, self.get_blur_score(p)) for p in imgs], key=lambda x: x[1], reverse=True)
-        return [os.path.basename(s[0]) for s in scored[:n]]
+        
+        final_cache_path = os.path.join(folder_path, ".selection_cache.json")
+        scores_cache_path = os.path.join(folder_path, ".laplacian_scores.json")
+        
+        # Use previously cached selection results to save time
+        if os.path.exists(final_cache_path):
+            try:
+                with open(final_cache_path, "r") as f:
+                    cache_data = json.load(f)
+                    if cache_data.get("n") == n:
+                        return cache_data.get("filenames", [])
+            except: pass
+
+        all_imgs = sorted([
+            f for f in os.listdir(folder_path) 
+            if f.lower().endswith(('.jpg', '.jpeg', '.png'))
+        ])
+        if not all_imgs: return []
+
+        scored_map = {}
+        # Load previously calculated Laplacian scores cache
+        if os.path.exists(scores_cache_path):
+            try:
+                with open(scores_cache_path, "r") as f:
+                    scored_map = json.load(f)
+            except: pass
+
+        needs_save = False
+        total_imgs = len(all_imgs)
+        # Evaluate sharpness for each new image
+        for i, img_name in enumerate(all_imgs):
+            if img_name in scored_map:
+                continue
+                
+            img_path = os.path.join(folder_path, img_name)
+            self.logger.info(f"Menguji ketajaman Laplacian gambar {i+1}/{total_imgs}: {img_name}")
+            score = self.get_blur_score(img_path)
+            scored_map[img_name] = score
+            needs_save = True
+            
+            # Periodically save scores to ensure data persistence
+            if i % 50 == 0 and needs_save:
+                try:
+                    with open(scores_cache_path, "w") as f:
+                        json.dump(scored_map, f)
+                except: pass
+            
+            if i % 10 == 0:
+                gc.collect()
+
+        if needs_save:
+            try:
+                with open(scores_cache_path, "w") as f:
+                    json.dump(scored_map, f)
+            except: pass
+
+        # Sort photos and select N images with the highest scores
+        scored_list = [(name, score) for name, score in scored_map.items()]
+        scored_list.sort(key=lambda x: x[1], reverse=True)
+        
+        selected_scores = [s[1] for s in scored_list[:n]]
+        avg_sharpness = sum(selected_scores) / len(selected_scores) if selected_scores else 0
+        
+        nrp_name = os.path.basename(folder_path)
+        self.logger.info(f"  > [Sharpness] User {nrp_name}: Terpilih {len(selected_scores)} foto | Rata-rata Skor: {avg_sharpness:.2f}")
+        
+        selected = [s[0] for s in scored_list[:n]]
+
+        # Save the selected best image filenames to the cache file
+        try:
+            with open(final_cache_path, "w") as f:
+                json.dump({"n": n, "filenames": selected}, f)
+        except: pass
+
+        gc.collect()
+        return selected
 
     def get_embedding(self, model, img_pil):
         """Generate embedding menggunakan Flip Trick (Avg Orig + Mirror)."""

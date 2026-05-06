@@ -17,6 +17,8 @@ services:
         condition: service_healthy
     volumes:
       - fl-server:/app/data
+      - fl-server-videos:/app/stored_videos
+      - fl-server-caches:/app/video_caches
     networks:
       - fl-network
 
@@ -43,4 +45,6 @@ networks:
 
 volumes:
   fl-server:
+  fl-server-videos:
+  fl-server-caches:
   fl-db:

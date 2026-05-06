@@ -2,7 +2,10 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
+from app.utils.logging import get_logger
+
 def identify_user_globally(query_embedding, local_embeddings_dict, threshold=0.35, metric="cosine", verbose=True):
+    logger = get_logger()
     if not local_embeddings_dict:
         return "Unknown", 0.0
     
@@ -38,12 +41,12 @@ def identify_user_globally(query_embedding, local_embeddings_dict, threshold=0.3
     
     # 3. Hitung Skor Sekaligus
     if metric == "cosine":
-        # Cosine Similarity = Dot Product dari L2 Normalized Tensors
-        # [1, 128] @ [128, N] -> [1, N]
         scores = torch.mm(query_tensor, ref_matrix.t())
-        max_sim, max_idx = torch.max(scores, dim=1)
-        confidence = float(max_sim.item())
-        best_match = user_ids[max_idx.item()]
+        # Ambil Top 1 saja (Tanpa riset Top-2)
+        val, idx = torch.max(scores, dim=1)
+        
+        confidence = float(val.item())
+        best_match = user_ids[idx.item()]
     else:
         # Euclidean Distance
         dists = torch.cdist(query_tensor, ref_matrix, p=2)
@@ -51,12 +54,11 @@ def identify_user_globally(query_embedding, local_embeddings_dict, threshold=0.3
         confidence = float(1.0 - (min_dist.item() / 2.0))
         best_match = user_ids[min_idx.item()]
 
-    # 4. Ambang Batas
-    if confidence < threshold:
-        if verbose:
-            print(f"[CLASSIFIER] Match '{best_match}' rejected (Score: {confidence:.3f} < threshold {threshold})")
-        return "Unknown", confidence
-        
+    # 4. Hasil (Penerapan ambang batas kini dilakukan oleh pemanggil agar log tetap mencatat NRP terdekat)
     if verbose:
-        print(f"[CLASSIFIER] Match '{best_match}' accepted (Score: {confidence:.3f})")
+        if confidence < threshold:
+            logger.info(f"Match '{best_match}' below threshold (Score: {confidence:.3f} < {threshold})")
+        else:
+            logger.success(f"Match '{best_match}' accepted (Score: {confidence:.3f})")
+
     return best_match, confidence

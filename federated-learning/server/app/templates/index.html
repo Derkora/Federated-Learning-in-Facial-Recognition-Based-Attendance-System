@@ -29,10 +29,10 @@
 </div>
 
 <!-- CLIENT MONITORING SECTION -->
-<div class="glass" style="padding: 2rem;">
+<div class="glass" style="padding: 2rem; margin-top: 2rem;">
     <h3
         style="color: var(--accent); margin-top: 0; margin-bottom: 1.5rem; font-size: 1.2rem; display: flex; align-items: center; gap: 0.5rem;">
-        🖥️ Terminal Terhubung
+        Terminal Terhubung
     </h3>
     <div id="active-terminals"
         style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 1rem;">
@@ -119,16 +119,26 @@
                             IP: ${client.ip}<br>
                             Terakhir: ${client.last_seen}
                         </div>
-                        <button class="btn btn-sm btn-outline-primary" onclick="viewClientLogs('${client.id}')" style="width: 100%; font-size: 0.75rem;">
-                            View Logs
-                        </button>
+                        <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                            <button class="btn btn-sm btn-outline-primary" onclick="viewClientLogs('${client.id}')" style="width: 100%; font-size: 0.75rem;">
+                                Log Pelatihan
+                            </button>
+                            <button class="btn btn-sm btn-primary" onclick="viewInferenceLogs('${client.id}')" style="width: 100%; font-size: 0.75rem;">
+                                Log Inferensi
+                            </button>
+                        </div>
                     </div>
                 `).join('');
             } else {
                 terminalContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 0.9rem;">Tidak ada terminal yang terdaftar.</p>';
             }
 
-            // 4. Polling Management
+            // 4. Update Inference Logs (Memory only for Modal)
+            if (data.inference_logs && data.inference_logs.length > 0) {
+                window.allInferenceLogs = data.inference_logs;
+            }
+
+            // 5. Polling Management
             if (data.is_running && !pollInterval) startPolling();
             if (!data.is_running && pollInterval) stopPolling();
 
@@ -140,18 +150,128 @@
         const modalTitle = document.getElementById('log-modal-title');
         const modalBody = document.getElementById('log-modal-body');
         
-        modalTitle.innerText = `Client Logs: ${clientId}`;
-        modalBody.innerText = "Loading logs...";
+        modalTitle.innerText = `Log Pelatihan: ${clientId}`;
+        modalBody.innerText = "Memuat log pelatihan...";
         modal.style.display = 'flex';
         
         try {
             const res = await fetch(`/api/clients/logs/${clientId}`);
             const data = await res.json();
-            modalBody.innerText = data.logs || "No logs found.";
+            modalBody.innerText = data.logs || "Log tidak ditemukan.";
             modalBody.scrollTop = modalBody.scrollHeight;
         } catch (e) {
-            modalBody.innerText = "Error fetching logs: " + e.message;
+            modalBody.innerText = "Gagal mengambil log: " + e.message;
         }
+    }
+
+    async function viewInferenceLogs(clientId) {
+        const modal = document.getElementById('log-modal');
+        const modalTitle = document.getElementById('log-modal-title');
+        const modalBody = document.getElementById('log-modal-body');
+        
+        modalTitle.innerText = `Log Inferensi: ${clientId}`;
+        modalBody.innerHTML = '<div style="text-align:center; padding: 2rem;">Memuat data inferensi...</div>';
+        modal.style.display = 'flex';
+        
+        // Pastikan data terbaru sudah ada di window.allInferenceLogs
+        if (!window.allInferenceLogs) {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                window.allInferenceLogs = data.inference_logs || [];
+            } catch (e) { console.error(e); }
+        }
+        
+        renderInferenceModal(clientId);
+    }
+
+    function renderInferenceModal(clientId) {
+        const modalBody = document.getElementById('log-modal-body');
+        const filtered = window.allInferenceLogs.filter(log => log.client_id === clientId);
+        
+        if (filtered.length === 0) {
+            modalBody.innerHTML = `<div style="text-align:center; padding: 2rem; color: var(--text-muted);">Tidak ada data inferensi untuk ${clientId}.</div>`;
+            return;
+        }
+
+        // Limit display to latest 1000 to prevent browser lag, but keep full data for export
+        const displayData = filtered.slice(0, 1000);
+        
+        let html = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; gap: 0.5rem;">
+                <span style="font-size: 0.8rem; color: var(--text-muted);">Menampilkan ${displayData.length} log terbaru</span>
+                <div style="display: flex; gap: 0.5rem;">
+                    <button class="btn btn-sm btn-outline-primary" onclick="copyTable('inference-table-modal')" style="font-size: 0.7rem;">
+                        Salin Tabel
+                    </button>
+                    <button class="btn btn-sm btn-primary" onclick="downloadCSV('${clientId}')" style="font-size: 0.7rem;">
+                        Unduh CSV
+                    </button>
+                </div>
+            </div>
+            <table id="inference-table-modal" style="width:100%; border-collapse:collapse; font-family: 'Fira Code', monospace; font-size:0.75rem; border: 1px solid rgba(16, 185, 129, 0.2);">
+            <thead>
+                <tr style="background: rgba(16, 185, 129, 0.1); text-align:left; color: var(--accent);">
+                    <th style="padding:10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2);">WAKTU</th>
+                    <th style="padding:10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2);">IDENTITAS (NRP)</th>
+                    <th style="padding:10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2);">STATUS</th>
+                    <th style="padding:10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2);">CONFIDENCE</th>
+                    <th style="padding:10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2);">LATENCY</th>
+                </tr>
+            </thead>
+            <tbody>`;
+        
+        displayData.forEach(log => {
+            const isUnknown = log.status === "UNKNOWN" || log.user_id === "Unknown";
+            const statusColor = isUnknown ? '#ef4444' : '#10b981';
+            const rowBg = isUnknown ? 'rgba(239, 68, 68, 0.02)' : 'transparent';
+            
+            html += `<tr style="background: ${rowBg}; border-bottom: 1px solid rgba(255, 255, 255, 0.03);">
+                <td style="padding:8px; color:#9ca3af;">${log.timestamp}</td>
+                <td style="padding:8px; color:${isUnknown ? '#9ca3af' : '#fff'}; font-weight: ${isUnknown ? '400' : '600'};">${log.user_id}</td>
+                <td style="padding:8px; color:${statusColor}; font-weight:bold; letter-spacing: 1px;">${log.status || (isUnknown ? 'UNKNOWN' : 'KNOWN')}</td>
+                <td style="padding:8px; color:#38bdf8; font-weight: 600;">${parseFloat(log.confidence).toFixed(4).replace('.', ',')}</td>
+                <td style="padding:8px; color:#9ca3af;">${log.latency}</td>
+            </tr>`;
+        });
+        html += `</tbody></table>`;
+        modalBody.innerHTML = html;
+    }
+
+    function downloadCSV(clientId) {
+        const filtered = window.allInferenceLogs.filter(log => log.client_id === clientId);
+        if (filtered.length === 0) return;
+
+        let csv = "Timestamp,User_ID,Status,Confidence,Latency\n";
+        filtered.forEach(log => {
+            csv += `${log.timestamp},${log.user_id},${log.status},${log.confidence},${log.latency}\n`;
+        });
+
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.setAttribute('hidden', '');
+        a.setAttribute('href', url);
+        a.setAttribute('download', `inference_logs_${clientId}_${new Date().getTime()}.csv`);
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    }
+
+    function copyTable(tableId) {
+        const table = document.getElementById(tableId);
+        if (!table) return;
+        const range = document.createRange();
+        range.selectNode(table);
+        window.getSelection().removeAllRanges();
+        window.getSelection().addRange(range);
+        try {
+            document.execCommand('copy');
+            alert('Tabel berhasil disalin ke clipboard!');
+        } catch (err) {
+            alert('Gagal menyalin tabel.');
+        }
+        window.getSelection().removeAllRanges();
     }
 
     function closeModal() {
@@ -163,12 +283,17 @@
 </script>
 
 <!-- LOG MODAL -->
-<div id="log-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; justify-content: center; align-items: center; backdrop-filter: blur(5px);">
-    <div class="glass" style="width: 80%; max-width: 800px; height: 70vh; display: flex; flex-direction: column; padding: 2rem; position: relative; border: 1px solid rgba(255,255,255,0.1);">
-        <button onclick="closeModal()" style="position: absolute; top: 1rem; right: 1rem; background: none; border: none; color: #fff; font-size: 1.5rem; cursor: pointer;">&times;</button>
-        <h2 id="log-modal-title" style="color: var(--accent); margin-top: 0; margin-bottom: 1.5rem;">Client Logs</h2>
-        <div id="log-modal-body" style="flex: 1; background: #000; color: #0f0; padding: 1rem; border-radius: 8px; font-family: 'Fira Code', monospace; font-size: 0.85rem; overflow-y: auto; white-space: pre-wrap; border: 1px solid rgba(0,255,0,0.2);">
-            Loading...
+<div id="log-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 1000; justify-content: center; align-items: center; backdrop-filter: blur(8px);">
+    <div class="glass" style="width: 90%; max-width: 900px; height: 80vh; display: flex; flex-direction: column; padding: 2.5rem; position: relative; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);">
+        <button onclick="closeModal()" style="position: absolute; top: 1.5rem; right: 1.5rem; background: rgba(255,255,255,0.05); border: none; color: #fff; width: 32px; height: 32px; border-radius: 50%; display: flex; justify-content: center; align-items: center; cursor: pointer; transition: all 0.2s;">&times;</button>
+        <div style="margin-bottom: 2rem;">
+            <h2 id="log-modal-title" style="color: var(--accent); margin: 0; font-size: 1.5rem;">Client Logs</h2>
+            <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.5rem;">Audit identifikasi wajah real-time dari terminal.</p>
+        </div>
+        <div id="log-modal-body" style="flex: 1; background: rgba(0,0,0,0.3); color: #e5e7eb; padding: 1.5rem; border-radius: 12px; overflow-y: auto; border: 1px solid rgba(255,255,255,0.05); box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);">
+            <div style="display: flex; justify-content: center; align-items: center; height: 100%;">
+                <span style="color: var(--text-muted);">Memuat data...</span>
+            </div>
         </div>
     </div>
 </div>

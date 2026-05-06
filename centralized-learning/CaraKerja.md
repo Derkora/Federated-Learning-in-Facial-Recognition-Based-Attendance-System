@@ -7,8 +7,8 @@ Sistem ini dirancang untuk mencapai performa identifikasi wajah maksimal melalui
 ## Tahap 1: Data Engineering & Mandatory Preprocessing (Identik dengan FL)
 Proses penyiapan data di sisi terminal sebelum pengiriman ke server pusat:
 1.  **Laplacian Variance Selection**: Sistem secara otomatis memilih maksimal **50 citra wajah paling tajam** dari folder `raw_data/students`. Hal ini memastikan model hanya belajar dari data berkualitas tinggi.
-2.  **Hardware-Aware Downscaling (New)**: Sebelum deteksi, gambar input di-resize ke lebar maksimal **640px**. Ini adalah langkah krusial untuk mencegah *Out of Memory* (OOM) pada perangkat seperti Raspberry Pi 3B.
-3.  **Face Detection (MTCNN)**: Mendeteksi lokasi wajah pada gambar yang sudah di-downscale.
+2.  **Full Resolution Processing**: Deteksi wajah dilakukan langsung pada resolusi gambar asli untuk mempertahankan detail piksel demi akurasi jarak jauh.
+3.  **Face Detection (MTCNN)**: Mendeteksi lokasi wajah pada gambar resolusi asli.
 4.  **Affine Landmark Alignment**: Sistem mendeteksi 5 titik landmark (mata, hidung, mulut) dan melakukan transformasi Affine agar posisi mata dan mulut sejajar secara horizontal.
 5.  **Portrait Resizing (112x96)**: Hasil alignment dipotong dan diubah ukurannya ke dimensi **112x96** (Portrait), standar MobileFaceNet.
 6.  **Single Normalization**: Citra dikonversi ke tensor dan dinormalisasi ke rentang [-1, 1].
@@ -24,24 +24,19 @@ Proses penyiapan data di sisi terminal sebelum pengiriman ke server pusat:
 ---
 
 ### Tahap 3: Pelatihan Terpusat (Centralized Training)
-1. **Resource-Aware Training**: Batch Size diatur ke **16** untuk menjaga stabilitas memori server/edge saat menangani dataset besar.
+1. **Resource-Aware Training**: Batch Size diatur ke **32** untuk menjamin stabilitas gradien dan memaksimalkan efisiensi memori server.
 2. **Partial Freezing**: Server membekukan Stage 1 & 2 (`conv1` hingga `blocks[0-11]`) untuk menjaga fitur umum wajah.
-3. **Transfer Learning**: Server melatih backbone Stage 3 dan ArcMargin head menggunakan SGD (Nesterov) & Cosine Annealing (20 Epoch) dengan Initial LR **0.05**.
-4. **Optimasi Akhir**: Menggunakan **SWA (Stochastic Weight Averaging)** pada 4 epoch terakhir untuk stabilitas bobot.
-
-### Tahap 4: Deployment & Adaptasi Lokal
-1. **Sinkronisasi**: Client mengunduh model global dan referensi embedding identitas.
-2. **BN Adaptation (Kalibrasi)**: Client menjalankan forward-pass (tanpa gradien) menggunakan data lokal untuk menyesuaikan statistik `running_mean` & `running_var` BatchNorm dengan kondisi pencahayaan spesifik lokasi.
-3. **Inferensi Edge**: Menggunakan **Flip Trick** dan **Temporal Voting** untuk pengenalan wajah yang stabil.
+3. **Optimized Training Cycle**: Server melatih backbone Stage 3 dan ArcMargin head menggunakan SGD (Nesterov) & Cosine Annealing (10 Epochs) dengan Initial LR **0.05**.
+4. **Enhanced Preprocessing Feedback**: Setiap folder mahasiswa diproses secara transparan dengan log detail progres dan skor ketajaman (*Sharpness*) secara real-time.
 
 ---
 
 ## Tahap 4: Live Inference (Inference Engine)
 Setelah terminal mengunduh model terbaru, sistem menjalankan mesin inferensi real-time:
 - **Eager Loading & Isolation**: Memuat model ke RAM secara terpisah dari thread sistem agar absensi tetap berjalan meskipun ada proses background.
-- **BN Adaptation (Client Calibration)**: Fitur terbaru untuk menyamai kemampuan adaptasi FL. Setelah mengunduh model global, terminal menjalankan kalibrasi statistik BatchNorm menggunakan data lokal. Ini menyesuaikan model pusat dengan kondisi pencahayaan spesifik di terminal tersebut.
-- **Flip Trick Evaluation**: Mengambil embedding dari wajah asli dan wajah yang di-flip horizontal, lalu dirata-ratakan untuk stabilitas skor maksimal.
-- **Vectorized Classifier (New)**: Proses pencocokan wajah menggunakan operasi matriks (`torch.mm`) alih-alih loop `for`. Ini mempercepat proses dan menghemat RAM secara signifikan.
-- **Temporal Voting**: Mengumpulkan 5 frame berturut-turut untuk memastikan identitas sebelum mencatat presensi.
-- **Confident Instant Match (CIM)**: Jika skor similarity > 0.85, sistem langsung memverifikasi wajah tanpa menunggu buffer frame.
-- **Memory Management (GC)**: Sistem secara eksplisit memicu *Garbage Collection* di setiap akhir loop kamera untuk menjaga stabilitas RAM 1GB.
+- **BN Adaptation (Client Calibration)**: Menyesuaikan model pusat dengan kondisi pencahayaan spesifik di terminal menggunakan data lokal.
+- **Flip Trick Evaluation**: Mengambil rata-rata embedding dari wajah asli dan mirror untuk stabilitas skor.
+- **Vectorized Classifier**: Pencocokan wajah menggunakan operasi matriks (`torch.mm`) yang cepat dan efisien RAM.
+- **Production Logging**: Mencatat skor identitas terbaik dengan timestamp untuk auditabilitas data presensi.
+- **Temporal Voting Strategy**: Verifikasi identitas menggunakan rata-rata buffer temporal (maksimal 3 frame) untuk stabilitas. Threshold standar ditetapkan pada **0.7**.
+- **Memory Management (GC)**: Pemicu *Garbage Collection* otomatis untuk menjaga stabilitas RAM 1GB.

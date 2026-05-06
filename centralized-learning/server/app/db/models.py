@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON, Float, LargeBinary, Text
 from sqlalchemy.orm import relationship
 from .db import Base
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 class Client(Base):
     __tablename__ = "clients"
@@ -10,8 +10,8 @@ class Client(Base):
     name = Column(String)
     ip_address = Column(String)
     status = Column(String) # online/offline
-    last_seen = Column(DateTime, default=datetime.utcnow)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    last_seen = Column(DateTime, default=lambda: datetime.now(timezone(timedelta(hours=7))))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone(timedelta(hours=7))))
 
     attendance_recap = relationship("AttendanceRecap", back_populates="client")
     training_updates = relationship("TrainingUpdate", back_populates="client")
@@ -24,7 +24,7 @@ class UserGlobal(Base):
     nrp = Column(String, unique=True)
     photo_path = Column(String, nullable=True) 
     registered_edge_id = Column(String, ForeignKey("clients.edge_id"))
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone(timedelta(hours=7))))
 
     attendance = relationship("AttendanceRecap", back_populates="user")
 
@@ -34,7 +34,7 @@ class AttendanceRecap(Base):
     recap_id = Column(Integer, primary_key=True, index=True) 
     user_id = Column(Integer, ForeignKey("users_global.user_id"))
     edge_id = Column(String, ForeignKey("clients.edge_id")) 
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone(timedelta(hours=7))))
     confidence = Column(Float) 
     lecture_id = Column(String, nullable=True)
 
@@ -46,7 +46,7 @@ class ModelVersion(Base):
     # Tabel Model Versions
     version_id = Column(Integer, primary_key=True, autoincrement=True)
     head_blob = Column(LargeBinary) 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone(timedelta(hours=7))))
     notes = Column(Text)
 
     rounds = relationship("TrainingRound", back_populates="model_version")
@@ -56,10 +56,12 @@ class TrainingRound(Base):
     # Tabel Training Rounds
     round_id = Column(Integer, primary_key=True, autoincrement=True) 
     round_number = Column(Integer)
-    start_time = Column(DateTime, default=datetime.utcnow)
+    start_time = Column(DateTime, default=lambda: datetime.now(timezone(timedelta(hours=7))))
     end_time = Column(DateTime, nullable=True)
     global_loss = Column(Float)
     global_accuracy = Column(Float)
+    val_loss = Column(Float, nullable=True)
+    val_accuracy = Column(Float, nullable=True)
     
     # Metrik Ekonomi & Operasional (NEW)
     training_duration_s = Column(Float, default=0.0)

@@ -7,6 +7,23 @@ import traceback
 import collections
 from app.utils.preprocessing import DEVICE
 
+from app.utils.logging import get_logger
+
+try:
+    from codecarbon import OfflineEmissionsTracker
+    CODECARBON_AVAILABLE = True
+except ImportError:
+    CODECARBON_AVAILABLE = False
+    OfflineEmissionsTracker = None
+
+# Konfigurasi endpoint API
+api_register_client = "/register-client"
+api_ping = "/ping"
+api_get_model = "/get-model"
+api_get_reference = "/get-reference-embeddings"
+api_upload_bulk = "/upload-bulk-zip"
+api_logs_energy = "/api/logs/energy"
+
 MODEL_DIR = os.path.join(os.getenv("DATA_PATH", "/app/data"), "models")
 DATA_DIR = os.getenv("RAW_DATA_PATH", "/app/raw_data") + "/students"
 os.makedirs(MODEL_DIR, exist_ok=True)
@@ -17,21 +34,22 @@ class ManagementController:
     def __init__(self, server_url, client_id):
         self.server_url = server_url
         self.client_id = client_id
+        self.logger = get_logger()
 
     def register_client(self, ip_address):
         # Mendaftarkan terminal ke database server pusat.
         try:
             payload = {"edge_id": self.client_id, "ip_address": ip_address, "status": "online"}
-            response = requests.post(f"{self.server_url}/register-client", json=payload, timeout=5)
+            response = requests.post(f"{self.server_url}{api_register_client}", json=payload, timeout=5)
             return response.status_code == 200
         except Exception as e:
-            print(f"[ERROR] Gagal registrasi client: {e}")
+            self.logger.error(f"Gagal registrasi client: {e}")
             return False
 
     def check_training_request(self):
         # Memeriksa apakah server meminta pengunggahan data dataset.
         try:
-            res = requests.get(f"{self.server_url}/ping", timeout=3)
+            res = requests.get(f"{self.server_url}{api_ping}", timeout=3)
             if res.status_code == 200:
                 data = res.json()
                 return data.get("upload_requested", False)
@@ -42,7 +60,7 @@ class ManagementController:
         # Sinkronisasi Bobot Model Global dan Basis Data Referensi Wajah Mahasiswa.
         try:
             # 1. Sinkronisasi Model
-            url_m = f"{self.server_url}/get-model"
+            url_m = f"{self.server_url}{api_get_model}"
             res_m = requests.get(url_m, stream=True, timeout=15)
             
             if res_m.status_code == 200:
@@ -55,11 +73,11 @@ class ManagementController:
                 model.load_state_dict(state_dict)
                 model.eval()
             else:
-                print(f"[ERROR] Gagal mendapatkan model. HTTP: {res_m.status_code}")
+                self.logger.error(f"Gagal mendapatkan model. HTTP: {res_m.status_code}")
                 return False, None
 
             # 2. Sinkronisasi Referensi (Embeddings)
-            url_r = f"{self.server_url}/get-reference-embeddings"
+            url_r = f"{self.server_url}{api_get_reference}"
             res_r = requests.get(url_r, stream=True, timeout=15)
             if res_r.status_code == 200:
                 path_r = f"{MODEL_DIR}/reference_embeddings.pth"
@@ -69,16 +87,16 @@ class ManagementController:
                 
                 refs = torch.load(path_r, map_location=DEVICE)
                 
-                # --- NRP INDEXING (Sorted logic) ---
+                # Indeks NRP dengan logika pengurutan
                 sorted_refs = collections.OrderedDict(sorted(refs.items()))
-                print(f"[SUCCESS] Sinkronisasi referensi berhasil ({len(sorted_refs)} identitas).")
+                self.logger.success(f"Sinkronisasi referensi berhasil ({len(sorted_refs)} identitas).")
                 
                 return True, sorted_refs
             
-            print(f"[ERROR] Gagal mendapatkan referensi. HTTP: {res_r.status_code}")
+            self.logger.error(f"Gagal mendapatkan referensi. HTTP: {res_r.status_code}")
             return False, None
         except Exception as e:
-            print(f"[ERROR] Kesalahan saat sinkronisasi aset: {e}")
+            self.logger.error(f"Kesalahan saat sinkronisasi aset: {e}")
             return False, None
 
     def package_and_upload(self):
@@ -86,6 +104,14 @@ class ManagementController:
         if not os.path.exists(DATA_DIR) or not os.listdir(DATA_DIR):
             return False, "Data tidak ditemukan."
         
+        tracker = None
+        energy_kwh = 0.0
+        if CODECARBON_AVAILABLE and OfflineEmissionsTracker is not None:
+            try:
+                tracker = OfflineEmissionsTracker(country_iso_code="IDN", measure_power_secs=15, log_level="error", save_to_file=False)
+                tracker.start()
+            except: pass
+
         zip_path = "/app/data/upload.zip"
         try:
             # Pastikan direktori tujuan ada
@@ -98,9 +124,10 @@ class ManagementController:
                 folder_count += len(dirs)
                 file_count += len(files)
             
-            print(f"[INFO] Mengemas {file_count} gambar dari {folder_count} mahasiswa.")
+            self.logger.info(f"Mengemas {file_count} gambar dari {folder_count} mahasiswa.")
 
             if file_count == 0:
+                if tracker: tracker.stop()
                 return False, "Tidak ada gambar untuk diunggah."
                 
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
@@ -112,14 +139,28 @@ class ManagementController:
             
             with open(zip_path, 'rb') as f:
                 res = requests.post(
-                    f"{self.server_url}/upload-bulk-zip", 
+                    f"{self.server_url}{api_upload_bulk}", 
                     files={"file": (f"{self.client_id}_data.zip", f)}, 
-                    timeout=120
+                    timeout=6000 
                 )
+            
+            # Stop tracker and send energy log
+            if tracker:
+                try:
+                    energy_kwh = tracker.stop()
+                    if energy_kwh:
+                        requests.post(f"{self.server_url}{api_logs_energy}", json={
+                            "client_id": self.client_id,
+                            "energy_kwh": energy_kwh
+                        }, timeout=5)
+                        self.logger.info(f"Laporan energi terkirim: {energy_kwh:.6f} kWh")
+                except: pass
+
             os.remove(zip_path)
             return res.status_code == 200, res.text
         except Exception as e:
-            print(f"[ERROR] Gagal mengemas atau mengunggah data: {e}")
+            if tracker: tracker.stop()
+            self.logger.error(f"Gagal mengemas atau mengunggah data: {e}")
             if os.path.exists(zip_path): os.remove(zip_path)
             return False, str(e)
 

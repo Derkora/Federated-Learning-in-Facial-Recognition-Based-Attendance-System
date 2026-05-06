@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, LargeBinary
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from .db import Base
 
 class FLSession(Base):
@@ -8,7 +8,7 @@ class FLSession(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     session_id = Column(String, unique=True, index=True)
-    start_time = Column(DateTime, default=datetime.utcnow)
+    start_time = Column(DateTime, default=lambda: datetime.now(timezone(timedelta(hours=7))))
     end_time = Column(DateTime, nullable=True)
     status = Column(String, default="active") # active, completed, failed
     
@@ -22,7 +22,7 @@ class FLRound(Base):
     round_number = Column(Integer)
     loss = Column(Float)
     metrics = Column(String) # JSON string of metrics
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone(timedelta(hours=7))))
     
     session = relationship("FLSession", back_populates="rounds")
 
@@ -32,7 +32,7 @@ class GlobalModel(Base):
     id = Column(Integer, primary_key=True, index=True)
     version = Column(Integer, default=0)
     weights = Column(LargeBinary) # Serialized global backbone weights
-    last_updated = Column(DateTime, default=datetime.utcnow)
+    last_updated = Column(DateTime, default=lambda: datetime.now(timezone(timedelta(hours=7))))
 
 class Client(Base):
     __tablename__ = "clients"
@@ -40,8 +40,8 @@ class Client(Base):
     name = Column(String)
     ip_address = Column(String)
     status = Column(String) # online/offline
-    last_seen = Column(DateTime, default=datetime.utcnow)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    last_seen = Column(DateTime, default=lambda: datetime.now(timezone(timedelta(hours=7))))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone(timedelta(hours=7))))
 
     attendance_recap = relationship("AttendanceRecap", back_populates="client")
 
@@ -53,7 +53,7 @@ class UserGlobal(Base):
     photo_path = Column(String, nullable=True) 
     embedding = Column(LargeBinary, nullable=True) 
     registered_edge_id = Column(String, ForeignKey("clients.edge_id"))
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone(timedelta(hours=7))))
 
     attendance = relationship("AttendanceRecap", back_populates="user")
 
@@ -62,7 +62,7 @@ class AttendanceRecap(Base):
     recap_id = Column(Integer, primary_key=True, index=True) 
     user_id = Column(Integer, ForeignKey("users_global.user_id"))
     edge_id = Column(String, ForeignKey("clients.edge_id")) 
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone(timedelta(hours=7))))
     confidence = Column(Float) 
     lecture_id = Column(String, nullable=True)
 

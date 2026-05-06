@@ -18,6 +18,8 @@ services:
         condition: service_healthy
     volumes:
       - cl-server:/app/data
+      - cl-server-videos:/app/stored_videos
+      - cl-server-caches:/app/video_caches
 
   server-cl-db-balanced:
     image: postgres:15
@@ -42,4 +44,6 @@ networks:
 
 volumes:
   cl-server:
+  cl-server-videos:
+  cl-server-caches:
   cl-db:

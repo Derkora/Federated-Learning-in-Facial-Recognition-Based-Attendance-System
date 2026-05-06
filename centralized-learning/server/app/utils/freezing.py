@@ -1,4 +1,5 @@
 import torch.nn as nn
+from .logging import get_logger
 
 def set_model_freeze(model, freeze_mode="early"):
     """
@@ -11,16 +12,17 @@ def set_model_freeze(model, freeze_mode="early"):
             - "early": Membekukan Conv1 sampai bottleneck stage 2 (conv_3).
             - "backbone": Membekukan seluruh backbone MobileFaceNet.
     """
+    logger = get_logger()
     # 1. Aktifkan semua parameter terlebih dahulu (Reset)
     for param in model.parameters():
         param.requires_grad = True
 
     if freeze_mode == "none":
-        print("[FREEZE] Mode: 'none'. Seluruh backbone akan dilatih.")
+        logger.info("Mode Freezing: 'none'. Seluruh backbone akan dilatih.")
         return
 
     if freeze_mode == "early":
-        print("[FREEZE] Mode: 'early'. Membekukan Conv1 hingga Stage 2 (conv_3).")
+        logger.info("Mode Freezing: 'early'. Membekukan Conv1 hingga Stage 2 (conv_3).")
         # Bekukan Conv1 dan dw_conv1 (Awal)
         for param in model.conv1.parameters():
             param.requires_grad = False
@@ -38,6 +40,7 @@ def set_model_freeze(model, freeze_mode="early"):
                 param.requires_grad = False
                 
     elif freeze_mode == "backbone":
-        print("[FREEZE] Mode: 'backbone'. Seluruh backbone MobileFaceNet dibekukan.")
+        logger.info("Mode Freezing: 'backbone'. Seluruh backbone MobileFaceNet dibekukan.")
         for param in model.parameters():
             param.requires_grad = False
+

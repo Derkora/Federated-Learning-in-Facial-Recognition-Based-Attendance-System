@@ -18,15 +18,13 @@ SUBMISSIONS_DIR = os.path.join(DATA_ROOT, "submissions")
 # CL: 20 Epochs | FL: 10 Rounds x 2 Epochs = 20 Iterations
 TRAINING_PARAMS = {
     "total_rounds": 10,
-    "epochs_per_round": 2,
-    "batch_size_per_client": 8,
+    "epochs_per_round": 1,
+    "batch_size_per_client": 32,
     "mu": 0.05,
     "label_smoothing": 0.0,
     "lr_schedule": "cosine", # Diganti ke Cosine Annealing
     "initial_lr": 0.05,
-    "min_lr": 5e-5,
-    "swa_start_round": 9,     # SWA Snapshot mulai ronde 9 (Last 2 Rounds = 4 Epochs)
-    "use_snapshot_averaging": True
+    "min_lr": 1e-4
 }
 
 # Parameter Ekonomi & Biaya

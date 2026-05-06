@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, timezone
 from app.db import models, schemas
 from app.config import MODEL_PATH, REF_PATH
+from app.server_manager_instance import cl_manager
 
 class InferenceController:
     # Kontroler untuk distribusi aset model dan manajemen laporan presensi.
@@ -12,6 +13,10 @@ class InferenceController:
     @staticmethod
     def get_model():
         # Mengirimkan berkas bobot model global ke terminal yang meminta.
+        # Jika versi masih 0, berarti belum pernah ditraining (Model Tidak Tersedia)
+        if cl_manager.model_version == 0:
+            raise HTTPException(status_code=403, detail="MODEL NOT AVAILABLE: Versi masih v0 (Belum ditraining)")
+            
         if not os.path.exists(MODEL_PATH):
             raise HTTPException(status_code=404, detail="Berkas model tidak ditemukan")
         return FileResponse(MODEL_PATH, media_type='application/octet-stream', filename="global_model.pth")

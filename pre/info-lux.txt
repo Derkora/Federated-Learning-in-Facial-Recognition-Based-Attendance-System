@@ -1,0 +1,33 @@
+=======================================================================================================================================
+NAMA BERKAS               | KECERAHAN (0-255)  | ESTIMASI LUX   | KLASIFIKASI CAHAYA               | ISO   | WAKTU    | PERANGKAT      
+=======================================================================================================================================
+cukup cahaya.jpeg         | 120.24             | 341.01         | Terang Normal (Cukup Cahaya - Standar Ruangan Kerja) | 56    | 02:27 PM | ASUS_I003DD    
+minim cahaya.jpeg         | 114.28             | 47.54          | Redup (Cahaya Kurang)            | 252   | 04:16 PM | ASUS_I003DD    
+gelap.jpeg                | 98.02              | 6.11           | Sangat Gelap (Minim Cahaya)      | 1019  | 05:10 PM | ASUS_I003DD    
+=======================================================================================================================================
+
+[ANALISIS DETIL METADATA & FISIKA APEX]:
+
+- Gambar: cukup cahaya.jpeg (Kondisi Pencahayaan Cukup (Ideal))
+  * Perangkat: ASUS_I003DD
+  * Waktu Pengambilan: 02:27 PM
+  * Rata-rata Kecerahan Piksel (Grayscale BT.601): 120.24 / 255.0
+  * Kontras RMS: 62.21
+  * Parameter Kamera -> Aperture: f/1.8 | Shutter: 1/50s | ISO: 56
+  * Rumus APEX Lux: 250.0 * (1.8^2) / (1/50s * 56) * (120.24 / 255.0) = 341.01 Lux
+
+- Gambar: minim cahaya.jpeg (Kondisi Pencahayaan Minim (Redup))
+  * Perangkat: ASUS_I003DD
+  * Waktu Pengambilan: 04:16 PM
+  * Rata-rata Kecerahan Piksel (Grayscale BT.601): 114.28 / 255.0
+  * Kontras RMS: 56.28
+  * Parameter Kamera -> Aperture: f/1.8 | Shutter: 1/33s | ISO: 252
+  * Rumus APEX Lux: 250.0 * (1.8^2) / (1/33s * 252) * (114.28 / 255.0) = 47.54 Lux
+
+- Gambar: gelap.jpeg (Kondisi Pencahayaan Gelap)
+  * Perangkat: ASUS_I003DD
+  * Waktu Pengambilan: 05:10 PM
+  * Rata-rata Kecerahan Piksel (Grayscale BT.601): 98.02 / 255.0
+  * Kontras RMS: 57.88
+  * Parameter Kamera -> Aperture: f/1.8 | Shutter: 1/20s | ISO: 1019
+  * Rumus APEX Lux: 250.0 * (1.8^2) / (1/20s * 1019) * (98.02 / 255.0) = 6.11 Lux

@@ -18,9 +18,13 @@
         <table id="training-table" class="result-table">
             <thead>
                 <tr>
-                    <th>Epoch</th>
+                    <th>Ronde</th>
+                    <th>Waktu</th>
                     <th>Loss</th>
                     <th>Accuracy (%)</th>
+                    <th>Val Loss</th>
+                    <th>Val Accuracy (%)</th>
+                    <th>Durasi (detik)</th>
                 </tr>
             </thead>
             <tbody>
@@ -28,13 +32,18 @@
                 {% for h in status.metrics.epoch_history %}
                 <tr>
                     <td>{{ h.epoch }}</td>
-                    <td>{{ "%.4f"|format(h.loss|float) }}</td>
-                    <td>{{ "%.2f"|format(h.accuracy|float) }}%</td>
+                    <td style="color: #9ca3af;">{{ h.timestamp if h.timestamp is defined else "-" }}</td>
+                    <td>{{ "%.4f"|format(h.loss|float)|replace('.', ',') }}</td>
+                    <td>{{ "%.2f"|format(h.accuracy|float)|replace('.', ',') }}%</td>
+                    <td>{{ "%.4f"|format(h.val_loss|float)|replace('.', ',') if h.val_loss is not none else "-" }}</td>
+                    <td>{{ "%.2f"|format(h.val_accuracy|float)|replace('.', ',') if h.val_accuracy is not none else "-" }}%</td>
+                    <td style="color: #38bdf8;">{{ "%.2f"|format(h.duration_s|float)|replace('.', ',') if h.duration_s is defined and h.duration_s is not none else "-" }}</td>
                 </tr>
+
                 {% endfor %}
                 {% else %}
                 <tr>
-                    <td colspan="3" style="text-align: center;">Data pelatihan tidak tersedia.</td>
+                    <td colspan="7" style="text-align: center;">Data pelatihan tidak tersedia.</td>
                 </tr>
                 {% endif %}
             </tbody>
@@ -60,24 +69,20 @@
             </thead>
             <tbody>
                 <tr>
-                    <td rowspan="2"><b>Transmisi Data</b></td>
-                    <td>Total Bandwidth (Gambar + Model)</td>
-                    <td>{{ "%.2f"|format(status.metrics.upload_volume_mb + status.metrics.download_volume_mb) }} MB</td>
-                    <td rowspan="2">Rp {{ "%.2f"|format(status.metrics.transmission_cost_idr|float) }}</td>
-                </tr>
-                <tr>
-                    <td>Estimasi Total Bandwidth (Transmisi)</td>
-                    <td>{{ "%.2f"|format(status.metrics.upload_volume_mb + status.metrics.download_volume_mb) }} MB</td>
+                    <td><b>Transmisi Data</b></td>
+                    <td>Estimasi Total Bandwidth (MB)</td>
+                    <td>{{ "%.2f"|format(status.metrics.upload_volume_mb + status.metrics.download_volume_mb)|replace('.', ',') }}</td>
+                    <td>Rp {{ "%.2f"|format(status.metrics.transmission_cost_idr|float)|replace('.', ',') }}</td>
                 </tr>
                 <tr>
                     <td rowspan="2"><b>Konsumsi Daya</b></td>
-                    <td>Energi Terpakai (Total Sistem)</td>
-                    <td>{{ "%.6f"|format(status.metrics.compute_energy_kwh|float) }} kWh</td>
-                    <td rowspan="2">Rp {{ "%.2f"|format(status.metrics.compute_cost_idr|float) }}</td>
+                    <td>Energi Terpakai (kWh)</td>
+                    <td>{{ "%.6f"|format(status.metrics.compute_energy_kwh|float)|replace('.', ',') }}</td>
+                    <td rowspan="2">Rp {{ "%.2f"|format(status.metrics.compute_cost_idr|float)|replace('.', ',') }}</td>
                 </tr>
                 <tr>
-                    <td>Durasi Pelatihan</td>
-                    <td>{{ status.metrics.training_duration_s }} s</td>
+                    <td>Durasi Pelatihan (detik)</td>
+                    <td>{{ (status.metrics.training_duration_s|string)|replace('.', ',') }}</td>
                 </tr>
             </tbody>
         </table>

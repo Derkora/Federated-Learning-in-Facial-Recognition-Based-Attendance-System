@@ -12,6 +12,7 @@ RUN echo "Acquire::Retries \"10\";" > /etc/apt/apt.conf.d/80-retries && \
     libglib2.0-0 \
     libopenblas0 \
     libgomp1 \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 ENV OMP_NUM_THREADS=1

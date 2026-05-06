@@ -18,10 +18,9 @@
 - **Detail**: Resolusi input dikunci pada **96 (width) x 112 (height)**.
 - **Justifikasi**: Fokus pada area vertikal wajah (portrait) memberikan kepadatan fitur yang lebih baik untuk model MobileFaceNet dibandingkan resolusi landscape atau square standar.
 
-## 5. Implementasi Flip Trick & CIM pada Inferensi
+## 5. Implementasi Flip Trick pada Inferensi
 - **Flip Trick**: Mengevaluasi wajah asli dan mirror (rata-rata embedding) untuk stabilitas skor.
-- **Confident Instant Match (CIM)**: Bypass temporal voting jika skor > 0.85 untuk respons instan.
-- **Justifikasi**: Meningkatkan *User Experience* (kecepatan absensi) tanpa mengorbankan keamanan (keamanan tetap terjaga melalui threshold 0.75 untuk kasus umum).
+- **Justifikasi**: Meningkatkan stabilitas pengenalan wajah terutama pada kondisi wajah yang tidak simetris atau pencahayaan miring.
 
 ## 6. Integrasi Database untuk Versioning Model
 - **Sistem**: Pelacakan versi model (v1, v2, dst.) dikelola secara permanen di database PostgreSQL.
@@ -32,16 +31,16 @@
 - **Justifikasi**: Mencegah "Catastrophic Forgetting" pada fitur wajah dasar yang sudah sangat baik dari model pretrained. Dengan fokus hanya pada lapisan akhir, model lebih stabil dalam mengenali identitas spesifik mahasiswa tanpa merusak ekstraktor fitur umum.
 
 ## 8. Adaptasi Lingkungan (Client-side BN Calibration)
-- **Update (Centralized)**: Menambahkan langkah kalibrasi BatchNorm pada client CL setelah download model global.
-- **Justifikasi**: Menghilangkan bias "Global BN" yang sering kali menyebabkan CL gagal pada pencahayaan yang berbeda dari distribusi training. Dengan kalibrasi lokal, model CL memiliki kemampuan adaptasi lingkungan yang setara dengan model pFedFace (FL).
+- **Update (Centralized)**: Menambahkan langkah kalibrasi BatchNorm pada client CL setelah download model global. Jika folder `raw_data` kosong, sistem otomatis menggunakan fallback ke folder `data/processed`.
+- **Justifikasi**: Menghilangkan bias "Global BN" yang sering kali menyebabkan CL gagal pada pencahayaan yang berbeda dari distribusi training. Dengan kalibrasi lokal, model CL memiliki kemampuan adaptasi lingkungan yang setara dengan model pFedFace (FL). Penggunaan data processed sebagai fallback memastikan kalibrasi selalu berhasil di lingkungan Docker.
 
-## 9. Penyelarasan Total Iterasi & SWA
-- **Detail**: CL (20 Epoch) disetarakan dengan FL (10 Round x 2 Epoch). SWA pada CL (4 epoch terakhir) disetarakan dengan Snapshot Averaging FL (2 ronde terakhir, 4 epoch total).
-- **Justifikasi**: Menjamin bahwa model pada kedua metode memiliki jumlah "pengalaman" yang sama terhadap data sebelum dibandingkan.
+## 9. Penyelarasan Total Iterasi
+- **Detail**: CL (10 Epoch) disetarakan dengan FL (10 Round x 1 Epoch).
+- **Justifikasi**: Menjamin bahwa model pada kedua metode memiliki jumlah "pengalaman" yang sama terhadap data sebelum dibandingkan. Pengurangan total iterasi dari 20 ke 10 dilakukan untuk mencegah overfitting pada dataset kecil (50 foto/user).
 
 ## 10. Paritas Algoritma Inferensi (Edge Side)
-- **Detail**: Implementasi **Flip Trick** (Average Horizontal Flip) dan **Temporal Voting** (Buffer 10 frame) disamakan di tingkat kode Python.
-- **Justifikasi**: Memastikan perbedaan akurasi benar-benar berasal dari metode pembelajaran (Centralized vs Federated), bukan karena perbedaan cara mesin inferensi bekerja di client.
+- **Detail**: Implementasi **Flip Trick** (Average Horizontal Flip) dan **Temporal Voting** (Buffer 3 frame) disamakan di tingkat kode Python.
+- **Justifikasi**: Memastikan perbedaan akurasi benar-benar berasal dari metode pembelajaran (Centralized vs Federated), bukan karena perbedaan cara mesin inferensi bekerja di client. Penggunaan buffer 3 frame memberikan responsivitas tinggi sekaligus menyaring noise transient secara optimal.
 
 ## 11. Standarisasi Centroid Generation
 - **Detail**: Jumlah gambar untuk ekstraksi fitur final (Centroid) ditetapkan sebanyak **50 gambar terbaik** (seleksi Laplacian) untuk kedua metode.
@@ -54,6 +53,7 @@
 | Perangkat | 3 Client | 2 Client | Fokus pada validasi orkestrasi & stabilitas jaringan. |
 | Model | Facenet | MobileFaceNet (Xiaomi) | Efisiensi parameter & kompatibilitas Mobile SDK. |
 | Dashboard | Streamlit | FastAPI + Vanilla JS | Latensi UI lebih rendah & kendali penuh atas request lifecycle. |
+| LR / Batch | 0.05 / 32 | 0.05 / 32 | Menggunakan Batch Size lebih besar (32) untuk menstabilkan gradien dan LR 0.05 untuk konvergensi optimal. |
 
 ## 13. Metodologi Pengumpulan Data
 
@@ -88,3 +88,22 @@ Dalam pengujian, ditemukan bahwa Client 2 (tanpa data pendaftar) memiliki akuras
 - **Validasi Citra Asli (Client 1)**: Client 1 menguji model menggunakan data citra asli (mentah) yang memiliki variansi sudut dan *noise*. Ini adalah pengujian yang "jujur" dan berat.
 - **Validasi Hybrid Embedding (Client 2)**: Karena Client 2 tidak memiliki data lokal subjek tertentu, ia menggunakan **Global Embeddings** (fitur yang sudah bersih) untuk validasi kelas tersebut. Mengenali fitur matang jauh lebih mudah daripada citra mentah, sehingga skor akurasi terlihat lebih tinggi.
 - **Kesimpulan**: Akurasi Client 1 lebih representatif terhadap performa di lapangan, sementara akurasi Client 2 mencerminkan keberhasilan mekanisme *Knowledge Sharing* dalam mempertahankan memori global.
+
+## 16. Peningkatan Augmentasi Cahaya (Lighting Robustness)
+- **Update**: Menambahkan `RandomAutocontrast` (p=0.2) dan memperkuat `ColorJitter` (brightness/contrast=0.5).
+- **Justifikasi**: Dataset asli (50 foto) diambil dalam kondisi cahaya yang seragam. Penambahan augmentasi ini memaksa model untuk mengenali fitur geometri wajah meskipun terdapat bayangan atau intensitas cahaya yang tidak merata (misal: cahaya dominan dari samping atau atas), sehingga lebih tangguh untuk penggunaan *real-world* di berbagai lokasi terminal.
+
+## 17. Penurunan Learning Rate untuk Konvergensi Halus
+- **Update**: Meningkatkan `initial_lr` dari 0.01 menjadi **0.05** dan Batch Size ke **32**.
+- **Justifikasi**: Penggunaan Batch Size 32 memberikan estimasi gradien yang jauh lebih stabil. Dengan gradien yang stabil, penggunaan LR 0.05 memungkinkan model belajar lebih cepat tanpa risiko osilasi berlebih, menghasilkan akurasi yang lebih konsisten (80%+).
+## 18. Pipa Augmentasi Premium untuk Robustness
+- **Update**: Menambahkan `RandomPerspective` (p=0.2), `GaussianBlur` (kernel=3), dan `RandomErasing` (p=0.1) ke dalam pipeline `trainer.py`.
+- **Justifikasi**: Menambah variasi geometris dan noise buatan untuk mensimulasikan kondisi kamera yang tidak fokus atau terhalang sebagian. Hal ini meningkatkan kemampuan generalisasi model terhadap kualitas gambar yang buruk di lapangan.
+
+## 19. Logging Diagnostik Berorientasi Produksi
+- **Detail**: Sistem kini mencatat log kecocokan tunggal yang paling akurat dengan timestamp dan skor kepercayaan.
+- **Justifikasi**: Memungkinkan pemantauan performa absensi secara real-time dan auditabilitas data presensi yang bersih tanpa kebisingan data riset mentah.
+
+## 20. Prioritas Source of Truth: Global Registry (Tier 2)
+- **Update**: Melakukan refactor pada logika pencocokan identitas (`attendance.py`) untuk memprioritaskan **Global Registry** daripada data gambar lokal untuk semua pengguna.
+- **Justifikasi**: Menghilangkan bias "overfitting lokal" di mana terminal cenderung gagal mengenali mahasiswa yang datanya ada di terminal tersebut karena model terlalu kaku terhadap 50 foto asli. Dengan menggunakan referensi global hasil agregasi server, stabilitas skor meningkat (dari ±0.3 menjadi ±0.8).

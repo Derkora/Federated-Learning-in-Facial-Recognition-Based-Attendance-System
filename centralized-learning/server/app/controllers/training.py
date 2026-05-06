@@ -1,15 +1,17 @@
 import os
-import datetime
+from datetime import datetime, timedelta, timezone
 import time
 import shutil
 import random
 import math
 import copy
+import gc
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
+from torchvision.transforms import InterpolationMode
 import torchvision.transforms as T
 from PIL import Image
 import cv2
@@ -21,17 +23,21 @@ from app.utils.freezing import set_model_freeze
 
 from app.utils.mobilefacenet import MobileFaceNet, ArcMarginProduct
 from app.db import models
+from app.db.db import SessionLocal
+from app.db.models import UserGlobal
 from app.server_manager_instance import cl_manager
 from app.config import (
-    UPLOAD_DIR, PROCESSED_DATA, MODEL_DIR, MODEL_PATH, 
+    UPLOAD_DIR, PROCESSED_DATA, MODEL_DIR, MODEL_PATH, REF_PATH,
     PRETRAINED_PATH, EMISSIONS_DIR, TRAINING_PARAMS, CODECARBON_AVAILABLE
 )
+from app.utils.logging import get_logger
 
+OfflineEmissionsTracker = None
 if CODECARBON_AVAILABLE:
     try:
         from codecarbon import OfflineEmissionsTracker
     except ImportError:
-        pass
+        CODECARBON_AVAILABLE = False
 
 class TrainingController:
     # Kontroler Utama untuk Pelatihan Terpusat (Centralized Training).
@@ -41,61 +47,73 @@ class TrainingController:
         # Inisialisasi direktori penyimpanan data dan model
         os.makedirs(PROCESSED_DATA, exist_ok=True)
         os.makedirs(MODEL_DIR, exist_ok=True)
+        self.logger = get_logger()
 
 
-    def fetch_data(self, wait_timeout=3600, expected_clients=None):
-        # Tahap 1: Sinkronisasi dan Menunggu Unggahan Data dari Terminal
-        print(f"[INIT] Memulai pemantauan unggahan data di {UPLOAD_DIR} (Timeout: 1 Jam)...", flush=True)
-        if expected_clients:
-            print(f"[OK] Menunggu data dari minimal {expected_clients} terminal.", flush=True)
-            
+    def _wait_for_stable_data(self, wait_timeout=3600, expected_clients=None):
+        # Helper untuk menunggu hingga data yang diunggah stabil (tidak bertambah lagi).
         start_time = time.time()
         last_img_count = -1
         stable_since = None
         last_log_time = 0
-        STABILIZATION_TIME = 15 # Detekasi kestabilan data (tidak ada perubahan jumlah berkas)
+        STABILIZATION_TIME = 60 
         
         while (time.time() - start_time) < wait_timeout:
             try:
+                if not os.path.exists(UPLOAD_DIR):
+                    os.makedirs(UPLOAD_DIR, exist_ok=True)
+                    
                 subdirs = [d for d in os.listdir(UPLOAD_DIR) if os.path.isdir(os.path.join(UPLOAD_DIR, d))]
                 img_count = 0
                 if len(subdirs) > 0:
                     img_count = sum([len(os.listdir(os.path.join(UPLOAD_DIR, d))) for d in subdirs])
                 
-                # Cek progres unggahan
+                unique_uploaders = set(cl_manager.uploader_map.values())
+                uploader_count = len(unique_uploaders)
+                
+                status_str = f"[{uploader_count}/{expected_clients if expected_clients else '?'}]"
+                
                 if img_count > 0:
                     if img_count != last_img_count:
                         last_img_count = img_count
                         stable_since = time.time()
-                        msg = f"Progres: {len(subdirs)} kelas, {img_count} gambar terdeteksi. Menunggu stabil..."
-                        print(f"[FASE 1] {msg}", flush=True)
-                        cl_manager.update_logs(msg)
+                        msg = f"Progres {status_str}: {len(subdirs)} kelas, {img_count} gambar terdeteksi."
+                        self.logger.info(msg)
                         cl_manager.update_received_data(UPLOAD_DIR)
                     else:
                         elapsed_stable = time.time() - stable_since
-                        if elapsed_stable >= STABILIZATION_TIME:
-                            msg = f"Data telah stabil! Total akhir: {len(subdirs)} kelas, {img_count} gambar."
-                            print(f"[SUCCESS] {msg}", flush=True)
-                            cl_manager.update_logs(msg)
-                            break
-                        else:
-                            if time.time() - last_log_time > 60:
-                                print(f"[INFO] Menunggu kestabilan data... ({int(STABILIZATION_TIME - elapsed_stable)} detik lagi)", flush=True)
-                                last_log_time = time.time()
+                        ready_to_break = (elapsed_stable >= STABILIZATION_TIME)
+                        if expected_clients:
+                            ready_to_break = ready_to_break and (uploader_count >= expected_clients)
+                        
+                        if ready_to_break:
+                            msg = f"Data {status_str} telah stabil! Total akhir: {len(subdirs)} kelas, {img_count} gambar."
+                            self.logger.success(msg)
+                            return True, last_img_count
                 else:
                     if time.time() - last_log_time > 60:
-                        print(f"[INFO] Menunggu unggahan pertama... (Durasi: {int(time.time() - start_time)} detik)", flush=True)
+                        self.logger.info(f"Menunggu unggahan data pertama... {status_str}")
                         last_log_time = time.time()
             except Exception as e:
-                print(f"[ERROR] Kesalahan saat pengecekan data: {e}", flush=True)
+                self.logger.error(f"Kesalahan saat pengecekan data masuk: {e}")
             
             time.sleep(5)
-        
-        if last_img_count <= 0:
-            return {"status": "error", "message": "Tidak ada data yang diterima hingga batas waktu."}
+        return False, last_img_count
+
+    def fetch_data(self, wait_timeout=3600, expected_clients=None):
+        # Tahap Sinkronisasi dan Menunggu Unggahan Data dari Terminal
+        self.logger.info(f"Memulai pemantauan unggahan data di {UPLOAD_DIR} (Batas Waktu: 1 Jam)...")
+        if expected_clients:
+            self.logger.info(f"Menunggu data masuk dari minimal {expected_clients} terminal klien.")
             
-        # Hitung Ukuran Payload
+        success, last_img_count = self._wait_for_stable_data(wait_timeout, expected_clients)
+        
+        if not success and last_img_count <= 0:
+            return {"status": "error", "message": "Tidak ada data yang diterima hingga batas waktu."}
+
+        # Hitung Ukuran Payload dan Jumlah Kelas terdaftar
         total_size = 0
+        subdirs = [d for d in os.listdir(UPLOAD_DIR) if os.path.isdir(os.path.join(UPLOAD_DIR, d))]
         for dirpath, _, filenames in os.walk(UPLOAD_DIR):
             for f in filenames: total_size += os.path.getsize(os.path.join(dirpath, f))
         
@@ -106,46 +124,91 @@ class TrainingController:
             "images": last_img_count
         }
 
-    def preprocess_and_balance(self):
-        # Tahap 2: Menyeleksi wajah terbaik dan melakukan pemotongan (Face Cropping)
+    def workflow_preprocess(self, wait_timeout=3600, expected_clients=None):
+        # Tahap Seleksi Laplacian (Ketajaman) dan Penyelarasan Landmark Wajah
+        tracker = None
+        energy_kwh = 0.0
+        if CODECARBON_AVAILABLE and OfflineEmissionsTracker is not None:
+            try:
+                tracker = OfflineEmissionsTracker(country_iso_code="IDN", measure_power_secs=15, log_level="error", save_to_file=False)
+                tracker.start()
+            except: pass
+
         try:
-            print("[INIT] Memulai proses seleksi ketajaman dan pemotongan wajah...", flush=True)
-            if os.path.exists(PROCESSED_DATA): 
-                shutil.rmtree(PROCESSED_DATA)
-            os.makedirs(PROCESSED_DATA, exist_ok=True)
+            if not os.path.exists(UPLOAD_DIR):
+                return {"status": "error", "message": "Dataset tidak ditemukan. Silakan impor data terlebih dahulu."}
             
-            # Pindai folder NRP yang diunggah
             folders = [f for f in os.listdir(UPLOAD_DIR) if os.path.isdir(os.path.join(UPLOAD_DIR, f))]
             total_folders = len(folders)
+            
+            if total_folders == 0:
+                return {"status": "error", "message": "Tidak ada data mahasiswa untuk diproses."}
+
+            self.logger.info(f"Memulai tahap preprocessing wajah untuk {total_folders} mahasiswa...")
+            
             for i, nrp_folder in enumerate(folders):
+                self.logger.info(f"[{i+1}/{total_folders}] Memproses: {nrp_folder}...")
                 src = os.path.join(UPLOAD_DIR, nrp_folder)
                 dst = os.path.join(PROCESSED_DATA, nrp_folder)
-                os.makedirs(dst, exist_ok=True)
                 
-                # 1. Seleksi Laplacian: Ambil Top 50 foto tertajam
+                # Paksa proses ulang agar pengguna dapat memantau log Laplace Variance
+                tmp_dst = dst + ".tmp"
+                if os.path.exists(tmp_dst): shutil.rmtree(tmp_dst)
+                os.makedirs(tmp_dst, exist_ok=True)
+                
                 top_images = face_handler.select_best_faces(src, n=50)
-                
-                msg = f"Memproses {len(top_images)} foto terbaik untuk {nrp_folder} ({i+1}/{total_folders})"
-                print(f"[OK] {msg}", flush=True)
-                cl_manager.update_logs(msg)
+                if not top_images:
+                    self.logger.warn(f"  ! Skip: Tidak ada citra wajah valid ditemukan di {nrp_folder}")
+                    continue
                 
                 for img_name in top_images:
-                    # 2. Deteksi & Alignment: Simpan hasil crop 112x96 dengan landmark alignment
-                    face_handler.detect_and_save(os.path.join(src, img_name), os.path.join(dst, img_name))
-            
-            print("[SUCCESS] Preprocessing selesai. Seluruh wajah telah disejajarkan (Aligned).")
+                    face_handler.detect_and_save(os.path.join(src, img_name), os.path.join(tmp_dst, img_name))
+                
+                if os.path.exists(dst): shutil.rmtree(dst)
+                os.rename(tmp_dst, dst)
+                
+                # Pengelolaan penggunaan memori RAM perangkat
+                if (i+1) % 5 == 0:
+                    gc.collect()
+
+            if tracker:
+                try:
+                    energy_kwh = tracker.stop()
+                    if energy_kwh is None: energy_kwh = 0.0
+                    cl_manager.update_metrics({"compute_energy_kwh": cl_manager.metrics.get("compute_energy_kwh", 0) + energy_kwh})
+                except: pass
+
+            self.logger.success("Preprocessing selesai. Seluruh wajah berhasil diselaraskan (Aligned).")
             return {"status": "success", "message": "Seleksi Laplacian dan Landmark Alignment selesai."}
         except Exception as e:
-            print(f"[ERROR] Gagal melakukan preprocessing: {e}")
+            if tracker: tracker.stop()
+            self.logger.error(f"Gagal melakukan preprocessing data wajah: {e}")
             return {"status": "error", "message": str(e)}
 
-    def _get_lr(self, epoch):
-        # LR Schedule Cosine Annealing (Smooth Decay)
-        initial_lr = TRAINING_PARAMS.get("initial_lr", 0.1)
+    def sync_nrp_from_processed(self, dbs):
+        # Sinkronisasi ulang tabel UserGlobal dari processed data untuk keteraturan NRP.
+        if not os.path.exists(PROCESSED_DATA): return
+        folders = sorted([f for f in os.listdir(PROCESSED_DATA) if os.path.isdir(os.path.join(PROCESSED_DATA, f))])
+        for folder in folders:
+            parts = folder.split("_", 1)
+            nrp = parts[0].strip()
+            name = parts[1].strip() if len(parts) > 1 else "Unknown"
+            
+            existing = dbs.query(models.UserGlobal).filter(models.UserGlobal.nrp == nrp).first()
+            if not existing:
+                dbs.add(models.UserGlobal(name=name, nrp=nrp))
+        dbs.commit()
+        self.logger.success(f"Sinkronisasi {len(folders)} identitas NRP dari folder processed berhasil.")
+
+
+    def _get_lr(self, epoch, total_epochs=None):
+        # Penyesuaian Learning Rate Menggunakan Cosine Annealing (Smooth Decay)
+        initial_lr = TRAINING_PARAMS.get("initial_lr", 0.05)
         min_lr = TRAINING_PARAMS.get("min_lr", 1e-4)
-        total_epochs = TRAINING_PARAMS.get("total_epochs", 20)
+        if total_epochs is None:
+            total_epochs = getattr(cl_manager, 'default_epochs', 10)
         
-        # Formula: min_lr + 0.5 * (initial_lr - min_lr) * (1 + cos(pi * epoch / total_epochs))
+        # Rumus: min_lr + 0.5 * (initial_lr - min_lr) * (1 + cos(pi * epoch / total_epochs))
         lr = min_lr + 0.5 * (initial_lr - min_lr) * (1 + math.cos(math.pi * epoch / total_epochs))
         return lr
 
@@ -153,9 +216,9 @@ class TrainingController:
         if epochs is None:
             epochs = cl_manager.default_epochs
             
-        # Tahap 3: Pelatihan Model MobileFaceNet
+        # Tahap Pelatihan Model Terpusat MobileFaceNet
         tracker = None
-        if CODECARBON_AVAILABLE:
+        if CODECARBON_AVAILABLE and OfflineEmissionsTracker is not None:
             try:
                 tracker = OfflineEmissionsTracker(
                     country_iso_code="IDN", 
@@ -167,87 +230,161 @@ class TrainingController:
             except: pass
 
         try:
-            print(f"[INIT] Memulai pelatihan dengan augmentasi dinamis ({epochs} epoch)...", flush=True)
-            transform = transforms.Compose([
-                transforms.Resize((112, 96)),
+            train_transform = transforms.Compose([
+                transforms.Resize((112, 96), interpolation=InterpolationMode.BILINEAR),
                 transforms.RandomHorizontalFlip(),
-                transforms.RandomRotation(degrees=15),
-                transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1), # Diperkuat
-                transforms.RandomGrayscale(p=0.1),
-                transforms.RandomApply([transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0))], p=0.3),
+                transforms.RandomRotation(degrees=20),
+                transforms.RandomPerspective(distortion_scale=0.2, p=0.3),
+                transforms.ColorJitter(brightness=(0.2, 1.5), contrast=(0.2, 1.5), saturation=0.4, hue=0.1),
+                transforms.RandomGrayscale(p=0.3),
+                transforms.RandomAutocontrast(p=0.2),
+                transforms.RandomApply([transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0))], p=0.4),
                 transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.2),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.50196, 0.50196, 0.50196]),
                 transforms.RandomErasing(p=0.1)
             ])
-            full_dataset = datasets.ImageFolder(PROCESSED_DATA, transform=transform)
-            num_classes = len(full_dataset.classes)
             
-            # Split 80/20 untuk training & validation (Menyelaraskan dengan FL)
-            train_size = int(0.8 * len(full_dataset))
-            val_size = len(full_dataset) - train_size
-            train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
+            val_transform = transforms.Compose([
+                transforms.Resize((112, 96), interpolation=InterpolationMode.BILINEAR),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.50196, 0.50196, 0.50196])
+            ])
+            
+            # Buat dua instance ImageFolder agar transformasinya terdekopel
+            train_dataset_full = datasets.ImageFolder(PROCESSED_DATA, transform=train_transform)
+            val_dataset_full = datasets.ImageFolder(PROCESSED_DATA, transform=val_transform)
+            num_classes = len(train_dataset_full.classes)
+            
+            # Lakukan pemisahan indeks secara deterministik
+            total_samples = len(train_dataset_full)
+            train_size = int(0.8 * total_samples)
+            val_size = total_samples - train_size
+            
+            # Gunakan seed deterministik agar train/val split persis sama
+            indices = list(range(total_samples))
+            random.seed(42)
+            random.shuffle(indices)
+            
+            train_indices = indices[:train_size]
+            val_indices = indices[train_size:]
+            
+            train_dataset = torch.utils.data.Subset(train_dataset_full, train_indices)
+            val_dataset = torch.utils.data.Subset(val_dataset_full, val_indices)
             
             batch_size = cl_manager.default_batch_size
             train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
             val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
             
-            print(f"[DATASET] Ditemukan {len(full_dataset)} gambar dalam {num_classes} kelas.", flush=True)
-            print(f"[DATASET] Split: {len(train_dataset)} latih, {len(val_dataset)} validasi.", flush=True)
-            cl_manager.update_logs(f"Dataset: {len(full_dataset)} gambar, {num_classes} kelas. Batch Size: {batch_size}")
+            self.logger.info(f"Dataset: {total_samples} gambar dalam {num_classes} kelas. Split terdekopel: {len(train_dataset)} latih, {len(val_dataset)} validasi (clean).")
+            self.logger.info(f"Ukuran Batch: {batch_size}")
             
             model = MobileFaceNet().to(DEVICE)
+            pretrained_ref = None
             if os.path.exists(PRETRAINED_PATH):
-                model.load_state_dict(torch.load(PRETRAINED_PATH, map_location=DEVICE))
+                pretrained_ref = torch.load(PRETRAINED_PATH, map_location=DEVICE)
+                model.load_state_dict(pretrained_ref)
+                pretrained_ref = {k: v.clone().detach().to(DEVICE) for k, v in pretrained_ref.items()}
             
-            # --- PENERAPAN PARTIAL FREEZING ---
-            # Opsi: "none", "early", "backbone"
+            ema_model = MobileFaceNet().to(DEVICE)
+            ema_model.load_state_dict(model.state_dict())
+            ema_model.eval()
+            for param in ema_model.parameters():
+                param.requires_grad = False
+
+            # Pembekuan Parsial Layer Awal Backbone
             set_model_freeze(model, freeze_mode="early")
             
-            metric_fc = ArcMarginProduct(128, num_classes).to(DEVICE)
-            # Head selalu aktif
+            metric_fc = ArcMarginProduct(128, num_classes, k=3).to(DEVICE)
             for param in metric_fc.parameters():
                 param.requires_grad = True
 
-            
-            # 3. SGD Optimizer dengan Per-Layer Weight Decay (Creator Standard)
-            # - PReLU: weight_decay = 0
-            # - Linear/Head: weight_decay = 4e-4
-            # - Lainnya/Backbone: weight_decay = 4e-5
-            criterion = nn.CrossEntropyLoss() # Gunakan Pure CrossEntropy (Tanpa Label Smoothing)
-            
-            # Pengelompokan Parameter
-            ignored_params = list(map(id, model.linear1.parameters()))
-            ignored_params += list(map(id, metric_fc.parameters()))
-            
-            prelu_params = []
-            for m in model.modules():
-                if isinstance(m, nn.PReLU):
-                    ignored_params += list(map(id, m.parameters()))
-                    prelu_params += [p for p in m.parameters() if p.requires_grad]
+            # Anchored Head Embedding: Inisialisasi bobot classifier head dengan embedding referensi terdaftar jika ada
+            if os.path.exists(REF_PATH):
+                try:
+                    refs = torch.load(REF_PATH, map_location=DEVICE)
+                    self.logger.info(f"Menginisialisasi classifier head dari file referensi: {REF_PATH} ({len(refs)} identitas)...")
+                    k = metric_fc.k
+                    anchored_count = 0
+                    with torch.no_grad():
+                        for idx, class_name in enumerate(train_dataset_full.classes):
+                            # Ambil NRP dari nama folder kelas
+                            nrp = class_name.split("_")[0] if "_" in class_name else class_name
+                            if nrp in refs:
+                                ref_emb = refs[nrp].to(DEVICE)
+                                # L2 normalisasi untuk memastikan kebersihan unit vector
+                                ref_emb = torch.nn.functional.normalize(ref_emb.view(-1), p=2, dim=0)
+                                # Copy ke semua sub-centers untuk kelas ini
+                                for sub_idx in range(k):
+                                    metric_fc.weight.data[idx * k + sub_idx] = ref_emb
+                                anchored_count += 1
+                    self.logger.success(f"Berhasil mengaitkan (anchor) {anchored_count}/{num_classes} kelas pada classifier head.")
+                except Exception as ref_err:
+                    self.logger.warn(f"Gagal memuat Anchored Head Embedding dari reference: {ref_err}")
+            else:
+                self.logger.info("File reference_embeddings.pth tidak ditemukan. Head diinisialisasi secara acak.")
 
+            # Inisialisasi Kriteria Loss Fungsi Utama CrossEntropy
+            criterion = nn.CrossEntropyLoss()
             
-            base_params = [p for p in model.parameters() if id(p) not in ignored_params and p.requires_grad]
+            # Pengelompokan parameter untuk weight decay spesifik SGD
+            backbone_decay = []
+            backbone_no_decay = []
+            for name, param in model.named_parameters():
+                if not param.requires_grad:
+                    continue
+                if 'prelu' in name.lower() or 'bias' in name.lower():
+                    backbone_no_decay.append(param)
+                else:
+                    backbone_decay.append(param)
 
-            
+            head_decay = []
+            head_no_decay = []
+            for name, param in metric_fc.named_parameters():
+                if not param.requires_grad:
+                    continue
+                if 'bias' in name.lower():
+                    head_no_decay.append(param)
+                else:
+                    head_decay.append(param)
+
+            # Inisialisasi optimizer SGD dengan momentum Nesterov
+            # Menggunakan parameter laju latih yang sama persis antara backbone dan head (agar setara dengan FL)
             optimizer = optim.SGD([
-                {'params': base_params, 'weight_decay': 4e-5},
-                {'params': [p for p in model.linear1.parameters() if p.requires_grad], 'weight_decay': 4e-4},
-
-                {'params': [p for p in metric_fc.parameters() if p.requires_grad], 'weight_decay': 4e-4},
-
-                {'params': prelu_params, 'weight_decay': 0.0}
+                {'params': backbone_decay, 'weight_decay': 4e-5},
+                {'params': backbone_no_decay, 'weight_decay': 0.0},
+                {'params': head_decay, 'weight_decay': 4e-4},
+                {'params': head_no_decay, 'weight_decay': 0.0}
             ], lr=self._get_lr(0), momentum=0.9, nesterov=True)
             
             epoch_history = []
-            swa_snapshots = []
-            swa_start = TRAINING_PARAMS.get("swa_start_epoch", 15)
             final_acc = 0
             start_time = time.time()
             
-            for epoch in range(epochs):
-                # 4. Perbarui Learning Rate sesuai Jadwal
-                current_lr = self._get_lr(epoch)
+            # Pemulihan dari Checkpoint Pelatihan Sebelumnya
+            start_epoch = 0
+            checkpoint_path = os.path.join(MODEL_DIR, "cl_training_checkpoint.pth")
+            if os.path.exists(checkpoint_path):
+                try:
+                    ckpt = torch.load(checkpoint_path, map_location=DEVICE)
+                    model.load_state_dict(ckpt['model_state_dict'])
+                    metric_fc.load_state_dict(ckpt['metric_fc_state_dict'])
+                    if 'ema_model_state_dict' in ckpt:
+                        ema_model.load_state_dict(ckpt['ema_model_state_dict'])
+                    start_epoch = ckpt.get('epoch', -1) + 1
+                    epoch_history = ckpt.get('history', [])
+                    if start_epoch < epochs:
+                        self.logger.info(f"Melanjutkan pelatihan CL dari Epoch {start_epoch+1}")
+                    else:
+                        self.logger.info("Checkpoint menunjukkan pelatihan terpusat telah selesai.")
+                except Exception as e:
+                    self.logger.warn(f"Gagal memuat checkpoint CL: {e}")
+
+            for epoch in range(start_epoch, epochs):
+                epoch_start = time.time()
+                
+                # Perbarui nilai Learning Rate per epoch secara seragam (sama persis dengan FL)
+                current_lr = self._get_lr(epoch, total_epochs=epochs)
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = current_lr
                 
@@ -257,47 +394,58 @@ class TrainingController:
                     img, label = img.to(DEVICE), label.to(DEVICE)
                     optimizer.zero_grad()
                     
-                    # Generate features once per batch
                     features = model(img)
-                    
                     output = metric_fc(features, label)
-                    loss = criterion(output, label)
+                    ce_loss = criterion(output, label)
+                    
+                    # Hitung L2-SP (L2-Regularization terhadap bobot awal/pre-trained)
+                    # Ini adalah metode regulasi terpusat standar (ICML 2018) untuk mencegah overfit transfer learning.
+                    l2_sp_loss = torch.tensor(0.0, device=DEVICE)
+                    if pretrained_ref is not None:
+                        mu = 0.05 # Nilai parameter penalti disamakan persis dengan FL
+                        for name, param in model.named_parameters():
+                            if name in pretrained_ref:
+                                l2_sp_loss += (mu / 2) * torch.norm(param - pretrained_ref[name])**2
+                                
+                    loss = ce_loss + l2_sp_loss
                     loss.backward()
                     optimizer.step()
                     
                     total_loss += loss.item()
                     
-                    # METRIK: Hitung Akurasi Sebenarnya (Tanpa Margin Pelatihan) - Functional Parity with FL
+                    # Pembaruan Rerata Konsensus Bobot secara Temporal (EMA)
+                    # Meniru proses consensus averaging di FL untuk menstabilkan konvergensi domain
                     with torch.no_grad():
-                        # Gunakan output murni (cosine similarity * s) untuk metrik akurasi dashboard
-                        # Ini konsisten dengan cara FL menghitung akurasi agar tidak terlihat 0% di awal.
-                        logits_for_acc = F.linear(F.normalize(features), F.normalize(metric_fc.weight)) * metric_fc.s
+                        for ema_param, param in zip(ema_model.parameters(), model.parameters()):
+                            ema_param.data.mul_(0.99).add_(param.data, alpha=0.01)
+                        for ema_buffer, buffer in zip(ema_model.buffers(), model.buffers()):
+                            ema_buffer.copy_(buffer)
+
+                    # Hitung metrik akurasi tanpa ArcFace Margin untuk visualisasi
+                    with torch.no_grad():
+                        logits_for_acc = metric_fc.get_logits(features)
                         _, pred = torch.max(logits_for_acc.data, 1)
                         total += label.size(0)
                         correct += (pred == label).sum().item()
                     
-                    # Log progres setiap 10 batch
+                    # Log progres per batch data latih
                     if (b + 1) % 10 == 0 or (b + 1) == len(train_loader):
                         batch_acc = round(100 * correct / total, 2)
-                        print(f"  [TRAIN] Epoch {epoch+1}: Batch {b+1}/{len(train_loader)} - Loss: {loss.item():.4f} - Akurasi: {batch_acc}%", flush=True)
+                        self.logger._log("TRAIN", f"  Epoch {epoch+1}: Batch {b+1}/{len(train_loader)} - Loss: {loss.item():.4f} - Akurasi: {batch_acc}%")
                 
-                # 5. Validation Loop (Menyelaraskan dengan metrik FL)
-                model.eval()
+                # Jalankan Evaluasi Validasi Internal menggunakan model EMA (model averaged yang stabil)
+                ema_model.eval()
                 val_correct, val_total, val_loss = 0, 0, 0.0
                 with torch.no_grad():
                     for img, label in val_loader:
                         img, label = img.to(DEVICE), label.to(DEVICE)
                         
-                        # Flip Trick: Ambil rata-rata embedding asli dan mirror
-                        features_orig = model(img)
-                        features_flip = model(torch.flip(img, [3]))
+                        features_orig = ema_model(img)
+                        features_flip = ema_model(torch.flip(img, [3]))
                         
                         features = torch.nn.functional.normalize(features_orig + features_flip, p=2, dim=1)
+                        logits = metric_fc.get_logits(features)
                         
-                        # Hitung Logits Murni (Cosine Similarity * Scale) untuk Akurasi
-                        logits = F.linear(features, F.normalize(metric_fc.weight)) * metric_fc.s
-                        
-                        # Hitung Loss menggunakan ArcFace Margin (Hanya pada fitur asli untuk validasi loss)
                         output = metric_fc(features_orig, label)
                         loss = criterion(output, label)
                         
@@ -311,42 +459,55 @@ class TrainingController:
                 
                 epoch_acc = round(100 * correct / total, 2)
                 avg_loss = round(total_loss / len(train_loader), 4)
-                epoch_history.append({
+                
+                now_wib = datetime.now(timezone(timedelta(hours=7)))
+                epoch_duration = round(time.time() - epoch_start, 2)
+                current_epoch_data = {
                     "epoch": epoch + 1, 
                     "loss": avg_loss, 
                     "accuracy": epoch_acc,
                     "val_loss": val_avg_loss,
-                    "val_accuracy": val_acc
-                })
+                    "val_accuracy": val_acc,
+                    "duration_s": epoch_duration,
+                    "timestamp": now_wib.strftime("%H:%M:%S"),
+                    "timestamp_raw": now_wib
+                }
+                epoch_history.append(current_epoch_data)
                 
-                msg = f"Epoch {epoch+1}/{epochs} | Akurasi: {epoch_acc}% | Validasi: {val_acc}% | Loss: {avg_loss}"
-                print(f"[OK] {msg}", flush=True)
-                cl_manager.update_logs(msg)
+                # Sinkronkan perkembangan real-time ke dasbor server
+                cl_manager.update_metrics({
+                    "accuracy": val_acc,
+                    "loss": val_avg_loss,
+                    "epoch_history": [current_epoch_data]
+                })
+
+                msg = f"Epoch {epoch+1}/{epochs} | Akurasi: {epoch_acc/100:.4f} | Loss: {avg_loss:.4f} | Val Akurasi (EMA): {val_acc/100:.4f} | Val Loss (EMA): {val_avg_loss:.4f}"
+                self.logger.success(msg)
+
                 final_acc = val_acc 
                 
-                # SWA Snapshot Collection (Epoch 15-20)
-                if epoch >= swa_start:
-                    print(f"[SWA] Menyimpan snapshot dari epoch {epoch+1}...", flush=True)
-                    swa_snapshots.append(copy.deepcopy(model.state_dict()))
+                # Tulis file checkpoint lokal per epoch secara atomik
+                try:
+                    tmp_ckpt_path = checkpoint_path + ".tmp"
+                    torch.save({
+                        'epoch': epoch,
+                        'model_state_dict': model.state_dict(),
+                        'ema_model_state_dict': ema_model.state_dict(),
+                        'metric_fc_state_dict': metric_fc.state_dict(),
+                        'history': epoch_history
+                    }, tmp_ckpt_path)
+                    os.replace(tmp_ckpt_path, checkpoint_path)
+                except: pass
             
-            # --- STOCHASTIC WEIGHT AVERAGING (SWA) EXECUTION ---
-            if len(swa_snapshots) > 0:
-                print(f"[SWA] Melakukan rata-rata bobot dari {len(swa_snapshots)} snapshot...", flush=True)
-                swa_state_dict = copy.deepcopy(swa_snapshots[0])
-                for key in swa_state_dict:
-                    # Rata-rata per-layer bobot dari semua snapshot
-                    for i in range(1, len(swa_snapshots)):
-                        swa_state_dict[key] += swa_snapshots[i][key]
-                    swa_state_dict[key] = torch.div(swa_state_dict[key], len(swa_snapshots))
-                
-                model.load_state_dict(swa_state_dict)
-                print("[SWA] Bobot model berhasil dirata-ratakan. Stabilitas & Generalisasi meningkat.", flush=True)
-                cl_manager.update_logs("Snapshot Averaging (SWA) berhasil diterapkan.")
+            # Simpan model EMA yang stabil sebagai hasil pelatihan akhir secara atomik
+            tmp_model_path = MODEL_PATH + ".tmp"
+            torch.save(ema_model.state_dict(), tmp_model_path)
+            os.replace(tmp_model_path, MODEL_PATH)
             
-            torch.save(model.state_dict(), MODEL_PATH)
-            cl_manager.update_logs("Pelatihan selesai. Model berhasil disimpan.")
+            if os.path.exists(checkpoint_path): os.remove(checkpoint_path)
+            self.logger.success("Pelatihan selesai. Model EMA berhasil disimpan.")
             
-            # 5. Ambil data energi jika CodeCarbon aktif
+            # Catat emisi energi dari pelacak CodeCarbon
             energy_kwh = 0
             if tracker:
                 try:
@@ -363,28 +524,26 @@ class TrainingController:
             }
         except Exception as e:
             if tracker: tracker.stop()
-            print(f"[ERROR] Pelatihan gagal: {e}")
+            self.logger.error(f"Pelatihan model terpusat gagal: {e}")
             return {"status": "error", "message": str(e)}
 
     def generate_reference_and_eval(self, dbs=None):
-        # Tahap 4: Pembuatan Basis Data Referensi Wajah dan Evaluasi Transmisi
+        # Tahap Pembuatan Basis Data Referensi Wajah dan Evaluasi Transmisi
         try:
-            print("[INIT] Membuat basis data referensi identitas...", flush=True)
+            self.logger.info("Membuat basis data referensi identitas mahasiswa...")
             
-            # --- PERSISTENSI VERSI (Simpan ke DB sebelum generate registry) ---
-            if dbs:
-                try:
-                    new_v = models.ModelVersion(notes=f"Dibuat pada {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                    dbs.add(new_v)
-                    dbs.commit()
-                    dbs.refresh(new_v)
-                    print(f"[SUCCESS] Versi model v{new_v.version_id} disimpan.")
-                except Exception as e:
-                    print(f"[ERROR] Gagal menyimpan versi: {e}")
-                    dbs.rollback()
-            
+            # Instansiasi model murni evaluasi
             model = MobileFaceNet().to(DEVICE)
             model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
+            
+            # Lakukan kalibrasi model (AdaBN) secara stabil menggunakan data latih processed 
+            try:
+                # BN Calibration dilewati agar model tetap menggunakan statistik BN yang stabil dari pelatihan (EMA).
+                # Ini mencegah bias statistik BN dari batch terakhir calib_loader, yang menurunkan similarity score di client.
+                self.logger.info("Menjaga statistik BN asli hasil training (EMA) demi stabilitas jarak jauh & low-light...")
+            except Exception as calib_err:
+                self.logger.warn(f"Gagal melewati kalibrasi BN: {calib_err}")
+                
             model.eval()
             
             ref_db = {}
@@ -393,25 +552,31 @@ class TrainingController:
                     p = os.path.join(PROCESSED_DATA, nrp)
                     if not os.path.isdir(p): continue
                     all_files = sorted(os.listdir(p))
-                    # Gunakan 50 gambar terbaik untuk rata-rata yang lebih stabil (Hardened)
                     train_files = all_files[:50]
                     
-                    embs = []
+                    tensors = []
                     for f in train_files:
                         try:
                             img_p = Image.open(os.path.join(p, f)).convert('RGB')
-                            emb = face_handler.get_embedding(model, img_p)
-                            embs.append(emb)
+                            if img_p.size != (96, 112):
+                                img_p = img_p.resize((96, 112), Image.BILINEAR)
+                            tensors.append(face_handler.transform(img_p))
                         except: continue
                         
-                    if embs:
-                        # Rata-rata 50 gambar dan RE-NORMALISASI ke unit vector (PENTING untuk ArcFace)
-                        centroid = torch.mean(torch.stack(embs), dim=0)
-                        centroid = torch.nn.functional.normalize(centroid, p=2, dim=1)
-                        ref_db[nrp] = centroid.cpu()
+                    if tensors:
+                        # Batch forward pass for optimal performance
+                        batch_tensor = torch.stack(tensors).to(DEVICE)
+                        batch_flipped = torch.flip(batch_tensor, [3])
+                        with torch.no_grad():
+                            emb_orig = model(batch_tensor)
+                            emb_flip = model(batch_flipped)
+                            combined = F.normalize(emb_orig + emb_flip, p=2, dim=1)
+                            centroid = torch.mean(combined, dim=0)
+                            centroid = F.normalize(centroid.unsqueeze(0), p=2, dim=1)
+                            ref_db[nrp] = centroid.cpu()
 
-                # --- SELF-TEST: Verifikasi integritas embedding pada server ---
-                print("[INIT] Menjalankan uji mandiri integritas model...", flush=True)
+                # Jalankan uji mandiri konsistensi model server
+                self.logger.info("Menjalankan uji mandiri integritas embedding...")
                 test_results = []
                 for nrp, centroid in ref_db.items():
                     p = os.path.join(PROCESSED_DATA, nrp)
@@ -420,35 +585,48 @@ class TrainingController:
                     files = sorted(os.listdir(p))
                     if not files: continue
                     
-                    # Test dengan gambar pertama (seharusnya similarity sangat tinggi, >0.9)
                     first_img = files[0]
                     img_p = Image.open(os.path.join(p, first_img)).convert('RGB')
                     test_emb = face_handler.get_embedding(model, img_p).cpu()
                     
-                    # Cosine Similarity (Keduanya unit vector, dot product = cos_sim)
-                    # Pastikan shape (1, 128) -> (128,) untuk dot product yang benar
                     sim = torch.sum(test_emb.view(-1) * centroid.view(-1)).item()
                     test_results.append(sim)
-                    print(f"  > [TEST] nrp: {nrp} | Sim: {sim:.4f}")
+                    self.logger.info(f"  > [UJI] nrp: {nrp} | Similarity: {sim:.4f}")
                 
                 avg_self_sim = sum(test_results) / len(test_results) if test_results else 0
-                print(f"[SUCCESS] Uji mandiri selesai. Rata-rata Similarity: {avg_self_sim:.4f}")
+                self.logger.success(f"Uji mandiri selesai. Rata-rata Similarity Wajah: {avg_self_sim:.4f}")
             
-            torch.save(ref_db, f"{MODEL_DIR}/reference_embeddings.pth")
+            self.logger.success(f"Registri identitas ({len(ref_db)} identitas) berhasil disimpan.")
+            ref_path = f"{MODEL_DIR}/reference_embeddings.pth"
+            tmp_ref_path = ref_path + ".tmp"
+            torch.save(ref_db, tmp_ref_path)
+            os.replace(tmp_ref_path, ref_path)
+
+            # Catat dan simpan versi model baru ke basis data server
+            if dbs:
+                try:
+                    now_wib = datetime.now(timezone(timedelta(hours=7)))
+                    new_v = models.ModelVersion(notes=f"Dibuat pada {now_wib.strftime('%Y-%m-%d %H:%M:%S')}")
+                    dbs.add(new_v)
+                    dbs.commit()
+                    dbs.refresh(new_v)
+                    self.logger.success(f"Versi model v{new_v.version_id} berhasil disimpan ke database.")
+                except Exception as e:
+                    self.logger.error(f"Gagal menyimpan versi model baru ke database: {e}")
+                    dbs.rollback()
             
-            # Hitung Ukuran Aset yang akan didownload client (Model + Registri)
+            # Hitung total volume transmisi download klien
             download_size = 0
             if os.path.exists(MODEL_PATH): download_size += os.path.getsize(MODEL_PATH)
             REF_PATH = f"{MODEL_DIR}/reference_embeddings.pth"
             if os.path.exists(REF_PATH): download_size += os.path.getsize(REF_PATH)
 
-            # 5. Kembalikan volume transmisi
             return {
                 "status": "success",
                 "download_volume_mb": round(download_size / (1024 * 1024), 2)
             }
         except Exception as e:
-            print(f"[ERROR] Gagal membuat registri: {e}")
+            self.logger.error(f"Gagal membuat basis data referensi wajah: {e}")
             return {"status": "error", "message": str(e)}
 
 training_controller = TrainingController()

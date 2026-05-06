@@ -1,0 +1,303 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
+    <h1 style="color: var(--accent); margin: 0; font-size: 1.8rem;">Manajemen Video Simulasi</h1>
+    <p style="color: var(--text-muted); margin-top: 0.5rem;">Unggah berkas video simulasi presensi kelas (.mp4) ke server untuk di-stream secara langsung oleh terminal edge client.</p>
+</div>
+
+<div class="layout-grid" style="grid-template-columns: 1fr 1fr; gap: 2rem;">
+    <!-- Bagian Kiri: Unggah Video Baru -->
+    <div class="glass" style="padding: 1.5rem; display: flex; flex-direction: column;">
+        <h3 style="color: var(--accent); margin-top: 0; margin-bottom: 1.5rem; font-size: 1.2rem;">Unggah Berkas Baru</h3>
+        
+        <div id="drop-zone" style="border: 2px dashed rgba(59, 130, 246, 0.4); border-radius: 12px; padding: 2.5rem 1.5rem; text-align: center; background: rgba(59, 130, 246, 0.03); cursor: pointer; transition: all 0.3s; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 200px;">
+            <div style="color: #64748b; font-size: 0.95rem; margin-bottom: 1rem;">
+                Tarik dan letakkan berkas video di sini atau klik untuk memilih berkas (.mp4)
+            </div>
+            <button onclick="document.getElementById('video-file-input').click()" class="btn btn-primary" style="padding: 0.6rem 1.2rem;">Pilih Berkas</button>
+            <input type="file" id="video-file-input" accept=".mp4" style="display: none;" multiple onchange="handleFileSelect()">
+        </div>
+        
+        <div id="selected-file-info" style="display: none; margin-top: 1rem; padding: 0.8rem; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; font-size: 0.85rem;">
+            <div id="selected-file-info-content"></div>
+        </div>
+
+        <div id="upload-progress-container" style="display: none; margin-top: 1.5rem;">
+            <div style="display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.4rem;">
+                <span>Mengunggah berkas video...</span>
+                <span id="upload-progress-percent">0%</span>
+            </div>
+            <div style="width: 100%; height: 8px; background: rgba(0,0,0,0.3); border-radius: 4px; overflow: hidden; border: 1px solid rgba(255,255,255,0.05);">
+                <div id="upload-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #3b82f6, #60a5fa); transition: width 0.1s;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bagian Kanan: Daftar Video yang Tersedia -->
+    <div class="glass" style="padding: 1.5rem; display: flex; flex-direction: column;">
+        <h3 style="color: var(--accent); margin-top: 0; margin-bottom: 1.5rem; font-size: 1.2rem; display: flex; justify-content: space-between; align-items: center;">
+            <span>Daftar Video di Server</span>
+            <button onclick="loadVideos()" class="btn" style="background: rgba(255,255,255,0.08); color: #f8fafc; border: 1px solid rgba(255,255,255,0.12); padding: 0.3rem 0.6rem; border-radius: 6px; font-size: 0.75rem; cursor: pointer;">Segarkan</button>
+        </h3>
+        
+        <div id="video-list-container" style="flex-grow: 1; min-height: 250px; max-height: 400px; overflow-y: auto;">
+            <div style="color: var(--text-muted); font-style: italic; text-align: center; padding: 2rem;">Sedang memuat daftar video...</div>
+        </div>
+    </div>
+</div>
+
+<style>
+    #drop-zone.dragover {
+        border-color: #3b82f6;
+        background: rgba(59, 130, 246, 0.1);
+    }
+</style>
+
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        setupDragAndDrop();
+        loadVideos();
+    });
+
+    function setupDragAndDrop() {
+        const dropZone = document.getElementById('drop-zone');
+        
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                dropZone.classList.add('dragover');
+            }, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('dragover');
+            }, false);
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            if (files.length > 0) {
+                const fileInput = document.getElementById('video-file-input');
+                fileInput.files = files;
+                handleFileSelect();
+            }
+        });
+
+        dropZone.addEventListener('click', (e) => {
+            if (e.target.tagName !== 'BUTTON') {
+                document.getElementById('video-file-input').click();
+            }
+        });
+    }
+
+    let selectedFiles = [];
+
+    function handleFileSelect() {
+        const fileInput = document.getElementById('video-file-input');
+        const files = Array.from(fileInput.files);
+        
+        selectedFiles = files.filter(file => {
+            if (!file.name.toLowerCase().endsWith('.mp4')) {
+                alert(`Berkas "${file.name}" dilewati karena bukan berkas .mp4`);
+                return false;
+            }
+            return true;
+        });
+        
+        if (selectedFiles.length > 0) {
+            let infoHtml = '<div style="font-weight: bold; color: #f8fafc; margin-bottom: 8px;">Berkas Terpilih (' + selectedFiles.length + '):</div>';
+            infoHtml += '<ul style="margin: 0; padding-left: 1.2rem; color: var(--accent); font-family: \'JetBrains Mono\', monospace; font-size: 0.8rem; max-height: 120px; overflow-y: auto; margin-bottom: 15px; text-align: left;">';
+            selectedFiles.forEach(file => {
+                infoHtml += `<li>${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)</li>`;
+            });
+            infoHtml += '</ul>';
+            infoHtml += '<button onclick="uploadAllVideos()" class="btn" style="background: linear-gradient(135deg, #10b981, #059669); color: white; font-weight: bold; width: 100%; border: none; padding: 0.6rem 1rem; border-radius: 8px; cursor: pointer;">Mulai Unggah Semua</button>';
+            
+            document.getElementById('selected-file-info-content').innerHTML = infoHtml;
+            document.getElementById('selected-file-info').style.display = 'block';
+        } else {
+            document.getElementById('selected-file-info').style.display = 'none';
+        }
+    }
+
+    async function uploadAllVideos() {
+        if (selectedFiles.length === 0) return;
+        
+        const progressContainer = document.getElementById('upload-progress-container');
+        const progressBar = document.getElementById('upload-progress-bar');
+        const progressPercent = document.getElementById('upload-progress-percent');
+        const progressLabel = progressContainer.querySelector('span:first-child');
+        
+        progressContainer.style.display = 'block';
+        
+        // Nonaktifkan tombol selama proses unggah
+        const uploadBtn = document.querySelector('#selected-file-info-content button');
+        if (uploadBtn) uploadBtn.disabled = true;
+        
+        for (let i = 0; i < selectedFiles.length; i++) {
+            const file = selectedFiles[i];
+            progressLabel.textContent = `Mengunggah (${i + 1}/${selectedFiles.length}): ${file.name}...`;
+            progressBar.style.width = '0%';
+            progressPercent.textContent = '0%';
+            
+            try {
+                await new Promise((resolve, reject) => {
+                    const xhr = new XMLHttpRequest();
+                    xhr.open('POST', '/api/video/upload', true);
+                    xhr.setRequestHeader('X-File-Name', file.name);
+                    
+                    xhr.upload.onprogress = function(e) {
+                        if (e.lengthComputable) {
+                            const percent = Math.round((e.loaded / e.total) * 100);
+                            progressBar.style.width = percent + '%';
+                            progressPercent.textContent = percent + '%';
+                        }
+                    };
+                    
+                    xhr.onload = function() {
+                        if (xhr.status === 200) {
+                            try {
+                                const res = JSON.parse(xhr.responseText);
+                                if (res.status === 'success') {
+                                    resolve();
+                                } else {
+                                    reject(new Error(res.message));
+                                }
+                            } catch (err) {
+                                reject(new Error('Respon server tidak valid.'));
+                            }
+                        } else {
+                            reject(new Error('Gagal dengan status: ' + xhr.status));
+                        }
+                    };
+                    
+                    xhr.onerror = function() {
+                        reject(new Error('Koneksi terputus.'));
+                    };
+                    
+                    xhr.send(file);
+                });
+            } catch (err) {
+                alert(`Gagal mengunggah "${file.name}": ${err.message}`);
+            }
+        }
+        
+        alert('Semua video selesai diunggah!');
+        selectedFiles = [];
+        document.getElementById('video-file-input').value = '';
+        document.getElementById('selected-file-info').style.display = 'none';
+        progressContainer.style.display = 'none';
+        loadVideos();
+    }
+
+    async function loadVideos() {
+        const container = document.getElementById('video-list-container');
+        container.innerHTML = '<div style="color: var(--text-muted); font-style: italic; text-align: center; padding: 2rem;">Sedang memuat daftar video...</div>';
+        
+        try {
+            const res = await fetch('/api/video/list');
+            const data = await res.json();
+            
+            if (data.status === 'success') {
+                const list = data.videos || [];
+                if (list.length === 0) {
+                    container.innerHTML = '<div style="color: var(--text-muted); font-style: italic; text-align: center; padding: 3rem;">Tidak ada video simulasi yang tersimpan di server.</div>';
+                    return;
+                }
+                
+                let html = `
+                    <table style="width: 100%; border-collapse: collapse; color: #fff; font-size: 0.9rem;">
+                        <thead>
+                            <tr style="border-bottom: 2px solid rgba(255,255,255,0.08); text-align: left; color: var(--accent);">
+                                <th style="padding: 0.8rem 0.5rem; font-weight: 600;">Nama Berkas</th>
+                                <th style="padding: 0.8rem 0.5rem; width: 100px; text-align: right; font-weight: 600;">Aksi</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
+                
+                list.forEach(video => {
+                    html += `
+                        <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); transition: background 0.2s;">
+                            <td onclick="playVideoPreview('${video}')" style="padding: 0.8rem 0.5rem; font-family: 'JetBrains Mono', monospace; color: var(--accent); cursor: pointer; text-decoration: underline; word-break: break-all;" title="Klik untuk memutar pratinjau video">${video}</td>
+                            <td style="padding: 0.8rem 0.5rem; text-align: right;">
+                                <button onclick="deleteVideo('${video}')" class="btn" style="background: linear-gradient(135deg, #ef4444, #dc2626); color: white; padding: 0.4rem 0.8rem; border-radius: 6px; font-size: 0.8rem; font-weight: bold; border: none; cursor: pointer; transition: all 0.2s;">Hapus</button>
+                            </td>
+                        </tr>
+                    `;
+                });
+                
+                html += `
+                        </tbody>
+                    </table>
+                `;
+                container.innerHTML = html;
+            } else {
+                container.innerHTML = `<div style="color: #ef4444; text-align: center; padding: 2rem;">Gagal memuat list: ${data.message}</div>`;
+            }
+        } catch (e) {
+            container.innerHTML = `<div style="color: #ef4444; text-align: center; padding: 2rem;">Gagal menghubungi server: ${e.message}</div>`;
+        }
+    }
+
+    function playVideoPreview(videoName) {
+        const previewCard = document.getElementById('preview-card');
+        const previewTitle = document.getElementById('preview-title');
+        const player = document.getElementById('preview-video-player');
+        
+        previewTitle.textContent = `Pratinjau Video: ${videoName}`;
+        player.src = `/api/video/stream/${videoName}`;
+        previewCard.style.display = 'block';
+        
+        // Scroll secara halus ke bagian pemutar video
+        previewCard.scrollIntoView({ behavior: 'smooth' });
+        
+        player.play().catch(e => {
+            console.log("Autoplay dicegah oleh peramban: ", e);
+        });
+    }
+
+    async function deleteVideo(filename) {
+        if (!confirm(`Apakah Anda yakin ingin menghapus video "${filename}" beserta seluruh data cache wajah secara permanen dari server?`)) {
+            return;
+        }
+        
+        const previewCard = document.getElementById('preview-card');
+        const player = document.getElementById('preview-video-player');
+        if (previewCard.style.display === 'block' && player.src.includes(encodeURIComponent(filename))) {
+            player.pause();
+            player.src = '';
+            previewCard.style.display = 'none';
+        }
+        
+        try {
+            const res = await fetch(`/api/video/delete/${filename}`, {
+                method: 'DELETE'
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                alert('Video dan cache berhasil dihapus!');
+                loadVideos();
+            } else {
+                alert('Gagal menghapus video: ' + data.message);
+            }
+        } catch (e) {
+            alert('Kesalahan jaringan: ' + e.message);
+        }
+    }
+</script>
+
+<!-- Bagian Bawah: Pratinjau Video Pemutar Simulasi Terintegrasi -->
+<div id="preview-card" class="glass" style="padding: 2rem; margin-top: 2rem; display: none;">
+    <h3 id="preview-title" style="color: var(--accent); margin-top: 0; margin-bottom: 1.5rem; font-size: 1.2rem;">Pratinjau Video: -</h3>
+    <div style="width: 100%; max-width: 800px; margin: 0 auto; background: #000; border-radius: 12px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+        <video id="preview-video-player" controls style="width: 100%; display: block; max-height: 480px;">
+            Browser Anda tidak mendukung pemutaran video HTML5.
+        </video>
+    </div>
+</div>
+{% endblock %}

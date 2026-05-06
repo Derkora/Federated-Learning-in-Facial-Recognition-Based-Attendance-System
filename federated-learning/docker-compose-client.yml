@@ -6,6 +6,7 @@ services:
       context: ./client
       dockerfile: Dockerfile
     container_name: client_fl_balanced
+    restart: unless-stopped
     privileged: true
     ports:
       - "8080:8080"
@@ -23,7 +24,7 @@ services:
     devices:
       - /dev/video0:/dev/video0
     volumes:
-      - ./client/data:/app/data
+      - fl-client-data:/app/data
       - ${RAW_DATA_PATH_CLIENT}:/app/raw_data/students
     networks:
       - fl-network
@@ -31,3 +32,6 @@ services:
 networks:
   fl-network:
     driver: bridge
+
+volumes:
+  fl-client-data:

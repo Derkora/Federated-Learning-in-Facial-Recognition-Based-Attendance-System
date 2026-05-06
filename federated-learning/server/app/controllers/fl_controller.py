@@ -11,11 +11,12 @@ from app.config import ECONOMICS, CODECARBON_AVAILABLE, DATA_ROOT, REGISTRY_PATH
 from app.utils.mobilefacenet import MobileFaceNet
 from app.utils.aggregation_utils import aggregate_and_save_registry_assets
 
+OfflineEmissionsTracker = None
 if CODECARBON_AVAILABLE:
     try:
         from codecarbon import OfflineEmissionsTracker
     except ImportError:
-        pass
+        CODECARBON_AVAILABLE = False
 
 class FLController:
     # Orkestrator Pembelajaran Terfederasi (Federated Learning)
@@ -53,29 +54,29 @@ class FLController:
 
     def _orchestrate_routine(self, session_id: str, rounds: int, min_clients: int):
         # Alur kerja teknis per fase:
-        # 1. Konektivitas: Memastikan terminal cukup untuk memulai.
-        # 2. Discovery: Sinkronisasi daftar mahasiswa global.
-        # 3. Preprocessing: Cropping wajah di sisi terminal.
-        # 4. Training: Pelatihan model menggunakan algoritma Flower.
-        # 5. Registry: Penggabungan fitur wajah (Centroids) untuk pengenalan.
+        # Konektivitas: Memastikan terminal cukup untuk memulai.
+        # Discovery: Sinkronisasi daftar mahasiswa global.
+        # Preprocessing: Cropping wajah di sisi terminal.
+        # Training: Pelatihan model menggunakan algoritma Flower.
+        # Registry: Penggabungan fitur wajah (Centroids) untuk pengenalan.
         
         try:
             db = SessionLocal()
-            self.fl_manager.start_phase("Data Preparation")
+            self.fl_manager.start_phase("discovery")
             self.fl_manager.ensure_model_seeded(db)
             db.close()
 
             # Inisialisasi Emission Tracker (CodeCarbon)
             tracker = None
-            if CODECARBON_AVAILABLE:
+            if CODECARBON_AVAILABLE and OfflineEmissionsTracker is not None:
                 try:
                     emissions_dir = os.path.join(DATA_ROOT, "emissions")
                     os.makedirs(emissions_dir, exist_ok=True)
                     tracker = OfflineEmissionsTracker(
-                        country_iso_code="IDN", 
-                        log_level="error", 
-                        save_to_file=True, 
-                        output_dir=emissions_dir
+                         country_iso_code="IDN", 
+                         log_level="error", 
+                         save_to_file=True, 
+                         output_dir=emissions_dir
                     )
                     tracker.start()
                 except: pass
@@ -89,8 +90,8 @@ class FLController:
             
             # Fase 0: Menunggu terminal terhubung
             self._log(f"Menunggu {min_clients} terminal terhubung...")
-            if not self._wait_for_condition(lambda: len(self.fl_manager.registered_clients) >= min_clients, timeout=300):
-                self._log("[ERROR] Gagal: Terminal tidak mencukupi setelah 5 menit.")
+            if not self._wait_for_condition(lambda: len(self.fl_manager.registered_clients) >= min_clients, timeout=3600):
+                self._log("[ERROR] Gagal: Terminal tidak mencukupi setelah 1 jam.")
                 return
 
             # Fase 1a: Discovery (Sinkronisasi ID)
@@ -98,22 +99,24 @@ class FLController:
             self.fl_manager.discovery_clients.clear()
             self._trigger_clients("/api/request-discovery")
             
-            if not self._wait_for_condition(lambda: len(self.fl_manager.discovery_clients) >= min_clients, timeout=300):
-                self._log("[ERROR] Gagal: Tahap Discovery melampaui batas waktu.")
+            if not self._wait_for_condition(lambda: len(self.fl_manager.discovery_clients) >= min_clients, timeout=3600):
+                self._log("[ERROR] Gagal: Tahap Discovery melampaui batas waktu (1 Jam).")
                 return
 
             # Fase 1b: Preprocessing (Deteksi & Crop)
+            self.fl_manager.start_phase("syncing")
             self._log("Fase 1b: Pemrosesan gambar di sisi terminal...")
             self.fl_manager.ready_clients.clear()
             self._trigger_clients("/api/request-preprocess")
             
             # Tunggu client lapor 'Ready' (Preprocessing selesai)
-            self._log("SERVER LOG: Menunggu laporan 'Ready' dari seluruh terminal (Timeout: 1 Jam)...")
-            if not self._wait_for_ready_clients(min_clients, timeout=3600):
-                self._log("[ERROR] Gagal: Tahap Preprocessing melampaui batas waktu.")
+            self._log("SERVER LOG: Menunggu laporan 'Ready' dari seluruh terminal (Timeout: 3 Jam)...")
+            if not self._wait_for_ready_clients(min_clients, timeout=10800):
+                self._log("[ERROR] Gagal: Tahap Preprocessing melampaui batas waktu (3 Jam).")
                 return
             
             # Fase 2: Pelatihan Federated (Flower)
+            self.fl_manager.start_phase("training")
             self._log(f"Memulai pelatihan Flower dengan {len(self.fl_manager.ready_clients)} terminal...")
             self.fl_manager.is_running = True  
             self.fl_manager.start_training(session_id, rounds=rounds, min_clients=min_clients)
@@ -133,7 +136,7 @@ class FLController:
             # [INCREMENT VERSION] Naikkan versi SETELAH registry selesai agar sinkron dengan client
             self.fl_manager.increment_version()
             
-            # 1. Hitung Real Volume Transmisi
+            # Hitung Real Volume Transmisi
             num_clients = len(self.fl_manager.ready_clients)
             
             # Hitung Real Backbone dari jumlah parameter model
@@ -158,7 +161,7 @@ class FLController:
             # Real volume registri total adalah (size aset) * jumlah client yang mengunduh
             registry_mb = registry_mb * num_clients
             
-            # 2. Ambil Real Energy (CodeCarbon) jika tersedia
+            # Ambil Real Energy (CodeCarbon) jika tersedia
             energy_kwh = 0
             if tracker:
                 try:
@@ -177,6 +180,17 @@ class FLController:
             self.fl_manager.start_phase("Completed")
             self._log("[SUCCESS] Seluruh siklus Pembelajaran Terfederasi selesai.")
             
+            # Hapus file cache deteksi video lama karena model telah diperbarui
+            try:
+                video_caches_dir = "video_caches"
+                if os.path.exists(video_caches_dir):
+                    for f in os.listdir(video_caches_dir):
+                        if f.endswith(".json"):
+                            os.remove(os.path.join(video_caches_dir, f))
+                    self._log("[INFO] Menghapus cache deteksi video lama karena model diperbarui.")
+            except Exception as cache_del_err:
+                self._log(f"[WARNING] Gagal menghapus cache video lama: {cache_del_err}")
+
             # Beri jeda agar heartbeat client sempat menangkap fase 'Completed'
             time.sleep(5)
 
@@ -187,9 +201,19 @@ class FLController:
             self._mark_session_completed(session_id)
 
     def _log(self, msg):
-        self.fl_manager.update_logs(msg)
+        if "[ERROR]" in msg:
+            self.fl_manager.logger.error(msg.replace("[ERROR] ", ""))
+        elif "[SUCCESS]" in msg:
+            self.fl_manager.logger.success(msg.replace("[SUCCESS] ", ""))
+        elif "[INFO]" in msg:
+            self.fl_manager.logger.info(msg.replace("[INFO] ", ""))
+        elif "[OK]" in msg:
+            self.fl_manager.logger.success(msg.replace("[OK] ", ""))
+        else:
+            self.fl_manager.logger.info(msg)
 
     def _trigger_clients(self, endpoint):
+        self.fl_manager.logger.info(f"Memicu endpoint {endpoint} ke seluruh klien...")
         for cid, data in self.fl_manager.registered_clients.items():
             ip = data.get("ip_address")
             port = data.get("port", 8080)
@@ -197,7 +221,8 @@ class FLController:
                 try:
                     # Gunakan port yang dilaporkan client saat registrasi
                     requests.post(f"http://{ip}:{port}{endpoint}", timeout=2)
-                except: pass
+                except Exception as e:
+                    self.fl_manager.logger.warn(f"Gagal memicu {cid} pada {ip}: {e}")
 
     def _wait_for_condition(self, condition_func, timeout):
         start = time.time()
@@ -256,4 +281,4 @@ class FLController:
 
     def _aggregate_registry_logic(self):
         # Memanggil fungsi agregasi fitur dari utilitas terpisah
-        aggregate_and_save_registry_assets(self._log)
+        aggregate_and_save_registry_assets(self.fl_manager.logger)

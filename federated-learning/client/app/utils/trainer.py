@@ -1,20 +1,25 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .mobilefacenet import MobileFaceNet, ArcMarginProduct
-from .freezing import set_model_freeze
-from .preprocessing import image_processor
-from torch.utils.data import DataLoader, Dataset
-import torchvision.transforms as transforms
-from PIL import Image
 import os
+import time
 import glob
 import random
 import copy
 import gc
+import numpy as np
+import torchvision.transforms as transforms
+
+from PIL import Image
 from collections import OrderedDict
 from torchvision.transforms import InterpolationMode
-import numpy as np
+
+from torch.utils.data import DataLoader, Dataset
+
+from app.utils.mobilefacenet import MobileFaceNet, ArcMarginProduct
+from app.utils.freezing import set_model_freeze
+from app.utils.preprocessing import image_processor
+from app.utils.logging import get_logger
 
 class TrainingNaNError(Exception):
     """Pengecualian khusus saat loss atau bobot pelatihan menjadi NaN."""
@@ -44,13 +49,14 @@ class FaceDataset(Dataset):
         self.transform = transform
         self.samples = []
         self.class_counts = {}
+        self.logger = get_logger()
         
-        print(f"[DATASET] Root: {data_root} | Mode: {mode}")
+        self.logger.info(f"Inisialisasi Dataset | Root: {data_root} | Mode: {mode}")
         
         local_nrps = []
         if os.path.exists(data_root):
             local_nrps = sorted([f for f in os.listdir(data_root) if os.path.isdir(os.path.join(data_root, f))])
-            print(f"[DATASET] Found {len(local_nrps)} directories in {data_root}")
+            self.logger.info(f"Menemukan {len(local_nrps)} direktori di {data_root}")
             
         global_nrps = []
         if global_embeddings:
@@ -58,43 +64,34 @@ class FaceDataset(Dataset):
             
         if label_map:
             all_unique_nrps = label_map
-            print(f"[DATASET] Using Global Label Map with {len(all_unique_nrps)} identities.")
+            self.logger.info(f"Menggunakan Peta Label Global dengan {len(all_unique_nrps)} identitas.")
         else:
             all_unique_nrps = sorted(list(set(local_nrps + global_nrps)))
-            print(f"[DATASET] Building Local Label Map with {len(all_unique_nrps)} identities.")
+            self.logger.info(f"Membangun Peta Label Lokal dengan {len(all_unique_nrps)} identitas.")
 
         self.nrp_to_idx = {nrp: idx for idx, nrp in enumerate(all_unique_nrps)}
         self.id_map = {idx: nrp for nrp, idx in self.nrp_to_idx.items()}
-        self.num_classes = len(all_unique_nrps)
-        
-        # Inisialisasi hitungan jumlah sampel per kelas
+        self.num_classes = len(all_unique_nrps)    
         self.class_counts = {idx: 0 for idx in range(self.num_classes)}
 
-        # Penyelarasan Data: Ikuti label_map global secara ketat jika tersedia
-        print(f"[DATASET] Processing local folders for {len(local_nrps)} users...")
+        self.logger.info(f"Memproses folder lokal untuk {len(local_nrps)} pengguna...")
         
         
         for nrp in local_nrps:
             if label_map and nrp not in self.nrp_to_idx:
-                print(f"  [SKIP] {nrp}: Not in global label map.")
+                self.logger.warn(f"  [LEWATI] {nrp}: Tidak ada di peta label global.")
                 continue
                 
             folder_path = os.path.join(data_root, nrp)
             idx = self.nrp_to_idx[nrp]
             
-            # FUNCTIONAL PARITY WITH PRE: Gunakan seleksi wajah tertajam (Top 50)
             if mode == "train":
-                # Pilih wajah terbaik untuk training
-                # Jika folder berisi banyak gambar, kita ambil Top 50 saja
                 selected_filenames = image_processor.select_best_faces(folder_path, n=50)
                 selected = [os.path.join(folder_path, f) for f in selected_filenames]
                 
-                # Split 80/20 dari selected paths
                 split_idx = int(0.8 * len(selected))
                 selected = selected[:split_idx]
             else:
-                # Untuk validasi, kita tetap ambil semua gambar yang tersisa setelah training
-                # Tapi untuk kesederhanaan, kita ambil 20% terakhir dari Top 50 atau sisa gambar
                 all_paths = sorted([
                     os.path.join(folder_path, f)
                     for f in os.listdir(folder_path)
@@ -105,27 +102,24 @@ class FaceDataset(Dataset):
                 selected_train = [os.path.join(folder_path, f) for f in selected_train_filenames]
                 selected = [p for p in all_paths if p not in selected_train]
                 
-                # Jika tidak ada sisa, ambil 20% terakhir dari selected_train
                 if not selected:
                     split_idx = int(0.8 * len(selected_train))
                     selected = selected_train[split_idx:]
             
             if len(selected) == 0:
-                print(f"  [WARN] {nrp}: No viable images found.")
+                self.logger.warn(f"  [PERINGATAN] {nrp}: Tidak ditemukan gambar wajah yang valid.")
                 continue
             
             for p in selected:
                 self.samples.append({"type": "image", "path": p, "label": idx})
                 self.class_counts[idx] += 1
-            
-            print(f"  [OK] {nrp}: {len(selected)} samples selected ({mode}).")
-            print(f"  [OK] {nrp}: Loaded {len(selected)} {mode} images.")
+                        
+            gc.collect()
+            time.sleep(0.1)
 
-        # Tambahkan sampel embedding global (Berbagi Pengetahuan / Knowledge Sharing)
         if global_embeddings:
             for item in global_embeddings:
                 idx = self.nrp_to_idx[item['nrp']]
-                # Pastikan L2 Normalized (Penting agar tidak mengotor gradien PyTorch murni)
                 emb_tensor = item['embedding']
                 if emb_tensor.dim() == 1:
                     emb_tensor = emb_tensor.unsqueeze(0)
@@ -138,15 +132,19 @@ class FaceDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx):
+        # Ambil sampel dan label kelas mahasiswa berdasarkan indeks
         sample = self.samples[idx]
         label = sample['label']
         
+        # Proses citra mentah lokal jika tipe datanya berupa gambar
         if sample['type'] == "image":
             image = Image.open(sample['path']).convert('RGB')
+            # Jalankan augmentasi gambar acak secara on-the-fly
             if self.transform:
                 image = self.transform(image)
             return image, label, False
         else:
+            # Kembalikan data embedding memori global lintas-klien
             return sample['data'], label, True
 
 class LocalTrainer:
@@ -156,69 +154,108 @@ class LocalTrainer:
         self.head = head.to(self.device) if head is not None else None
         self.data_path = data_path
         self.nrp_to_idx = {} 
+        self.logger = get_logger()
         
         self.transform = transforms.Compose([
             transforms.Resize((112, 96), interpolation=InterpolationMode.BILINEAR),
             transforms.RandomHorizontalFlip(),
-            transforms.RandomRotation(degrees=15),
-            transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
-            transforms.RandomGrayscale(p=0.1),
-            transforms.RandomApply([transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0))], p=0.3),
+            transforms.RandomRotation(degrees=20),
+            transforms.RandomPerspective(distortion_scale=0.2, p=0.3),
+            transforms.ColorJitter(brightness=(0.2, 1.5), contrast=(0.2, 1.5), saturation=0.4, hue=0.1),
+            transforms.RandomGrayscale(p=0.3),
+            transforms.RandomAutocontrast(p=0.2),
+            transforms.RandomApply([transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0))], p=0.4),
             transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.2),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.50196, 0.50196, 0.50196]),
             transforms.RandomErasing(p=0.1)
         ])
-        
+
         self.val_transform = transforms.Compose([
             transforms.Resize((112, 96), interpolation=InterpolationMode.BILINEAR), 
             transforms.ToTensor(),
-            # Normalisasi MobileFaceNet (True Standard Creator Alignment): std=128/255 = 0.50196
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.50196, 0.50196, 0.50196])
         ])
 
-    def train(self, epochs=5, lr=0.0001, round_num=0, global_embeddings=None, label_map=None, mu=0.05, lam=0.1):
+    def save_checkpoint(self, round_num, epoch, history):
+        try:
+            checkpoint_dir = os.path.join(os.path.dirname(self.data_path), "models")
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            checkpoint_path = os.path.join(checkpoint_dir, "training_checkpoint.pth")
+            torch.save({
+                'round_num': round_num,
+                'epoch': epoch,
+                'backbone_state_dict': self.backbone.state_dict(),
+                'head_state_dict': self.head.state_dict(),
+                'history': history
+            }, checkpoint_path)
+            self.logger.info(f"Progress disimpan (Ronde {round_num}, Epoch {epoch+1})")
+        except Exception as e:
+            self.logger.error(f"Gagal menyimpan checkpoint: {e}")
+
+    # Loop Pelatihan PyTorch (Local Training Loop)
+    def train(self, epochs=5, lr=0.0001, round_num=0, global_embeddings=None, label_map=None, mu=0.05, lam=0.1, status_callback=None):
         if self.backbone is None or self.head is None:
-             print("[TRAINER] Model belum terinisialisasi..")
+             self.logger.warn("Model belum terinisialisasi..")
              return 0.0, 0.0, 0, []
 
+        epoch_history = []
+        
+        # Pemuatan checkpoint lokal jika terputus di tengah jalan
+        start_epoch = 0
+        checkpoint_path = os.path.join(os.path.dirname(self.data_path), "models", "training_checkpoint.pth")
+        if os.path.exists(checkpoint_path):
+            try:
+                ckpt = torch.load(checkpoint_path, map_location=self.device)
+                if ckpt.get('round_num') == round_num:
+                    self.backbone.load_state_dict(ckpt['backbone_state_dict'])
+                    self.head.load_state_dict(ckpt['head_state_dict'])
+                    start_epoch = ckpt.get('epoch', -1) + 1
+                    epoch_history = ckpt.get('history', [])
+                    if start_epoch < epochs:
+                        self.logger.info(f"Melanjutkan dari checkpoint (Ronde {round_num}, Mulai Epoch {start_epoch+1})")
+                    else:
+                        self.logger.info(f"Checkpoint menunjukkan ronde {round_num} sudah selesai.")
+                        return 0.0, 0.0, 0, epoch_history
+            except Exception as e:
+                self.logger.error(f"Gagal memuat checkpoint: {e}")
+
+        # Konstruksi dataset gabungan citra lokal & memori global
         dataset = FaceDataset(self.data_path, global_embeddings=global_embeddings, transform=self.transform, mode="train", label_map=label_map)
         if len(dataset) < 2:
-            print(f"[TRAINER] Data terlalu kecil ({len(dataset)}) untuk training. Melewati round.")
+            self.logger.warn(f"Data terlalu kecil ({len(dataset)}) untuk pelatihan. Melewati ronde.")
             return 0.0, 0.0, len(dataset), []
             
+        # Penyesuaian dimensi output layer classification head
         if dataset.num_classes > 0 and dataset.num_classes != self.head.weight.shape[0]:
             self.update_head(dataset.num_classes, dataset.nrp_to_idx)
         else:
             self.nrp_to_idx = dataset.nrp_to_idx
 
-        dataloader = DataLoader(dataset, batch_size=16, shuffle=True, collate_fn=hybrid_collate, drop_last=True)
+        # Inisialisasi data loader pembagi batch
+        dataloader = DataLoader(dataset, batch_size=32, shuffle=True, collate_fn=hybrid_collate, drop_last=True)
         
-        # --- PENERAPAN PARTIAL FREEZING ---
-        # Opsi: "none", "early", "backbone"
+        # Terapkan pembekuan layer awal backbone demi hemat daya CPU
         set_model_freeze(self.backbone, freeze_mode="early")
-        
-        # Head selalu aktif
+    
         for param in self.head.parameters():
             param.requires_grad = True
 
+        # Duplikat snapshot model global/awal untuk proteksi NaN
         backbone_snapshot = copy.deepcopy(self.backbone.state_dict())
         head_snapshot = copy.deepcopy(self.head.state_dict())
         global_ref = copy.deepcopy(self.backbone.state_dict())
 
-        # --- SELEKSI PARAMETER UNTUK PER-LAYER WEIGHT DECAY ---
-        # 1. Backbone Params (Decay: 4e-5)
+        # Pisahkan parameter untuk pengaturan weight decay SGD
         backbone_decay = []
         backbone_no_decay = []
         for name, param in self.backbone.named_parameters():
             if not param.requires_grad: continue
-            # PReLU dan Bias tidak boleh kena Weight Decay (Stabilitas)
             if 'prelu' in name.lower() or 'bias' in name.lower():
                 backbone_no_decay.append(param)
             else:
                 backbone_decay.append(param)
 
-        # 2. Head Params (Decay: 4e-4 - Lebih kuat untuk klasifikasi)
         head_decay = []
         head_no_decay = []
         for name, param in self.head.named_parameters():
@@ -228,7 +265,7 @@ class LocalTrainer:
             else:
                 head_decay.append(param)
 
-        # OPTIMIZER: SGD + Nesterov Momentum (Standar Creator MobileFaceNet)
+        # Konfigurasi optimizer SGD dengan momentum Nesterov
         optimizer = torch.optim.SGD([
             {'params': backbone_decay, 'weight_decay': 4e-5},
             {'params': backbone_no_decay, 'weight_decay': 0.0},
@@ -236,18 +273,22 @@ class LocalTrainer:
             {'params': head_no_decay, 'weight_decay': 0.0}
         ], lr=lr, momentum=0.9, nesterov=True)
         
-        # LOSS: Pure CrossEntropy (Tanpa Label Smoothing agar margin tegas)
+        # Definisikan kriteria perhitungan loss fungsi
         criterion = nn.CrossEntropyLoss()
 
-        print(f"[TRAINER] Round {round_num}: Training {len(dataset)} data untuk {epochs} epochs")
+        self.logger.info(f"Ronde {round_num}: Melatih {len(dataset)} sampel data untuk {epochs} epoch")
         total_loss, correct, total = 0.0, 0, 0
         epoch_history = []
         
+        # Loop iterasi epochs pelatihan
         for epoch in range(epochs):
             epoch_loss = 0.0
+            correct = 0
+            total = 0
             self.backbone.train()
             self.head.train()
             
+            # Loop pembagian batch data latih
             for imgs, embs, labels, is_embedding in dataloader:
                 imgs, embs, labels = imgs.to(self.device), embs.to(self.device), labels.to(self.device)
                 optimizer.zero_grad()
@@ -255,6 +296,7 @@ class LocalTrainer:
                 features_local = torch.zeros((labels.size(0), self.head.weight.shape[1]), device=self.device)
                 img_mask, emb_mask = ~is_embedding, is_embedding
                 
+                # Forward pass citra wajah lokal ke backbone
                 if img_mask.any():
                     img_input = imgs[img_mask]
                     if img_input.size(0) == 1:
@@ -263,42 +305,52 @@ class LocalTrainer:
                     else:
                         features_local[img_mask] = self.backbone(img_input)
                         
+                # Forward pass data memori global lintas-klien
                 if emb_mask.any():
                     features_local[emb_mask] = embs[emb_mask]
                 
+                # Hitung loss klasifikasi ArcFace pada data lokal
                 outputs = self.head(features_local, labels)
                 ce_loss = criterion(outputs, labels)
                 
+                # Hitung penalti regulasi jarak L2 terhadap model global (pFedFace)
                 prox_loss = torch.tensor(0.0, device=self.device)
                 for name, param in self.backbone.named_parameters():
                     if name in global_ref:
                         prox_loss += (mu / 2) * torch.norm(param - global_ref[name])**2
                 
+                # Gabungkan nilai total loss klasifikasi dan penalti regulasi
                 loss = ce_loss + prox_loss
                 
+                # Validasi pengaman agar program tidak crash apabila loss NaN
                 if torch.isnan(loss):
-                    print(f"[ERROR] NaN loss terdeteksi...")
+                    self.logger.error("Nilai loss NaN terdeteksi saat pelatihan. Mengembalikan bobot sebelumnya.")
                     self.backbone.load_state_dict(backbone_snapshot)
                     self.head.load_state_dict(head_snapshot)
                     raise TrainingNaNError(f"NaN loss di Round {round_num}")
 
+                # Perhitungan backward pass dan update parameter model
                 loss.backward()
                 optimizer.step()
                 
                 total_loss += loss.item()
                 epoch_loss += loss.item()
                 
-                # METRIK: Hitung Akurasi Sebenarnya (Tanpa Margin Pelatihan)
+                # Hitung performa akurasi prediksi batch latih
                 with torch.no_grad():
-                    logits_for_acc = F.linear(F.normalize(features_local), F.normalize(self.head.weight)) * self.head.s
+                    logits_for_acc = self.head.get_logits(features_local)
                     _, predicted = torch.max(logits_for_acc.data, 1)
                     total += labels.size(0)
                     correct += (predicted == labels).sum().item()
             
             acc = correct / total if total > 0 else 0.0
             avg_epoch_loss = epoch_loss / len(dataloader) if len(dataloader) > 0 else 0.0
-            print(f"  > Epoch {epoch+1}/{epochs} | Loss: {avg_epoch_loss:.4f} | Acc: {acc:.4f}")
+            self.logger.info(f"  > Epoch {epoch+1}/{epochs} | Loss: {avg_epoch_loss:.4f} | Acc: {acc:.4f}")
+            if status_callback:
+                status_callback(epoch + 1, epochs, avg_epoch_loss, acc)
             epoch_history.append({"epoch": epoch + 1, "loss": avg_epoch_loss, "accuracy": acc})
+            
+            self.save_checkpoint(round_num, epoch, epoch_history)
                 
         avg_loss = total_loss / (len(dataloader) * epochs) if len(dataloader) > 0 else 0.0
         accuracy = correct / total if total > 0 else 0.0
@@ -321,10 +373,9 @@ class LocalTrainer:
             for imgs, embs, labels, is_embedding in dataloader:
                 imgs, embs, labels = imgs.to(self.device), embs.to(self.device), labels.to(self.device)
                 
-                # Defensive check: skip if labels are out of bounds for head weight
                 max_label = labels.max().item()
                 if max_label >= self.head.weight.shape[0]:
-                    print(f"[TRAINER WARNING] Eval labels ({max_label}) out of head bounds ({self.head.weight.shape[0]}). Skipping batch.")
+                    self.logger.warn(f"Label evaluasi ({max_label}) di luar batas head ({self.head.weight.shape[0]}). Melewati batch.")
                     continue
 
                 features = torch.zeros((labels.size(0), self.head.weight.shape[1]), device=self.device)
@@ -333,10 +384,7 @@ class LocalTrainer:
                 if img_mask.any():
                     img_input = imgs[img_mask]
                     
-                    # --- FLIP TRICK (Alignment dengan Registry & Live Inference) ---
-                    # Menghitung rata-rata embedding asli dan mirror untuk validasi yang lebih akurat
                     if img_input.size(0) == 1:
-                        # Case single image (MTCNN quirks)
                         f_orig = self.backbone(torch.cat([img_input, img_input], dim=0))[0:1]
                         f_flip = self.backbone(torch.cat([torch.flip(img_input, [3]), torch.flip(img_input, [3])], dim=0))[0:1]
                     else:
@@ -348,8 +396,7 @@ class LocalTrainer:
                 if emb_mask.any():
                     features[emb_mask] = embs[emb_mask]
                 
-                # Akurasi Sebenarnya untuk Pelaporan
-                logits = F.linear(F.normalize(features), F.normalize(self.head.weight)) * self.head.s
+                logits = self.head.get_logits(features)
                 outputs = self.head(features, labels)
                 loss = criterion(outputs, labels)
                 
@@ -367,39 +414,36 @@ class LocalTrainer:
         old_head = self.head
         old_nrp_to_idx = self.nrp_to_idx
         
-        embedding_size = 128 # Default for MobileFaceNet
+        embedding_size = 128 
         if old_head is not None:
             embedding_size = old_head.weight.shape[1]
             
-        new_head = ArcMarginProduct(embedding_size, new_num_classes).to(self.device)
+        new_head = ArcMarginProduct(embedding_size, new_num_classes, k=3).to(self.device)
         
         if old_head is None:
-            print(f"[TRAINER] New Head Created: {new_num_classes} classes (initial/lazy)")
+            self.logger.info(f"Classification Head Baru Dibuat: {new_num_classes} kelas (inisialisasi awal)")
             self.head = new_head
             self.nrp_to_idx = new_nrp_to_idx
             return new_head
 
+        k = new_head.k
         copied_count = 0
         with torch.no_grad():
             for nrp, new_idx in new_nrp_to_idx.items():
                 if nrp in old_nrp_to_idx:
                     old_idx = old_nrp_to_idx[nrp]
-                    if old_idx < old_head.weight.shape[0] and new_idx < new_num_classes: 
-                         new_head.weight[new_idx] = old_head.weight[old_idx]
-                         copied_count += 1
+                    new_head.weight[new_idx*k : (new_idx+1)*k] = old_head.weight[old_idx*k : (old_idx+1)*k]
+                    copied_count += 1
         
-        print(f"[TRAINER] Head Expanded: {old_head.weight.shape[0]} -> {new_num_classes} ({copied_count} weights preserved)")
+        self.logger.info(f"Classification Head Diperluas: {len(old_nrp_to_idx)} -> {new_num_classes} kelas ({copied_count} identitas dipertahankan)")
         self.head = new_head
         self.nrp_to_idx = new_nrp_to_idx
         return new_head
 
 
     def _is_shared_param(self, name):
-        """Filter ketat untuk pFedFace: Kecualikan BatchNorm agar tetap lokal."""
         name = name.lower()
-        if any(x in name for x in ['bn', 'running_', 'num_batches_tracked']):
-            return False
-        return any(x in name for x in ['weight', 'bias'])
+        return any(x in name for x in ['weight', 'bias', 'bn', 'running_', 'num_batches_tracked'])
 
     def get_backbone_parameters(self, personalized=True):
         if self.backbone is None: return []
@@ -407,36 +451,29 @@ class LocalTrainer:
         shared_keys = [k for k in state_dict.keys() if not personalized or self._is_shared_param(k)]
         
         mode_str = "pFedFace (Local BN/Head)" if personalized else "Standard (Full Sync)"
-        print(f"[TRAINER] Extracting {len(shared_keys)} parameters ({mode_str}).")
+        self.logger.info(f"Mengekstraksi {len(shared_keys)} parameter ({mode_str}).")
         
         params = [state_dict[k].cpu().numpy().copy() for k in shared_keys]
         
-        # Sertakan Head hanya jika bukan Personalized (pFedFace)
         if not personalized and self.head is not None:
             head_params = [p.detach().cpu().numpy().copy() for p in self.head.parameters()]
-            print(f"[TRAINER] Including {len(head_params)} head parameters.")
+            self.logger.info(f"Termasuk {len(head_params)} parameter classification head.")
             params.extend(head_params)
             
         return params
 
     def get_bn_parameters(self):
-        """
-        Mengambil seluruh parameter BatchNorm dalam bentuk state_dict (Orderly).
-        Digunakan untuk finalisasi di fase Registry.
-        """
         if self.backbone is None: return {}
         state_dict = self.backbone.state_dict()
-        # Filter semua key yang berkaitan dengan BN
         bn_keys = [k for k in state_dict.keys() if 
                    any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked'])]
         
-        # Kembalikan sebagai dictionary of numpy arrays (Serialized State Dict)
-        print(f"[TRAINER] Collecting {len(bn_keys)} BN parameters into orderly state_dict.")
+        self.logger.info(f"Mengumpulkan {len(bn_keys)} parameter BN ke dalam state_dict.")
         return {k: state_dict[k].cpu().numpy().copy() for k in bn_keys}
 
     def set_backbone_parameters(self, parameters, personalized=True):
         if self.backbone is None:
-            print("[TRAINER] Backbone is None, initializing new MobileFaceNet...")
+            self.logger.info("Backbone bernilai None, menginisialisasi MobileFaceNet baru...")
             self.backbone = MobileFaceNet().to(self.device)
             self.backbone.eval()
             
@@ -444,7 +481,7 @@ class LocalTrainer:
         shared_keys = [k for k in state_dict.keys() if not personalized or self._is_shared_param(k)]
         num_backbone = len(shared_keys)
 
-        print(f"[TRAINER] Injecting {num_backbone} backbone parameters.")
+        self.logger.info(f"Menginjeksi {num_backbone} parameter backbone.")
         new_state_dict = OrderedDict(state_dict)
         for i, k in enumerate(shared_keys):
             try:
@@ -455,10 +492,9 @@ class LocalTrainer:
             except: continue
         self.backbone.load_state_dict(new_state_dict, strict=False)
 
-        # Pasang Head Parameters (Hanya jika Full Sync dan ada dalam payload)
         if not personalized and len(parameters) > num_backbone and self.head is not None:
             head_params = parameters[num_backbone:]
-            print(f"[TRAINER] Injecting {len(head_params)} head parameters.")
+            self.logger.info(f"Menginjeksi {len(head_params)} parameter classification head.")
             for i, p in enumerate(self.head.parameters()):
                 if i < len(head_params):
                     try:
@@ -472,13 +508,12 @@ class LocalTrainer:
         dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=hybrid_collate)
         self.backbone.eval()
         temp_embeddings = {nrp: [] for nrp in dataset.nrp_to_idx.keys()}
-        print(f"[TRAINER] Calculating Centroids...")
+        self.logger.info("Menghitung Centroid...")
         with torch.no_grad():
             for imgs, embs, labels, is_embedding in dataloader:
                 img_mask = ~is_embedding
                 if not img_mask.any(): continue
                 imgs_batch = imgs[img_mask].to(self.device)
-                # --- FLIP TRICK (Mandatory for Centroid Stability) ---
                 if imgs_batch.size(0) == 1:
                     f_orig = self.backbone(torch.cat([imgs_batch, imgs_batch]))[0:1]
                     f_flip = self.backbone(torch.cat([torch.flip(imgs_batch, [3]), torch.flip(imgs_batch, [3])]))[0:1]
@@ -486,7 +521,6 @@ class LocalTrainer:
                     f_orig = self.backbone(imgs_batch)
                     f_flip = self.backbone(torch.flip(imgs_batch, [3]))
                 
-                # Rata-rata dan normalisasi unit vector
                 features = F.normalize(f_orig + f_flip, p=2, dim=1)
                 
                 batch_labels = labels[img_mask]
@@ -496,11 +530,9 @@ class LocalTrainer:
         centroids = {}
         for nrp, embs in temp_embeddings.items():
             if embs:
-                # Gunakan subset (maks 50) untuk rata-rata yang stabil
                 subset = embs[:50]
                 stack = torch.cat(subset, dim=0)
                 centroid = torch.mean(stack, dim=0)
-                # Normalisasi L2 eksplisit agar konsisten dengan hypersphere ArcFace
                 centroid = F.normalize(centroid.unsqueeze(0), p=2, dim=1)
                 centroids[nrp] = centroid.cpu().numpy()[0]
         return centroids

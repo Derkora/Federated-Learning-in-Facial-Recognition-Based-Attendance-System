@@ -9,25 +9,25 @@ Laporan ini membandingkan pendekatan **Centralized Learning (CL)** dengan sistem
 | **Aliran Data** | **Data-to-Model**: Citra wajah mentah dikirim ke server pusat. | **Model-to-Data**: Citra wajah mentah tidak pernah keluar dari terminal. |
 | **Pusat Pengetahuan** | **Monolitik**: Satu model global untuk semua identitas. | **Hybrid**: Global Backbone (Fitur Umum) + Local Head (Identitas Spesifik). |
 | **Keamanan Identitas** | Bergantung pada keamanan server pusat. | **Sangat Tinggi**: Identitas unik (Head) tidak pernah dibagikan. |
-| **Optimasi Agregasi** | SWA (Last 5 Epochs). | Snapshot Averaging (Last 3 Rounds). |
 
 ## 2. Keselarasan Parameter (Parity)
 Kedua sistem menggunakan parameter yang identik untuk memastikan perbandingan yang adil:
 
 | Parameter | Centralized Learning (CL) | Federated Learning (FL) |
 | :--- | :--- | :--- |
-| **Total Iterasi** | 20 Epochs | 10 Rounds x 2 Local Epochs (Total 20) |
+| **Total Iterasi** | 10 Epochs | 10 Rounds x 1 Local Epoch (Total 10) |
 | **Partial Freezing**| **Mode: Early (Stage 1 & 2)** | **Mode: Early (Stage 1 & 2)** |
 | **BN Adaptation** | **Client-side Calibration** | **Inherent (Local BN Storage)** |
-| **Booster (SWA)**  | **SWA (Last 4 Epochs)** | **Snapshot Avg (Last 2 Rounds/4 Epochs)** |
 | **Centroid Data** | **Full Dataset (50 Images)** | **Full Dataset (50 Images)** |
-| **Threshold** | 0.75 (CIM: 0.85) | 0.75 (CIM: 0.85) |
-| **Metode Inferensi** | Flip Trick + Temporal Voting | Flip Trick + Temporal Voting |
-| **Res. Management** | **Downscale 640px + Vectorization** | **Downscale 640px + Vectorization** |
-| **Batch Size** | 16 (Optimized for 1GB RAM) | 8 per Client (Optimized for 1GB RAM) |
-| **Learning Rate** | 0.05 (Cosine Decay) | 0.05 (Cosine Decay) |
+| **Threshold** | **0.7** | **0.7** |
+| **Metode Inferensi** | Flip Trick + Temporal Voting (3 Frames) | Flip Trick + Temporal Voting (3 Frames) |
+| **Res. Management** | **Full Resolution + Vectorization** | **Full Resolution + Vectorization** |
+| **Batch Size** | 32 (Gradient Stability) | 32 per Client (Gradient Stability) |
+| **Learning Rate** | **0.05 (Cosine Decay)** | **0.05 (Cosine Decay)** |
+| **Augmentasi** | **Premium (Perspective, Blur, Jitter)** | **Premium (Perspective, Blur, Jitter)** |
 | **Basis Validasi** | Citra Asli (Real Images) | Hybrid (Citra Asli + Global Embeddings) |
-| **Auditabilitas** | Server Training Log | Dual-Logging (Server + Remote Client Log) |
+| **Ekonomi (Bandwidth)**| **Rp 3,25 / MB** | **Rp 3,25 / MB** |
+| **Ekonomi (Energi)**| **Rp 1.444,70 / kWh** | **Rp 1.444,70 / kWh** |
 
 ## 3. Analisis Perbedaan Operasional
 
