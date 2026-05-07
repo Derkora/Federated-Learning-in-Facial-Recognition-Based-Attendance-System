@@ -26,9 +26,9 @@ Kedua sistem menggunakan parameter yang identik untuk memastikan perbandingan ya
 | **Res. Management** | **Downscale 640px + Vectorization** | **Downscale 640px + Vectorization** |
 | **Batch Size** | 8 (Optimized for 1GB RAM) | 4 per Client (Optimized for 1GB RAM) |
 | **Learning Rate** | **0.01 (Cosine Decay)** | **0.01 (Cosine Decay)** |
-| **Augmentasi** | **Enhanced (Autocontrast + ColorJitter)** | **Enhanced (Autocontrast + ColorJitter)** |
+| **Augmentasi** | **Premium (Perspective, Blur, Jitter)** | **Premium (Perspective, Blur, Jitter)** |
 | **Basis Validasi** | Citra Asli (Real Images) | Hybrid (Citra Asli + Global Embeddings) |
-| **Auditabilitas** | Server Training Log | Dual-Logging (Server + Remote Client Log) |
+| **Auditabilitas** | Top-2 Research Logs + Server Training | Top-2 Research Logs + Dual-Logging |
 
 ## 3. Analisis Perbedaan Operasional
 

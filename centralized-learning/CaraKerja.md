@@ -26,23 +26,18 @@ Proses penyiapan data di sisi terminal sebelum pengiriman ke server pusat:
 ### Tahap 3: Pelatihan Terpusat (Centralized Training)
 1. **Resource-Aware Training**: Batch Size diatur ke **8** untuk menjaga stabilitas memori server/edge dan mencegah osilasi gradien pada dataset kecil.
 2. **Partial Freezing**: Server membekukan Stage 1 & 2 (`conv1` hingga `blocks[0-11]`) untuk menjaga fitur umum wajah.
-3. **Transfer Learning**: Server melatih backbone Stage 3 dan ArcMargin head menggunakan SGD (Nesterov) & Cosine Annealing (10 Epoch) dengan Initial LR **0.01**.
-4. **Lighting Augmentation**: Menggunakan `RandomAutocontrast` dan `ColorJitter` tinggi untuk menangani variasi cahaya terminal.
-5. **Optimasi Akhir**: Menggunakan **SWA (Stochastic Weight Averaging)** pada 3 epoch terakhir (8, 9, 10) untuk stabilitas bobot.
-
-### Tahap 4: Deployment & Adaptasi Lokal
-1. **Sinkronisasi**: Client mengunduh model global dan referensi embedding identitas.
-2. **BN Adaptation (Kalibrasi)**: Client menjalankan forward-pass (tanpa gradien) menggunakan data lokal untuk menyesuaikan statistik `running_mean` & `running_var` BatchNorm dengan kondisi pencahayaan spesifik lokasi.
-3. **Inferensi Edge**: Menggunakan **Flip Trick** dan **Temporal Voting** untuk pengenalan wajah yang stabil.
+3. **Transfer Learning**: Server melatih backbone Stage 3 dan ArcMargin head menggunakan SGD (Nesterov) & Cosine Annealing (10 Ronde) dengan Initial LR **0.01**.
+4. **Premium Augmentation**: Menggunakan `RandomPerspective`, `GaussianBlur`, `ColorJitter`, dan `RandomErasing` untuk ketangguhan ekstrem terhadap variasi kamera.
+5. **Optimasi Akhir**: Menggunakan **SWA (Stochastic Weight Averaging)** pada 3 ronde terakhir (8, 9, 10) untuk stabilitas bobot.
 
 ---
 
 ## Tahap 4: Live Inference (Inference Engine)
 Setelah terminal mengunduh model terbaru, sistem menjalankan mesin inferensi real-time:
 - **Eager Loading & Isolation**: Memuat model ke RAM secara terpisah dari thread sistem agar absensi tetap berjalan meskipun ada proses background.
-- **BN Adaptation (Client Calibration)**: Fitur terbaru untuk menyamai kemampuan adaptasi FL. Setelah mengunduh model global, terminal menjalankan kalibrasi statistik BatchNorm menggunakan data lokal. Ini menyesuaikan model pusat dengan kondisi pencahayaan spesifik di terminal tersebut.
-- **Flip Trick Evaluation**: Mengambil embedding dari wajah asli dan wajah yang di-flip horizontal, lalu dirata-ratakan untuk stabilitas skor maksimal.
-- **Vectorized Classifier (New)**: Proses pencocokan wajah menggunakan operasi matriks (`torch.mm`) alih-alih loop `for`. Ini mempercepat proses dan menghemat RAM secara signifikan.
-- **Temporal Voting**: Mengumpulkan 5 frame berturut-turut untuk memastikan identitas sebelum mencatat presensi.
-- **Confident Instant Match (CIM)**: Jika skor similarity > 0.85, sistem langsung memverifikasi wajah tanpa menunggu buffer frame. Threshold standar ditetapkan pada **0.7**.
-- **Memory Management (GC)**: Sistem secara eksplisit memicu *Garbage Collection* di setiap akhir loop kamera untuk menjaga stabilitas RAM 1GB.
+- **BN Adaptation (Client Calibration)**: Menyesuaikan model pusat dengan kondisi pencahayaan spesifik di terminal menggunakan data lokal.
+- **Flip Trick Evaluation**: Mengambil rata-rata embedding dari wajah asli dan mirror untuk stabilitas skor.
+- **Vectorized Classifier**: Pencocokan wajah menggunakan operasi matriks (`torch.mm`) yang cepat dan efisien RAM.
+- **Research Logging (Top-2 Analysis)**: Mencatat skor identitas terbaik pertama dan kedua serta marginnya (**Gap**) untuk analisis ambiguitas data riset.
+- **Confident Instant Match (CIM)**: Jika skor similarity > 0.85, verifikasi instan. Threshold standar ditetapkan pada **0.7**.
+- **Memory Management (GC)**: Pemicu *Garbage Collection* otomatis untuk menjaga stabilitas RAM 1GB.

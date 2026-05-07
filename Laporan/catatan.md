@@ -97,3 +97,14 @@ Dalam pengujian, ditemukan bahwa Client 2 (tanpa data pendaftar) memiliki akuras
 ## 17. Penurunan Learning Rate untuk Konvergensi Halus
 - **Update**: Menurunkan `initial_lr` dari 0.03/0.05 menjadi **0.01**.
 - **Justifikasi**: Penggunaan LR tinggi pada *batch size* kecil (4-8) menyebabkan *gradient oscillation* yang membuat akurasi tidak stabil. Penurunan ke 0.01 memastikan model belajar secara bertahap dan konvergen lebih stabil tanpa melompat jauh dari titik optimal.
+## 18. Pipa Augmentasi Premium untuk Robustness
+- **Update**: Menambahkan `RandomPerspective` (p=0.2), `GaussianBlur` (kernel=3), dan `RandomErasing` (p=0.1) ke dalam pipeline `trainer.py`.
+- **Justifikasi**: Menambah variasi geometris dan noise buatan untuk mensimulasikan kondisi kamera yang tidak fokus atau terhalang sebagian. Hal ini meningkatkan kemampuan generalisasi model terhadap kualitas gambar yang buruk di lapangan.
+
+## 19. Logging Diagnostik Berorientasi Riset (Top1/Top2)
+- **Detail**: Sistem kini mencatat identitas terbaik pertama (**Top-1**) dan kedua (**Top-2**) beserta selisih skornya (**Gap**) pada setiap proses inferensi.
+- **Justifikasi**: Memungkinkan analisis mendalam terkait ambiguitas identitas (misal: mengapa mahasiswa A sering disangka mahasiswa B). Data ini sangat krusial untuk menghitung metrik riset lanjutan seperti *False Acceptance Rate* (FAR) dan mengevaluasi kualitas pemisahan antar kelas di ruang laten.
+
+## 20. Prioritas Source of Truth: Global Registry (Tier 2)
+- **Update**: Melakukan refactor pada logika pencocokan identitas (`attendance.py`) untuk memprioritaskan **Global Registry** daripada data gambar lokal untuk semua pengguna.
+- **Justifikasi**: Menghilangkan bias "overfitting lokal" di mana terminal cenderung gagal mengenali mahasiswa yang datanya ada di terminal tersebut karena model terlalu kaku terhadap 50 foto asli. Dengan menggunakan referensi global hasil agregasi server, stabilitas skor meningkat (dari ±0.3 menjadi ±0.8).

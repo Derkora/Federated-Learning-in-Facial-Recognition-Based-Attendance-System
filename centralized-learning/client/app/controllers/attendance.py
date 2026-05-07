@@ -77,9 +77,17 @@ class AttendanceController:
             
             # Hitung skor instant sekaligus
             scores_instant = torch.mm(query_emb_tensor, ref_matrix.t())
-            max_sim_instant, max_idx_instant = torch.max(scores_instant, dim=1)
-            confidence_instant = max_sim_instant.item()
-            best_match_instant = user_ids[max_idx_instant.item()]
+            
+            # Ambil Top 2 untuk Riset
+            vals_i, idxs_i = torch.topk(scores_instant, k=min(2, len(user_ids)), dim=1)
+            confidence_instant = vals_i[0][0].item()
+            best_match_instant = user_ids[idxs_i[0][0].item()]
+            
+            if len(user_ids) > 1:
+                sec_match_i = user_ids[idxs_i[0][1].item()]
+                sec_conf_i = vals_i[0][1].item()
+                self.logger.info(f"Riset Instant: Top1: {best_match_instant} ({confidence_instant:.4f}) | Top2: {sec_match_i} ({sec_conf_i:.4f}) | Gap: {confidence_instant-sec_conf_i:.4f}")
+
 
             # CIM Bypass: Jika skor sangat tinggi (> 0.85), anggap valid langsung dan reset buffer
             if confidence_instant > 0.85:

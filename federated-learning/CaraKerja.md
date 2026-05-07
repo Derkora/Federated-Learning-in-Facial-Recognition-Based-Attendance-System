@@ -26,9 +26,9 @@ Langkah krusial untuk kualitas input yang seragam (Identik dengan CL):
 1. **Low-Batch Local Training**: Client melatih model secara lokal dengan Batch Size **4** guna mencegah OOM pada perangkat Raspberry Pi 3B (1GB RAM) dan menjaga stabilitas gradien.
 2. **Partial Freezing**: Client membekukan Stage 1 & 2 secara lokal untuk efisiensi komputasi dan menjaga fitur umum.
 3. **Local Training (pFedFace)**: Client melatih Stage 3 dan Head menggunakan SGD (Nesterov) dengan Initial LR **0.01** (10 Ronde x 1 Local Epoch).
-4. **Lighting Augmentation**: Menggunakan `RandomAutocontrast` dan `ColorJitter` untuk menangani variasi cahaya terminal.
-5. **Hybrid Validation Metrics**: Selama training, client menghitung akurasi berdasarkan data citra lokal (asli) dan **Global Embeddings** dari terminal lain. 
-6. **Knowledge Sharing**: Server melakukan FedAvg pada parameter backbone bersama (Shared Parameters) setiap ronde.
+4. **Premium Augmentation**: Menggunakan `RandomPerspective`, `GaussianBlur`, `ColorJitter`, dan `RandomErasing` untuk menangani variasi lingkungan terminal.
+5. **Hybrid Validation Metrics**: Menghitung akurasi berdasarkan data citra lokal (asli) dan **Global Embeddings** dari terminal lain untuk mencegah bias.
+6. **Knowledge Sharing**: Server melakukan FedAvg pada parameter backbone bersama setiap ronde.
 7. **Snapshot Averaging**: Menggunakan rata-rata snapshot pada 3 ronde terakhir (8, 9, 10) untuk stabilitas global.
 
 ---
@@ -36,16 +36,15 @@ Langkah krusial untuk kualitas input yang seragam (Identik dengan CL):
 ## Tahap 4: Finalisasi Registry & Inferensi
 1. **Registry Phase**: Client menghitung Centroid identitas menggunakan **50 gambar terbaik** dan mengirimkannya ke server.
 2. **Global Integration**: Server menggabungkan centroid dari seluruh client menjadi `global_embedding_registry.pth`.
-3. **Cross-Client Recognition**: Client mengunduh registry global sehingga bisa mengenali mahasiswa yang terdaftar di client lain dengan akurasi tinggi.
-ru yang sudah melalui proses federasi.
-2.  **Local BN Preservation**: Statistik Batch Normalization (mean/variance) yang telah dikalibrasi secara lokal tetap dipertahankan untuk memastikan normalisasi fitur yang optimal sesuai kondisi cahaya terminal (Inherent Personalization).
-3.  **Centroid Re-calculation**: Terminal menghitung ulang "titik tengah" (centroid) embedding setiap mahasiswa menggunakan kombinasi Backbone Global + Local BN untuk disimpan sebagai registri identitas universal.
+3. **Source of Truth Priority**: Client memprioritaskan penggunaan **Global Registry** dalam proses pengenalan wajah untuk menghilangkan bias overfitting lokal (pemanfaatan memori global).
+4. **Local BN Preservation**: Statistik BatchNorm yang telah dikalibrasi lokal tetap dipertahankan untuk personalisasi normalisasi fitur.
 
 ---
 
 ## Tahap 5: Fase Inferensi (Live Attendance)
 1.  **Eager Loading**: Memuat model versi terbaru ke RAM secara terisolasi.
-2.  **Vectorized Identity Identification (New)**: Pencarian identitas menggunakan operasi matriks (`torch.mm`) yang jauh lebih efisien daripada loop manual.
-3.  **Flip Trick Evaluation**: Merata-ratakan embedding wajah asli dan mirror untuk hasil skor yang lebih stabil.
-4.  **Temporal Voting & CIM**: Menggunakan buffer frame untuk konfirmasi identitas, mendukung *Instant Match* jika skor > 0.85. Threshold standar ditetapkan pada **0.7**.
-5.  **Explicit Memory Cleanup (GC)**: Pembersihan RAM secara rutin melalui `gc.collect()` untuk menjaga ketersediaan memori di perangkat edge.
+2.  **Vectorized Identity Identification**: Pencarian identitas menggunakan operasi matriks (`torch.mm`) yang efisien.
+3.  **Flip Trick Evaluation**: Merata-ratakan embedding wajah asli dan mirror.
+4.  **Research Logging (Top-2 Analysis)**: Mencatat identitas terbaik ke-1 dan ke-2 serta marginnya (**Gap**) untuk kebutuhan analisis data riset (identifikasi ambiguitas).
+5.  **Temporal Voting & CIM**: Mendukung *Instant Match* jika skor > 0.85. Threshold standar ditetapkan pada **0.7**.
+6.  **Explicit Memory Cleanup (GC)**: Pembersihan RAM secara rutin melalui `gc.collect()`.

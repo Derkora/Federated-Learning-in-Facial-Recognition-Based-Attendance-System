@@ -241,8 +241,10 @@ class AttendanceController:
                     registry = torch.load(registry_path, map_location="cpu")
                     reg_count = 0
                     for nrp, vec in registry.items():
-                        if nrp in local_user_ids:
-                            continue  # Biarkan Tier 3 (lokal) mengurus student ini
+                        # PENGUMUMAN PENTING: Jangan skip user lokal. 
+                        # Gunakan embedding Global yang lebih robust (hasil agregasi pFedFace)
+                        # biarpun mahasiswa tersebut ada di database lokal perangkat ini.
+                        # Ini untuk menghindari 'Local Overfitting' (Skor rendah 0.3).
                         v = torch.from_numpy(np.array(vec, dtype=np.float32).copy()) if not isinstance(vec, torch.Tensor) else vec.float()
                         v = torch.nn.functional.normalize(v.unsqueeze(0), p=2, dim=1).squeeze(0)
                         local_refs[nrp] = v.to(self.fl_manager.device)  # Override Tier 1 stale
@@ -261,8 +263,9 @@ class AttendanceController:
                 db_local_count = 0
                 for emb in local_db_embs:
                     if emb.user_id in local_refs:
-                        # PENTING: Jika sudah ada di Registry (Tier 2), jangan override dengan Tier 3 (Local).
-                        # Registry dihitung dari seluruh dataset (robust), sedangkan Tier 3 hanya dari 5 gambar (refresh).
+                        # Jika sudah ada di Registry (Tier 2), gunakan versi global (Robust).
+                        # Versi lokal (Tier 3) hanya digunakan jika mahasiswa benar-benar baru
+                        # dan belum sempat ter-agregasi ke server (Fase awal).
                         continue 
                     try:
                         dec_emb = encryptor.decrypt_embedding(emb.embedding_data, emb.iv).copy()

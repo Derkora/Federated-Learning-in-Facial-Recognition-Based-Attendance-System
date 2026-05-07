@@ -162,16 +162,18 @@ class LocalTrainer:
         self.transform = transforms.Compose([
             transforms.Resize((112, 96), interpolation=InterpolationMode.BILINEAR),
             transforms.RandomHorizontalFlip(),
-            transforms.RandomRotation(degrees=15),
-            transforms.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.4, hue=0.1),
-            transforms.RandomGrayscale(p=0.2),
-            transforms.RandomAutocontrast(p=0.2),
-            transforms.RandomApply([transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0))], p=0.3),
-            transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.2),
+            transforms.RandomRotation(degrees=20),
+            transforms.RandomPerspective(distortion_scale=0.2, p=0.3),
+            transforms.ColorJitter(brightness=0.6, contrast=0.6, saturation=0.5, hue=0.15),
+            transforms.RandomGrayscale(p=0.3),
+            transforms.RandomAutocontrast(p=0.3),
+            transforms.RandomApply([transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0))], p=0.5),
+            transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.3),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.50196, 0.50196, 0.50196]),
-            transforms.RandomErasing(p=0.1)
+            transforms.RandomErasing(p=0.2)
         ])
+
         
         self.val_transform = transforms.Compose([
             transforms.Resize((112, 96), interpolation=InterpolationMode.BILINEAR), 
