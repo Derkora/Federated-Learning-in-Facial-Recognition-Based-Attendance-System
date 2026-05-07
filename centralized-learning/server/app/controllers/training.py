@@ -26,6 +26,7 @@ from app.config import (
     UPLOAD_DIR, PROCESSED_DATA, MODEL_DIR, MODEL_PATH, 
     PRETRAINED_PATH, EMISSIONS_DIR, TRAINING_PARAMS, CODECARBON_AVAILABLE
 )
+from app.utils.logging import get_logger
 
 if CODECARBON_AVAILABLE:
     try:
@@ -41,13 +42,14 @@ class TrainingController:
         # Inisialisasi direktori penyimpanan data dan model
         os.makedirs(PROCESSED_DATA, exist_ok=True)
         os.makedirs(MODEL_DIR, exist_ok=True)
+        self.logger = get_logger()
 
 
     def fetch_data(self, wait_timeout=3600, expected_clients=None):
         # Tahap 1: Sinkronisasi dan Menunggu Unggahan Data dari Terminal
-        print(f"[INIT] Memulai pemantauan unggahan data di {UPLOAD_DIR} (Timeout: 1 Jam)...", flush=True)
+        self.logger.info(f"Memulai pemantauan unggahan data di {UPLOAD_DIR} (Timeout: 1 Jam)...")
         if expected_clients:
-            print(f"[OK] Menunggu data dari minimal {expected_clients} terminal.", flush=True)
+            self.logger.info(f"Menunggu data dari minimal {expected_clients} terminal.")
             
         start_time = time.time()
         last_img_count = -1
@@ -68,26 +70,24 @@ class TrainingController:
                         last_img_count = img_count
                         stable_since = time.time()
                         msg = f"Progres: {len(subdirs)} kelas, {img_count} gambar terdeteksi. Menunggu stabil..."
-                        print(f"[FASE 1] {msg}", flush=True)
-                        cl_manager.update_logs(msg)
+                        self.logger.info(msg)
                         cl_manager.update_received_data(UPLOAD_DIR)
                     else:
                         elapsed_stable = time.time() - stable_since
                         if elapsed_stable >= STABILIZATION_TIME:
                             msg = f"Data telah stabil! Total akhir: {len(subdirs)} kelas, {img_count} gambar."
-                            print(f"[SUCCESS] {msg}", flush=True)
-                            cl_manager.update_logs(msg)
+                            self.logger.success(msg)
                             break
                         else:
                             if time.time() - last_log_time > 60:
-                                print(f"[INFO] Menunggu kestabilan data... ({int(STABILIZATION_TIME - elapsed_stable)} detik lagi)", flush=True)
+                                self.logger.info(f"Menunggu kestabilan data... ({int(STABILIZATION_TIME - elapsed_stable)} detik lagi)")
                                 last_log_time = time.time()
                 else:
                     if time.time() - last_log_time > 60:
-                        print(f"[INFO] Menunggu unggahan pertama... (Durasi: {int(time.time() - start_time)} detik)", flush=True)
+                        self.logger.info(f"Menunggu unggahan pertama... (Durasi: {int(time.time() - start_time)} detik)")
                         last_log_time = time.time()
             except Exception as e:
-                print(f"[ERROR] Kesalahan saat pengecekan data: {e}", flush=True)
+                self.logger.error(f"Kesalahan saat pengecekan data: {e}")
             
             time.sleep(5)
         
@@ -110,7 +110,7 @@ class TrainingController:
         # Tahap 2: Menyeleksi wajah terbaik dan melakukan pemotongan (Face Cropping)
         # VERSI RESUME-ABLE: Melanjutkan pengerjaan jika terhenti
         try:
-            print("[INIT] Memulai proses seleksi ketajaman dan pemotongan wajah (Resume-able Mode)...", flush=True)
+            self.logger.info("Memulai proses seleksi ketajaman dan pemotongan wajah (Resume-able Mode)...")
             os.makedirs(PROCESSED_DATA, exist_ok=True)
             
             # Pindai folder NRP yang diunggah
@@ -124,7 +124,7 @@ class TrainingController:
                 # CEK APAKAH SUDAH SELESAI (Checkpoint): 
                 # Jika folder sudah ada dan berisi gambar yang cukup, skip.
                 if os.path.exists(dst) and len(os.listdir(dst)) >= 5:
-                    print(f"  [SKIP] {nrp_folder} sudah diproses sebelumnya.", flush=True)
+                    self.logger.info(f"  [SKIP] {nrp_folder} sudah diproses sebelumnya.")
                     continue
                 
                 # Gunakan folder sementara agar tidak corrupt jika mati di tengah jalan
@@ -137,8 +137,7 @@ class TrainingController:
                 if not top_images: continue
                 
                 msg = f"Memproses {len(top_images)} foto terbaik untuk {nrp_folder} ({i+1}/{total_folders})"
-                print(f"[OK] {msg}", flush=True)
-                cl_manager.update_logs(msg)
+                self.logger.info(msg)
                 
                 for img_name in top_images:
                     # 2. Deteksi & Alignment: Simpan ke folder .tmp
@@ -148,11 +147,27 @@ class TrainingController:
                 if os.path.exists(dst): shutil.rmtree(dst)
                 os.rename(tmp_dst, dst)
             
-            print("[SUCCESS] Preprocessing selesai. Seluruh wajah telah disejajarkan (Aligned).")
+            self.logger.success("Preprocessing selesai. Seluruh wajah telah disejajarkan (Aligned).")
             return {"status": "success", "message": "Seleksi Laplacian dan Landmark Alignment selesai."}
         except Exception as e:
-            print(f"[ERROR] Gagal melakukan preprocessing: {e}")
+            self.logger.error(f"Gagal melakukan preprocessing: {e}")
             return {"status": "error", "message": str(e)}
+
+    def sync_nrp_from_processed(self, dbs):
+        """Sinkronisasi ulang tabel UserGlobal dari folder processed untuk keteraturan NRP."""
+        if not os.path.exists(PROCESSED_DATA): return
+        folders = sorted([f for f in os.listdir(PROCESSED_DATA) if os.path.isdir(os.path.join(PROCESSED_DATA, f))])
+        for folder in folders:
+            parts = folder.split("_", 1)
+            nrp = parts[0].strip()
+            name = parts[1].strip() if len(parts) > 1 else "Unknown"
+            
+            existing = dbs.query(models.UserGlobal).filter(models.UserGlobal.nrp == nrp).first()
+            if not existing:
+                dbs.add(models.UserGlobal(name=name, nrp=nrp))
+        dbs.commit()
+        self.logger.success(f"Sinkronisasi {len(folders)} NRP dari folder processed berhasil.")
+
 
     def _get_lr(self, epoch):
         # LR Schedule Cosine Annealing (Smooth Decay)
@@ -182,7 +197,7 @@ class TrainingController:
             except: pass
 
         try:
-            print(f"[INIT] Memulai pelatihan dengan augmentasi dinamis ({epochs} epoch)...", flush=True)
+            self.logger.info(f"Memulai pelatihan dengan augmentasi dinamis ({epochs} epoch)...")
             transform = transforms.Compose([
                 transforms.Resize((112, 96)),
                 transforms.RandomHorizontalFlip(),
@@ -208,9 +223,8 @@ class TrainingController:
             train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
             val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
             
-            print(f"[DATASET] Ditemukan {len(full_dataset)} gambar dalam {num_classes} kelas.", flush=True)
-            print(f"[DATASET] Split: {len(train_dataset)} latih, {len(val_dataset)} validasi.", flush=True)
-            cl_manager.update_logs(f"Dataset: {len(full_dataset)} gambar, {num_classes} kelas. Batch Size: {batch_size}")
+            self.logger.info(f"Dataset: {len(full_dataset)} gambar dalam {num_classes} kelas. Split: {len(train_dataset)} latih, {len(val_dataset)} validasi.")
+            self.logger.info(f"Batch Size: {batch_size}")
             
             model = MobileFaceNet().to(DEVICE)
             if os.path.exists(PRETRAINED_PATH):
@@ -272,12 +286,12 @@ class TrainingController:
                     start_epoch = ckpt.get('epoch', -1) + 1
                     epoch_history = ckpt.get('history', [])
                     if start_epoch < epochs:
-                        print(f"[TRAIN] Melanjutkan training CL dari Epoch {start_epoch+1}", flush=True)
-                        cl_manager.update_logs(f"Resuming CL Training from Epoch {start_epoch+1}")
+                        self.logger.info(f"Melanjutkan training CL dari Epoch {start_epoch+1}")
+                        self.logger.info("Resuming CL Training from Epoch {start_epoch+1}")
                     else:
-                        print("[TRAIN] Checkpoint menunjukkan training sudah selesai.", flush=True)
+                        self.logger.info("Checkpoint menunjukkan training sudah selesai.")
                 except Exception as e:
-                    print(f"[WARN] Gagal memuat checkpoint CL: {e}", flush=True)
+                    self.logger.warn(f"Gagal memuat checkpoint CL: {e}")
 
             for epoch in range(start_epoch, epochs):
                 # 4. Perbarui Learning Rate sesuai Jadwal
@@ -313,7 +327,8 @@ class TrainingController:
                     # Log progres setiap 10 batch
                     if (b + 1) % 10 == 0 or (b + 1) == len(train_loader):
                         batch_acc = round(100 * correct / total, 2)
-                        print(f"  [TRAIN] Epoch {epoch+1}: Batch {b+1}/{len(train_loader)} - Loss: {loss.item():.4f} - Akurasi: {batch_acc}%", flush=True)
+                        # Log batch progress (Operational log)
+                        self.logger._log("TRAIN", f"  Epoch {epoch+1}: Batch {b+1}/{len(train_loader)} - Loss: {loss.item():.4f} - Akurasi: {batch_acc}%")
                 
                 # 5. Validation Loop (Menyelaraskan dengan metrik FL)
                 model.eval()
@@ -353,14 +368,14 @@ class TrainingController:
                     "val_accuracy": val_acc
                 })
                 
-                msg = f"Epoch {epoch+1}/{epochs} | Akurasi: {epoch_acc}% | Validasi: {val_acc}% | Loss: {avg_loss}"
-                print(f"[OK] {msg}", flush=True)
-                cl_manager.update_logs(msg)
+                msg = f"Epoch {epoch+1}/{epochs} | Acc: {epoch_acc/100:.4f} | Loss: {avg_loss:.4f} | Val Acc: {val_acc/100:.4f} | Val Loss: {val_avg_loss:.4f}"
+                self.logger.success(msg)
+
                 final_acc = val_acc 
                 
                 # SWA Snapshot Collection (Epoch 15-20)
                 if epoch >= swa_start:
-                    print(f"[SWA] Menyimpan snapshot dari epoch {epoch+1}...", flush=True)
+                    self.logger.info(f"Menyimpan snapshot SWA dari epoch {epoch+1}...")
                     swa_snapshots.append(copy.deepcopy(model.state_dict()))
                 
                 # Simpan Checkpoint Per Epoch
@@ -375,23 +390,20 @@ class TrainingController:
             
             # --- STOCHASTIC WEIGHT AVERAGING (SWA) EXECUTION ---
             if len(swa_snapshots) > 0:
-                print(f"[SWA] Melakukan rata-rata bobot dari {len(swa_snapshots)} snapshot...", flush=True)
+                self.logger.info(f"Melakukan rata-rata bobot (SWA) dari {len(swa_snapshots)} snapshot...")
                 swa_state_dict = copy.deepcopy(swa_snapshots[0])
                 for key in swa_state_dict:
-                    # Rata-rata per-layer bobot dari semua snapshot
                     for i in range(1, len(swa_snapshots)):
                         swa_state_dict[key] += swa_snapshots[i][key]
                     swa_state_dict[key] = torch.div(swa_state_dict[key], len(swa_snapshots))
                 
                 model.load_state_dict(swa_state_dict)
-                print("[SWA] Bobot model berhasil dirata-ratakan. Stabilitas & Generalisasi meningkat.", flush=True)
-                cl_manager.update_logs("Snapshot Averaging (SWA) berhasil diterapkan.")
+                self.logger.success("Stochastic Weight Averaging (SWA) berhasil diterapkan.")
             
             torch.save(model.state_dict(), MODEL_PATH)
             
-            # Bersihkan checkpoint setelah sukses
             if os.path.exists(checkpoint_path): os.remove(checkpoint_path)
-            cl_manager.update_logs("Pelatihan selesai. Model berhasil disimpan.")
+            self.logger.success("Pelatihan selesai. Model berhasil disimpan.")
             
             # 5. Ambil data energi jika CodeCarbon aktif
             energy_kwh = 0
@@ -410,13 +422,13 @@ class TrainingController:
             }
         except Exception as e:
             if tracker: tracker.stop()
-            print(f"[ERROR] Pelatihan gagal: {e}")
+            self.logger.error(f"Pelatihan gagal: {e}")
             return {"status": "error", "message": str(e)}
 
     def generate_reference_and_eval(self, dbs=None):
         # Tahap 4: Pembuatan Basis Data Referensi Wajah dan Evaluasi Transmisi
         try:
-            print("[INIT] Membuat basis data referensi identitas...", flush=True)
+            self.logger.info("Membuat basis data referensi identitas...")
             
             # --- PEMBUATAN REGISTRI ---
             model = MobileFaceNet().to(DEVICE)
@@ -447,7 +459,7 @@ class TrainingController:
                         ref_db[nrp] = centroid.cpu()
 
                 # --- SELF-TEST: Verifikasi integritas embedding pada server ---
-                print("[INIT] Menjalankan uji mandiri integritas model...", flush=True)
+                self.logger.info("Menjalankan uji mandiri integritas model...")
                 test_results = []
                 for nrp, centroid in ref_db.items():
                     p = os.path.join(PROCESSED_DATA, nrp)
@@ -465,12 +477,12 @@ class TrainingController:
                     # Pastikan shape (1, 128) -> (128,) untuk dot product yang benar
                     sim = torch.sum(test_emb.view(-1) * centroid.view(-1)).item()
                     test_results.append(sim)
-                    print(f"  > [TEST] nrp: {nrp} | Sim: {sim:.4f}")
+                    self.logger.info(f"  > [TEST] nrp: {nrp} | Sim: {sim:.4f}")
                 
                 avg_self_sim = sum(test_results) / len(test_results) if test_results else 0
-                print(f"[SUCCESS] Uji mandiri selesai. Rata-rata Similarity: {avg_self_sim:.4f}")
+                self.logger.success(f"Uji mandiri selesai. Rata-rata Similarity: {avg_self_sim:.4f}")
             
-            print(f"[SUCCESS] Menyimpan registri identitas dengan {len(ref_db)} identitas ke {MODEL_DIR}/reference_embeddings.pth")
+            self.logger.success(f"Registri identitas ({len(ref_db)} identitas) disimpan ke {MODEL_DIR}/reference_embeddings.pth")
             torch.save(ref_db, f"{MODEL_DIR}/reference_embeddings.pth")
 
             # --- PERSISTENSI VERSI (Simpan ke DB SETELAH file fisik aman di disk) ---
@@ -480,9 +492,9 @@ class TrainingController:
                     dbs.add(new_v)
                     dbs.commit()
                     dbs.refresh(new_v)
-                    print(f"[SUCCESS] Versi model v{new_v.version_id} berhasil disimpan ke database.")
+                    self.logger.success(f"Versi model v{new_v.version_id} berhasil disimpan ke database.")
                 except Exception as e:
-                    print(f"[ERROR] Gagal menyimpan versi ke database: {e}")
+                    self.logger.error(f"Gagal menyimpan versi ke database: {e}")
                     dbs.rollback()
             
             # Hitung Ukuran Aset yang akan didownload client (Model + Registri)
@@ -497,7 +509,7 @@ class TrainingController:
                 "download_volume_mb": round(download_size / (1024 * 1024), 2)
             }
         except Exception as e:
-            print(f"[ERROR] Gagal membuat registri: {e}")
+            self.logger.error(f"Gagal membuat registri: {e}")
             return {"status": "error", "message": str(e)}
 
 training_controller = TrainingController()

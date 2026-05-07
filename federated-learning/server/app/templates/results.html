@@ -20,7 +20,9 @@
                 <tr>
                     <th>Ronde</th>
                     <th>Loss Global</th>
-                    <th>Akurasi Global (%)</th>
+                    <th>Acc Global (%)</th>
+                    <th>Val Loss Global</th>
+                    <th>Val Acc Global (%)</th>
                 </tr>
             </thead>
             <tbody>
@@ -30,7 +32,11 @@
                     <td>{{ r.round }}</td>
                     <td>{{ "%.4f"|format(r.server.loss) if r.server.loss is defined else "-" }}</td>
                     <td>{{ "%.2f"|format(r.server.accuracy * 100) if r.server.accuracy is defined else "-" }}%</td>
+                    <td>{{ "%.4f"|format(r.server.val_loss) if r.server.val_loss is defined else "-" }}</td>
+                    <td>{{ "%.2f"|format(r.server.val_accuracy * 100) if r.server.val_accuracy is defined else "-" }}%</td>
                 </tr>
+
+
                 {% endfor %}
                 {% else %}
                 <tr>
@@ -55,8 +61,10 @@
                     <tr>
                         <th>Ronde</th>
                         <th>Samples</th>
-                        <th>Loss Akhir</th>
-                        <th>Akurasi Akhir (%)</th>
+                        <th>Loss Lokal</th>
+                        <th>Acc Lokal (%)</th>
+                        <th>Val Loss Lokal</th>
+                        <th>Val Acc Lokal (%)</th>
                         <th>Riwayat Epoch (Loss / Acc)</th>
                     </tr>
                 </thead>
@@ -69,6 +77,10 @@
                         <td>{{ c.num_samples }}</td>
                         <td>{{ "%.4f"|format(c.loss) }}</td>
                         <td>{{ "%.2f"|format(c.accuracy * 100) }}%</td>
+                        <td>{{ "%.4f"|format(c.val_loss) if c.val_loss is defined else "-" }}</td>
+                        <td>{{ "%.2f"|format(c.val_accuracy * 100) if c.val_accuracy is defined else "-" }}%</td>
+
+
                         <td style="font-size: 0.85rem; font-family: 'JetBrains Mono';">
                             {% if c.epoch_history %}
                             <div style="max-height: 100px; overflow-y: auto;">

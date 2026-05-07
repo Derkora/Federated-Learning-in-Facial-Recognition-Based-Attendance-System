@@ -2,12 +2,17 @@ import os
 import time
 import json
 from datetime import datetime, timedelta, timezone
+
+from sqlalchemy.orm import Session
 from .db.db import SessionLocal
+
 from .db import models
 from .db.models import Client
 from .config import ECONOMICS, TRAINING_PARAMS
+from .utils.logging import init_logger, get_logger
 
 class CentralizedServerManager:
+# ... (rest of class)
     # Manajer Utama Dashboard Server Terpusat
     # Melacak status pelatihan, fase aktif, dan metrik performa model global.
     
@@ -16,10 +21,14 @@ class CentralizedServerManager:
         self.current_phase = "Standby"
         self.upload_requested = False
         self.start_time = 0
-        self.current_logs = []
         self.received_data = [] 
         self.uploader_map = {} 
         self.model_version = 0
+        
+        # Inisialisasi Logger Terpusat (Global)
+        self.log_path = "/app/data/server_training.log"
+        init_logger(self.log_path, tag="CL-SERVER")
+        self.logger = get_logger()
         
         self.metrics = {
             "upload_volume_mb": 0,
@@ -38,31 +47,30 @@ class CentralizedServerManager:
         self.default_batch_size = TRAINING_PARAMS["batch_size"]
         self.inference_threshold = 0.7
         
-        # Inisialisasi File Log
-        self.log_path = "/app/data/server_training.log"
-        self._load_log_from_file() # Muat log lama ke UI
         self.update_logs("=== Server Started / Restarted ===")
         
         self.load_settings()
         self._load_persistence()
 
-    def _load_log_from_file(self):
-        """Memuat 100 baris terakhir dari file log ke memori (untuk Dashboard UI)."""
-        if os.path.exists(self.log_path):
-            try:
-                with open(self.log_path, "r") as f:
-                    lines = f.readlines()
-                    # Ambil 100 baris terakhir dan hilangkan newline
-                    self.current_logs = [line.strip() for line in lines[-100:]]
-                print(f"[PERSISTENCE] Berhasil memuat {len(self.current_logs)} baris log dari disk.")
-            except Exception as e:
-                print(f"[ERROR] Gagal memuat log persisten: {e}")
-        else:
-            print(f"[INFO] File log belum ada di {self.log_path}")
+    @property
+    def current_logs(self):
+        # Kompatibilitas dengan Dashboard UI agar tetap bisa membaca list log
+        return self.logger.get_logs()
+
+    @current_logs.setter
+    def current_logs(self, value):
+        # Memungkinkan pembersihan log (misal: self.current_logs = [])
+        if isinstance(value, list) and len(value) == 0:
+            self.logger.clear_logs()
+
+
+    def update_logs(self, message):
+        """Menambahkan log baru ke memori dan file persisten (Wrapper ke Logger)."""
+        self.logger.info(message)
 
     def _load_persistence(self):
         """Memuat ulang status dari database dengan logika retry dan logging yang sangat detail."""
-        print("[PERSISTENCE] Memulai pemulihan status server...")
+        self.logger.info("Memulai pemulihan status server...")
         
         max_retries = 10
         retry_delay = 5
@@ -73,11 +81,11 @@ class CentralizedServerManager:
                 # 1. Cek Koneksi & Muat Versi
                 version_count = db.query(models.ModelVersion).count()
                 self.model_version = version_count
-                print(f"[PERSISTENCE] Database terhubung. Ditemukan {version_count} versi model.")
+                self.logger.info(f"Database terhubung. Ditemukan {version_count} versi model.")
 
                 # 2. Muat Riwayat Pelatihan
                 rounds = db.query(models.TrainingRound).order_by(models.TrainingRound.round_id.asc()).all()
-                print(f"[PERSISTENCE] Menemukan {len(rounds)} ronde pelatihan di database.")
+                self.logger.info(f"Menemukan {len(rounds)} ronde pelatihan di database.")
                 
                 if rounds:
                     history = []
@@ -107,20 +115,20 @@ class CentralizedServerManager:
                     last = rounds[-1]
                     self.metrics["accuracy"] = float(last.global_accuracy) if last.global_accuracy is not None else 0.0
                     self.metrics["loss"] = float(last.global_loss) if last.global_loss is not None else 0.0
-                    print(f"[PERSISTENCE] Berhasil memulihkan {len(history)} baris riwayat ke dashboard.")
+                    self.logger.info(f"Berhasil memulihkan {len(history)} baris riwayat ke dashboard.")
 
                 # 3. Sinkronisasi Metrik Ekonomi
                 self.update_metrics({})
-                print("[PERSISTENCE] Sinkronisasi metrik selesai. Server Siap.")
+                self.logger.info("Sinkronisasi metrik selesai. Server Siap.")
                 db.close()
                 return # SUCCESS
             except Exception as e:
-                print(f"[PERSISTENCE] Percobaan {i+1}/{max_retries} gagal: {e}")
+                self.logger.warn(f"Percobaan {i+1}/{max_retries} gagal: {e}")
                 db.close()
                 if i < max_retries - 1:
                     time.sleep(retry_delay)
                 else:
-                    print("[PERSISTENCE ERROR] Gagal total memulihkan status. Dashboard mungkin akan kosong.")
+                    self.logger.error("Gagal total memulihkan status. Dashboard mungkin akan kosong.")
 
     def load_settings(self):
         if os.path.exists(self.settings_path):
@@ -130,9 +138,9 @@ class CentralizedServerManager:
                     self.default_epochs = s.get("epochs", self.default_epochs)
                     self.default_batch_size = s.get("batch_size", self.default_batch_size)
                     self.inference_threshold = s.get("threshold", self.inference_threshold)
-                    print(f"[OK] Settings loaded from {self.settings_path}")
+                    self.logger.info(f"Settings loaded from {self.settings_path}")
             except Exception as e:
-                print(f"[ERROR] Failed to load settings: {e}")
+                self.logger.error(f"Failed to load settings: {e}")
 
     def save_settings(self, new_settings: dict):
         try:
@@ -166,20 +174,13 @@ class CentralizedServerManager:
         self.current_phase = "Standby"
 
     def update_logs(self, msg):
-        # Mencatat aktivitas sistem ke dalam log dashboard (WIB Sync)
-        tz_wib = timezone(timedelta(hours=7))
-        ts = datetime.now(tz_wib).strftime('%H:%M:%S')
-        log_entry = f"[{ts}] {msg}"
-        self.current_logs.append(log_entry)
-        if len(self.current_logs) > 100: self.current_logs.pop(0)
-        
-        # Tulis ke file persisten
-        try:
-            with open(self.log_path, "a") as f:
-                f.write(f"[{datetime.now(tz_wib).strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
-        except: pass
-        
-        print(f"SERVER LOG: {msg}")
+        """Menambahkan log baru ke memori dan file persisten (Wrapper ke Logger)."""
+        if "[ERROR]" in msg:
+            self.logger.error(msg.replace("[ERROR] ", ""))
+        elif "[OK]" in msg:
+            self.logger.success(msg.replace("[OK] ", ""))
+        else:
+            self.logger.info(msg)
 
     def update_received_data(self, upload_dir):
         # Mendata NRP mahasiswa yang datanya berhasil diterima dari terminal
@@ -191,10 +192,15 @@ class CentralizedServerManager:
         for nrp in nrp_list:
             self.uploader_map[nrp] = edge_id
 
-    def increment_version(self):
-        # Meningkatkan versi model global setelah pelatihan selesai
-        self.model_version += 1
-        self.update_logs(f"Versi Model Global naik ke v{self.model_version}")
+    def increment_version(self, dbs: Session):
+        # Sinkronisasi versi model dari database untuk keakuratan dashboard
+        try:
+            version_count = dbs.query(models.ModelVersion).count()
+            self.model_version = version_count
+            self.update_logs(f"Versi Model Global naik ke v{self.model_version}")
+        except Exception as e:
+            self.model_version += 1
+            self.update_logs(f"Gagal sinkronisasi DB, fallback increment: v{self.model_version}")
 
     def update_metrics(self, new_data):
         # Memperbarui metrik performa dan estimasi biaya
@@ -247,9 +253,9 @@ class CentralizedServerManager:
             )
             db.add(new_round)
             db.commit()
-            print(f"[PERSISTENCE] Ronde {round_num} berhasil disimpan ke database.")
+            self.logger.success(f"Ronde {round_num} berhasil disimpan ke database.")
         except Exception as e:
-            print(f"[ERROR] Gagal menyimpan ronde ke database: {e}")
+            self.logger.error(f"Gagal menyimpan ronde ke database: {e}")
             db.rollback()
 
     def get_status(self, db=None):

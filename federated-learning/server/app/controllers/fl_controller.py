@@ -187,9 +187,19 @@ class FLController:
             self._mark_session_completed(session_id)
 
     def _log(self, msg):
-        self.fl_manager.update_logs(msg)
+        if "[ERROR]" in msg:
+            self.fl_manager.logger.error(msg.replace("[ERROR] ", ""))
+        elif "[SUCCESS]" in msg:
+            self.fl_manager.logger.success(msg.replace("[SUCCESS] ", ""))
+        elif "[INFO]" in msg:
+            self.fl_manager.logger.info(msg.replace("[INFO] ", ""))
+        elif "[OK]" in msg:
+            self.fl_manager.logger.success(msg.replace("[OK] ", ""))
+        else:
+            self.fl_manager.logger.info(msg)
 
     def _trigger_clients(self, endpoint):
+        self.fl_manager.logger.info(f"Triggering {endpoint} to all clients...")
         for cid, data in self.fl_manager.registered_clients.items():
             ip = data.get("ip_address")
             port = data.get("port", 8080)
@@ -197,7 +207,8 @@ class FLController:
                 try:
                     # Gunakan port yang dilaporkan client saat registrasi
                     requests.post(f"http://{ip}:{port}{endpoint}", timeout=2)
-                except: pass
+                except Exception as e:
+                    self.fl_manager.logger.warn(f"Failed to trigger {cid} at {ip}: {e}")
 
     def _wait_for_condition(self, condition_func, timeout):
         start = time.time()
@@ -256,4 +267,4 @@ class FLController:
 
     def _aggregate_registry_logic(self):
         # Memanggil fungsi agregasi fitur dari utilitas terpisah
-        aggregate_and_save_registry_assets(self._log)
+        aggregate_and_save_registry_assets(self.fl_manager.logger)

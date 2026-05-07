@@ -54,8 +54,12 @@
     
     let serverCamActive = false;
     let browserCamActive = false;
+    let isToggling = false; // Guard untuk mencegah polling menimpa status saat transisi
+
+    // ... (initBrowserCam, stopBrowserCam, sendBrowserFrame, updateResultUI tetap)
 
     // Inisialisasi Kamera Browser (Fallback)
+
     async function initBrowserCam() {
         if (browserCamActive) return;
         try {
@@ -121,7 +125,13 @@
     }
 
     async function pollServerStatus() {
+        if (isToggling) return; // Jangan timpa status jika sedang diproses tombol
+
+        // Sesuai permintaan: Polling hasil hanya jalan jika salah satu kamera aktif
+        if (!serverCamActive && !browserCamActive) return;
+
         try {
+
             const res = await fetch('/api/results/latest');
             const data = await res.json();
 
@@ -132,43 +142,98 @@
                     console.log("Hardware Error, beralih ke Browser Cam...");
                     initBrowserCam();
                 }
+                serverCamActive = true;
             } 
             // 2. Jika server lapor CAMERA OFF -> Matikan semua
             else if (data.matched === "CAMERA OFF") {
                 if (browserCamActive) stopBrowserCam();
                 serverCamActive = false;
-                updateButtonState();
             }
-            // 3. Jika hardware berjalan normal (BUKAN dari browser cam/inference API)
-            // Kita biarkan browser cam tetap jalan jika sudah aktif, 
-            // KECUALI hardware benar-benar mengirimkan frame valid (bukan CAMERA ERROR)
-            else if (data.matched !== "CAMERA ERROR" && data.matched !== "Standby" && !data.is_virtual) {
-                // Jika hardware sudah sembuh, baru matikan browser cam
-                // Namun di lingkungan Docker, biasanya hardware tidak akan sembuh sendiri
-                // Jadi kita biarkan saja browser cam mendominasi jika hardware error.
+            // 3. Jika hardware berjalan normal
+            else if (data.matched !== "Standby") {
+                serverCamActive = true;
             }
 
+            updateButtonState();
             if (!browserCamActive) updateResultUI(data);
         } catch (e) {}
     }
 
     toggleBtn.onclick = async () => {
-        // Coba nyalakan hardware dulu (Server-side)
-        try {
-            const res = await fetch('/api/camera/toggle', { method: 'POST' });
-            const data = await res.json();
-            if (!data.is_on && browserCamActive) stopBrowserCam();
-        } catch (e) {
-            // Jika API gagal, coba nyalakan browser cam langsung
-            if (!browserCamActive) initBrowserCam();
+        if (isToggling) return;
+        isToggling = true;
+        
+        const currentlyActive = browserCamActive || serverCamActive;
+        
+        if (currentlyActive) {
+            // Matikan UI segera agar responsif
+            if (browserCamActive) stopBrowserCam();
+            serverCamActive = false;
+            updateButtonState(); 
+
+            // Beritahu server untuk mematikan hardware
+            try {
+                await fetch('/api/camera/toggle', { method: 'POST' });
+            } catch (e) {
+                console.error("Gagal mematikan hardware di server:", e);
+            }
+        } else {
+            // Jika sedang mati, coba nyalakan hardware
+            toggleBtn.innerText = "Menghubungkan...";
+            try {
+                const res = await fetch('/api/camera/toggle', { method: 'POST' });
+                const data = await res.json();
+                if (data.is_on) {
+                    serverCamActive = true;
+                } else {
+                    // Jika hardware gagal (misal di Docker tanpa akses dev), gunakan browser
+                    await initBrowserCam();
+                }
+            } catch (e) {
+                await initBrowserCam();
+            }
+            updateButtonState();
         }
+        
+        // Beri waktu server untuk stabil sebelum polling mengambil alih lagi
+        setTimeout(() => { isToggling = false; }, 2000);
     };
+
+
 
     function updateButtonState() {
         const isActive = browserCamActive || serverCamActive;
+        if (isActive) {
+            toggleBtn.innerText = "Matikan Kamera";
+            toggleBtn.style.background = "#ef4444"; // Red
+            statusCard.style.display = "block"; // Tampilkan hasil jika aktif
+
+            // Pastikan stream hardware aktif kembali jika serverCamActive true
+            if (serverCamActive && !browserCamActive && hardwareImg.src.indexOf('video_feed') === -1) {
+                hardwareImg.src = '/video_feed?t=' + Date.now();
+                hardwareImg.style.display = 'block';
+            }
+        } else {
+            toggleBtn.innerText = "Nyalakan Kamera";
+            toggleBtn.style.background = "var(--accent)"; // Original Green
+            statusCard.style.display = "none"; // Sembunyikan hasil jika mati
+            statusCard.innerHTML = "Memindai wajah..."; // Reset teks
+
+            // Hentikan stream hardware agar tidak memenuhi log console
+            if (hardwareImg.src !== "") {
+                hardwareImg.src = ""; 
+                hardwareImg.style.display = 'none';
+            }
+        }
     }
+
 
     setInterval(pollServerStatus, 1000);
     setInterval(sendBrowserFrame, 1000);
+
+    // NOTE: Pesan "runtime.lastError" biasanya berasal dari Ekstensi Browser 
+    // (seperti Grammarly/AdBlock) dan bukan dari bug aplikasi.
 </script>
+
+
 {% endblock %}

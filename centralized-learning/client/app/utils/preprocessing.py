@@ -8,6 +8,8 @@ import torchvision.transforms.functional as TF
 from facenet_pytorch import MTCNN
 from PIL import Image
 import gc
+from .logging import get_logger
+
 
 DEVICE = torch.device('cpu')
 
@@ -25,6 +27,7 @@ class ImageProcessor:
     def __init__(self):
         # MTCNN dimuat secara malas (Lazy Load) untuk efisiensi RAM
         self._mtcnn = None
+        self.logger = get_logger()
         
         # Normalisasi MobileFaceNet (Standard): (x - 127.5) / 128.0
         # 128/255 = 0.50196
@@ -33,7 +36,7 @@ class ImageProcessor:
     @property
     def mtcnn(self):
         if self._mtcnn is None:
-            print("[INIT] Memuat detektor MTCNN ke RAM...")
+            self.logger.info("Memuat detektor MTCNN ke RAM...")
             self._mtcnn = MTCNN(
                 image_size=112, 
                 margin=20, 
@@ -45,7 +48,7 @@ class ImageProcessor:
 
     def unload_detector(self):
         if self._mtcnn is not None:
-            print("[INFO] Membersihkan detektor MTCNN dari RAM...")
+            self.logger.info("Membersihkan detektor MTCNN dari RAM...")
             del self._mtcnn
             self._mtcnn = None
             
@@ -64,7 +67,7 @@ class ImageProcessor:
                 scale = max_size / max(orig_w, orig_h)
                 new_size = (int(orig_w * scale), int(orig_h * scale))
                 img_detect = img.resize(new_size, Image.BILINEAR)
-                # print(f"[DEBUG] [CL] Downscaling input for detection: {orig_w}x{orig_h} -> {new_size[0]}x{new_size[1]}")
+                # self.logger.info(f"[CL] Downscaling input for detection: {orig_w}x{orig_h} -> {new_size[0]}x{new_size[1]}")
             else:
                 img_detect = img
                 scale = 1.0
@@ -96,9 +99,9 @@ class ImageProcessor:
                                                 flags=cv2.INTER_LINEAR, 
                                                 borderMode=cv2.BORDER_REPLICATE)
                         face_img = Image.fromarray(cv2.cvtColor(aligned, cv2.COLOR_BGR2RGB))
-                        # print("[OK] Wajah berhasil disejajarkan menggunakan landmark (Alignment).")
+                        # self.logger.success("Wajah berhasil disejajarkan menggunakan landmark (Alignment).")
                 except Exception as e:
-                    print(f"[DEBUG] Gagal melakukan alignment: {e}")
+                    self.logger.info(f"Gagal melakukan alignment: {e}")
             
             # 2. Fallback: Bbox Crop (Jika landmark gagal)
             if face_img is None:
@@ -107,14 +110,14 @@ class ImageProcessor:
                 x1, y1 = max(0, int(box[0] - margin/2)), max(0, int(box[1] - margin/2))
                 x2, y2 = min(img.width, int(box[2] + margin/2)), min(img.height, int(box[3] + margin/2))
                 face_img = img.crop((x1, y1, x2, y2)).resize((96, 112), Image.BILINEAR)
-                print("[WARNING] Deteksi wajah menggunakan fallback bbox crop.")
+                self.logger.warn("Deteksi wajah menggunakan fallback bbox crop.")
 
             if save_path and face_img:
                 face_img.save(save_path)
                 
             return face_img, boxes[0], probs[0]
         except Exception as e:
-            print(f"[ERROR] Gagal deteksi wajah: {e}")
+            self.logger.error(f"Gagal deteksi wajah: {e}")
             return None, None, 0.0
 
     def prepare_for_model(self, face_data):

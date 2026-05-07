@@ -24,7 +24,7 @@ preprocess = transforms.Compose([
     transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
 ])
 
-print("[INFO] Membangun basis data referensi dari folder NRP...")
+logger.info("Membangun basis data referensi dari folder NRP...")
 reference_embeddings = {}
 for nrp in os.listdir(DATASET_DIR):
     nrp_path = os.path.join(DATASET_DIR, nrp)

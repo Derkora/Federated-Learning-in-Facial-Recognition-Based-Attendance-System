@@ -12,6 +12,7 @@ import gc
 
 from app.db.db import SessionLocal
 from app.db.models import EmbeddingLocal, UserLocal
+from app.utils.logging import get_logger
 
 class FaceRecognitionClient(fl.client.NumPyClient):
     def __init__(self, model, head, data_path="/app/data", device="cpu"):
@@ -20,6 +21,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         self.data_path = data_path
         self.device = device if isinstance(device, torch.device) else torch.device(device)
         self.label_map = None
+        self.logger = get_logger()
         
         # Prioritas: Muat dari arsip lokal (Penguasaan Label Permanen)
         map_path = os.path.join(self.data_path, "models", "label_map.json")
@@ -27,7 +29,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
             import json
             with open(map_path, "r") as f:
                 self.label_map = json.load(f)
-                print(f"[CLIENT] Initialized with archived Global Label Map: {len(self.label_map)} identities.")
+                self.logger.info(f"Initialized with archived Global Label Map: {len(self.label_map)} identities.")
         
         processed_path = os.path.join(self.data_path, "processed")
         self.trainer = LocalTrainer(self.model, self.head, device=self.device, data_path=processed_path)
@@ -35,10 +37,10 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         head_path = os.path.join(self.data_path, "models", "local_head.pth")
         if os.path.exists(head_path) and self.head is not None:
             try:
-                print(f"Loading local classifier head from {head_path}...")
+                self.logger.info(f"Loading local classifier head from {head_path}...")
                 self.head.load_state_dict(torch.load(head_path, map_location=self.device))
             except Exception as e:
-                print(f"[WARN] local_head.pth corrupt or incompatible, skipping: {e}")
+                self.logger.warn(f"local_head.pth corrupt or incompatible, skipping: {e}")
                 import os as _os
                 _os.remove(head_path)  # Hapus file rusak agar tidak crash lagi
 
@@ -50,18 +52,18 @@ class FaceRecognitionClient(fl.client.NumPyClient):
             self.fl_manager._ensure_models_loaded()
             
         rnd = config.get("round", 0)
-        print(f"FL Fit [Round {rnd}]: Receiving {len(parameters)} parameters...")
+        self.logger.info(f"FL Fit [Round {rnd}]: Receiving {len(parameters)} parameters...")
         
         # Sinkronisasi Redundan: Pastikan label map tersedia
         if not self.label_map and "label_map" in config:
             self.label_map = json.loads(config["label_map"])
-            print(f"[CLIENT] Received label_map via fit config.")
+            self.logger.info("Received label_map via fit config.")
         
         try:
             if len(parameters) > 0:
                 self.trainer.set_backbone_parameters(parameters, personalized=True)
         except Exception as e:
-            print(f"[ERROR] set_backbone_parameters failed: {e}")
+            self.logger.error(f"set_backbone_parameters failed: {e}")
             return parameters, 0, {"loss": 0.0, "accuracy": 0.0, "status": "ParameterError", "hostname": os.getenv("HOSTNAME", "unknown"), "epoch_history": "[]"}
         
         epochs = config.get("local_epochs", 3)
@@ -80,9 +82,9 @@ class FaceRecognitionClient(fl.client.NumPyClient):
                 global_embs.append({"nrp": item.user_id, "embedding": torch.from_numpy(emb_np)})
             
             local_user_count = db.query(UserLocal).count()
-            print(f"[CLIENT] Dataset: {local_user_count} local users, {len(global_embs)} global memories.")
+            self.logger.info(f"Dataset: {local_user_count} local users, {len(global_embs)} global memories.")
         except Exception as e:
-            print(f"[CLIENT] Error loading dataset info: {e}")
+            self.logger.error(f"Error loading dataset info: {e}")
         finally:
             db.close()
 
@@ -103,43 +105,44 @@ class FaceRecognitionClient(fl.client.NumPyClient):
                 epochs=epochs, lr=lr, round_num=rnd,
                 global_embeddings=global_embs,
                 label_map=self.label_map,
-                mu=mu, lam=lam
+                mu=mu, lam=lam,
+                status_callback=lambda e, total_e, l, a: self._update_training_status(rnd, e, total_e, l, a, config.get("total_rounds", 10))
             )
 
             status = "Success"
             # Pembersihan Checkpoint setelah sukses
             try:
-                ckpt_path = os.path.join(model_dir, "training_checkpoint.pth")
+                ckpt_path = os.path.join(self.data_path, "models", "training_checkpoint.pth")
                 if os.path.exists(ckpt_path):
                     os.remove(ckpt_path)
-                    print(f"  [CHECKPOINT] Pembersihan checkpoint berhasil.")
+                    self.logger.success("Pembersihan checkpoint berhasil.")
             except: pass
         except TrainingNaNError as e:
-            print(f"[CLIENT] NaN error: {e}")
+            self.logger.error(f"NaN error: {e}")
             status = "NaNError"
         except Exception as e:
-            print(f"[CLIENT] Training exception (non-fatal): {e}")
-            import traceback; traceback.print_exc()
+            self.logger.error(f"Training exception (non-fatal): {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             status = "TrainingError"
 
-        # Simpan checkpoint lokal (Tanpa merubah nomor versi global di disk)
+        # Simpan checkpoint lokal (setelah training selesai)
         try:
             model_dir = os.path.join(self.data_path, "models")
             os.makedirs(model_dir, exist_ok=True)
             torch.save(self.model.state_dict(), os.path.join(model_dir, "backbone.pth"))
             torch.save(self.trainer.head.state_dict(), os.path.join(model_dir, "local_head.pth"))
-            # model_version.txt jangan diupdate di sini, biarkan manager yang menangani di akhir siklus
         except Exception as e:
-            print(f"[CLIENT] Checkpoint save failed: {e}")
+            self.logger.error(f"Final checkpoint save failed: {e}")
 
         # Evaluasi validasi (non-fatal)
         val_loss, val_accuracy = 0.0, 0.0
         try:
             val_loss, val_accuracy, _ = self.trainer.evaluate(global_embeddings=global_embs, label_map=self.label_map)
         except Exception as e:
-            print(f"[CLIENT] Evaluate failed (non-fatal): {e}")
+            self.logger.error(f"Evaluate failed (non-fatal): {e}")
 
-        # Memory Cleanup (Jetson specialized)
+        # Memory Cleanup
         del global_embs
         gc.collect()
             
@@ -153,6 +156,13 @@ class FaceRecognitionClient(fl.client.NumPyClient):
             "epoch_history": json.dumps(epoch_history)
         }
 
+    def _update_training_status(self, rnd, epoch, total_epochs, loss, acc, total_rounds):
+        if hasattr(self, 'fl_manager'):
+            msg = f"Training: Ronde {rnd}/{total_rounds} | Epoch {epoch}/{total_epochs} | Loss: {loss:.4f} | Akurasi: {acc*100:.1f}%"
+            self.fl_manager.fl_status = msg
+            self.logger.info(msg)
+
+
     def evaluate(self, parameters, config):
         if hasattr(self, 'fl_manager'):
             self.fl_manager._ensure_models_loaded()
@@ -160,13 +170,13 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         try:
             self.trainer.set_backbone_parameters(parameters, personalized=True)
         except Exception as e:
-            print(f"[CLIENT] evaluate set_params failed: {e}")
+            self.logger.error(f"evaluate set_params failed: {e}")
             return 0.0, 0, {"accuracy": 0.0}
 
         try:
             loss, accuracy, num_samples = self.trainer.evaluate(global_embeddings=[], label_map=self.label_map)
         except Exception as e:
-            print(f"[CLIENT] evaluate failed: {e}")
+            self.logger.error(f"evaluate failed: {e}")
             loss, accuracy, num_samples = 0.0, 0.0, 0
 
         gc.collect()

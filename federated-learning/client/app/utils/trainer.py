@@ -15,6 +15,7 @@ import gc
 from collections import OrderedDict
 from torchvision.transforms import InterpolationMode
 import numpy as np
+from .logging import get_logger
 
 class TrainingNaNError(Exception):
     """Pengecualian khusus saat loss atau bobot pelatihan menjadi NaN."""
@@ -44,13 +45,14 @@ class FaceDataset(Dataset):
         self.transform = transform
         self.samples = []
         self.class_counts = {}
+        self.logger = get_logger()
         
-        print(f"[DATASET] Root: {data_root} | Mode: {mode}")
+        self.logger.info(f"Dataset Initialization | Root: {data_root} | Mode: {mode}")
         
         local_nrps = []
         if os.path.exists(data_root):
             local_nrps = sorted([f for f in os.listdir(data_root) if os.path.isdir(os.path.join(data_root, f))])
-            print(f"[DATASET] Found {len(local_nrps)} directories in {data_root}")
+            self.logger.info(f"Found {len(local_nrps)} directories in {data_root}")
             
         global_nrps = []
         if global_embeddings:
@@ -58,10 +60,10 @@ class FaceDataset(Dataset):
             
         if label_map:
             all_unique_nrps = label_map
-            print(f"[DATASET] Using Global Label Map with {len(all_unique_nrps)} identities.")
+            self.logger.info(f"Using Global Label Map with {len(all_unique_nrps)} identities.")
         else:
             all_unique_nrps = sorted(list(set(local_nrps + global_nrps)))
-            print(f"[DATASET] Building Local Label Map with {len(all_unique_nrps)} identities.")
+            self.logger.info(f"Building Local Label Map with {len(all_unique_nrps)} identities.")
 
         self.nrp_to_idx = {nrp: idx for idx, nrp in enumerate(all_unique_nrps)}
         self.id_map = {idx: nrp for nrp, idx in self.nrp_to_idx.items()}
@@ -71,12 +73,12 @@ class FaceDataset(Dataset):
         self.class_counts = {idx: 0 for idx in range(self.num_classes)}
 
         # Penyelarasan Data: Ikuti label_map global secara ketat jika tersedia
-        print(f"[DATASET] Processing local folders for {len(local_nrps)} users...")
+        self.logger.info(f"Processing local folders for {len(local_nrps)} users...")
         
         
         for nrp in local_nrps:
             if label_map and nrp not in self.nrp_to_idx:
-                print(f"  [SKIP] {nrp}: Not in global label map.")
+                self.logger.warn(f"  [SKIP] {nrp}: Not in global label map.")
                 continue
                 
             folder_path = os.path.join(data_root, nrp)
@@ -111,15 +113,14 @@ class FaceDataset(Dataset):
                     selected = selected_train[split_idx:]
             
             if len(selected) == 0:
-                print(f"  [WARN] {nrp}: No viable images found.")
+                self.logger.warn(f"  [WARN] {nrp}: No viable images found.")
                 continue
             
             for p in selected:
                 self.samples.append({"type": "image", "path": p, "label": idx})
                 self.class_counts[idx] += 1
             
-            print(f"  [OK] {nrp}: {len(selected)} samples selected ({mode}).")
-            print(f"  [OK] {nrp}: Loaded {len(selected)} {mode} images.")
+            self.logger.info(f"  [OK] {nrp}: {len(selected)} samples selected ({mode}).")
 
         # Tambahkan sampel embedding global (Berbagi Pengetahuan / Knowledge Sharing)
         if global_embeddings:
@@ -156,6 +157,7 @@ class LocalTrainer:
         self.head = head.to(self.device) if head is not None else None
         self.data_path = data_path
         self.nrp_to_idx = {} 
+        self.logger = get_logger()
         
         self.transform = transforms.Compose([
             transforms.Resize((112, 96), interpolation=InterpolationMode.BILINEAR),
@@ -191,13 +193,13 @@ class LocalTrainer:
                 'head_state_dict': self.head.state_dict(),
                 'history': history
             }, checkpoint_path)
-            print(f"  [CHECKPOINT] Progress disimpan (Ronde {round_num}, Epoch {epoch+1})")
+            self.logger.info(f"Progress disimpan (Ronde {round_num}, Epoch {epoch+1})")
         except Exception as e:
-            print(f"  [CHECKPOINT] Gagal menyimpan: {e}")
+            self.logger.error(f"Gagal menyimpan checkpoint: {e}")
 
-    def train(self, epochs=5, lr=0.0001, round_num=0, global_embeddings=None, label_map=None, mu=0.05, lam=0.1):
+    def train(self, epochs=5, lr=0.0001, round_num=0, global_embeddings=None, label_map=None, mu=0.05, lam=0.1, status_callback=None):
         if self.backbone is None or self.head is None:
-             print("[TRAINER] Model belum terinisialisasi..")
+             self.logger.warn("Model belum terinisialisasi..")
              return 0.0, 0.0, 0, []
 
         epoch_history = []
@@ -214,16 +216,16 @@ class LocalTrainer:
                     start_epoch = ckpt.get('epoch', -1) + 1
                     epoch_history = ckpt.get('history', [])
                     if start_epoch < epochs:
-                        print(f"[TRAINER] Melanjutkan dari checkpoint (Ronde {round_num}, Mulai Epoch {start_epoch+1})")
+                        self.logger.info(f"Melanjutkan dari checkpoint (Ronde {round_num}, Mulai Epoch {start_epoch+1})")
                     else:
-                        print(f"[TRAINER] Checkpoint menunjukkan ronde {round_num} sudah selesai.")
+                        self.logger.info(f"Checkpoint menunjukkan ronde {round_num} sudah selesai.")
                         return 0.0, 0.0, 0, epoch_history
             except Exception as e:
-                print(f"[TRAINER] Gagal memuat checkpoint: {e}")
+                self.logger.error(f"Gagal memuat checkpoint: {e}")
 
         dataset = FaceDataset(self.data_path, global_embeddings=global_embeddings, transform=self.transform, mode="train", label_map=label_map)
         if len(dataset) < 2:
-            print(f"[TRAINER] Data terlalu kecil ({len(dataset)}) untuk training. Melewati round.")
+            self.logger.warn(f"Data terlalu kecil ({len(dataset)}) untuk training. Melewati round.")
             return 0.0, 0.0, len(dataset), []
             
         if dataset.num_classes > 0 and dataset.num_classes != self.head.weight.shape[0]:
@@ -278,7 +280,7 @@ class LocalTrainer:
         # LOSS: Pure CrossEntropy (Tanpa Label Smoothing agar margin tegas)
         criterion = nn.CrossEntropyLoss()
 
-        print(f"[TRAINER] Round {round_num}: Training {len(dataset)} data untuk {epochs} epochs")
+        self.logger.info(f"Round {round_num}: Training {len(dataset)} data untuk {epochs} epochs")
         total_loss, correct, total = 0.0, 0, 0
         epoch_history = []
         
@@ -316,7 +318,7 @@ class LocalTrainer:
                 loss = ce_loss + prox_loss
                 
                 if torch.isnan(loss):
-                    print(f"[ERROR] NaN loss terdeteksi...")
+                    self.logger.error("NaN loss terdeteksi during training. Rolling back.")
                     self.backbone.load_state_dict(backbone_snapshot)
                     self.head.load_state_dict(head_snapshot)
                     raise TrainingNaNError(f"NaN loss di Round {round_num}")
@@ -336,7 +338,9 @@ class LocalTrainer:
             
             acc = correct / total if total > 0 else 0.0
             avg_epoch_loss = epoch_loss / len(dataloader) if len(dataloader) > 0 else 0.0
-            print(f"  > Epoch {epoch+1}/{epochs} | Loss: {avg_epoch_loss:.4f} | Acc: {acc:.4f}")
+            self.logger.info(f"  > Epoch {epoch+1}/{epochs} | Loss: {avg_epoch_loss:.4f} | Acc: {acc:.4f}")
+            if status_callback:
+                status_callback(epoch + 1, epochs, avg_epoch_loss, acc)
             epoch_history.append({"epoch": epoch + 1, "loss": avg_epoch_loss, "accuracy": acc})
             
             # Simpan progres setelah setiap epoch
@@ -366,7 +370,7 @@ class LocalTrainer:
                 # Defensive check: skip if labels are out of bounds for head weight
                 max_label = labels.max().item()
                 if max_label >= self.head.weight.shape[0]:
-                    print(f"[TRAINER WARNING] Eval labels ({max_label}) out of head bounds ({self.head.weight.shape[0]}). Skipping batch.")
+                    self.logger.warn(f"Eval labels ({max_label}) out of head bounds ({self.head.weight.shape[0]}). Skipping batch.")
                     continue
 
                 features = torch.zeros((labels.size(0), self.head.weight.shape[1]), device=self.device)
@@ -416,7 +420,7 @@ class LocalTrainer:
         new_head = ArcMarginProduct(embedding_size, new_num_classes).to(self.device)
         
         if old_head is None:
-            print(f"[TRAINER] New Head Created: {new_num_classes} classes (initial/lazy)")
+            self.logger.info(f"New Head Created: {new_num_classes} classes (initial/lazy)")
             self.head = new_head
             self.nrp_to_idx = new_nrp_to_idx
             return new_head
@@ -430,7 +434,7 @@ class LocalTrainer:
                          new_head.weight[new_idx] = old_head.weight[old_idx]
                          copied_count += 1
         
-        print(f"[TRAINER] Head Expanded: {old_head.weight.shape[0]} -> {new_num_classes} ({copied_count} weights preserved)")
+        self.logger.info(f"Head Expanded: {old_head.weight.shape[0]} -> {new_num_classes} ({copied_count} weights preserved)")
         self.head = new_head
         self.nrp_to_idx = new_nrp_to_idx
         return new_head
@@ -449,14 +453,14 @@ class LocalTrainer:
         shared_keys = [k for k in state_dict.keys() if not personalized or self._is_shared_param(k)]
         
         mode_str = "pFedFace (Local BN/Head)" if personalized else "Standard (Full Sync)"
-        print(f"[TRAINER] Extracting {len(shared_keys)} parameters ({mode_str}).")
+        self.logger.info(f"Extracting {len(shared_keys)} parameters ({mode_str}).")
         
         params = [state_dict[k].cpu().numpy().copy() for k in shared_keys]
         
         # Sertakan Head hanya jika bukan Personalized (pFedFace)
         if not personalized and self.head is not None:
             head_params = [p.detach().cpu().numpy().copy() for p in self.head.parameters()]
-            print(f"[TRAINER] Including {len(head_params)} head parameters.")
+            self.logger.info(f"Including {len(head_params)} head parameters.")
             params.extend(head_params)
             
         return params
@@ -473,12 +477,12 @@ class LocalTrainer:
                    any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked'])]
         
         # Kembalikan sebagai dictionary of numpy arrays (Serialized State Dict)
-        print(f"[TRAINER] Collecting {len(bn_keys)} BN parameters into orderly state_dict.")
+        self.logger.info(f"Collecting {len(bn_keys)} BN parameters into orderly state_dict.")
         return {k: state_dict[k].cpu().numpy().copy() for k in bn_keys}
 
     def set_backbone_parameters(self, parameters, personalized=True):
         if self.backbone is None:
-            print("[TRAINER] Backbone is None, initializing new MobileFaceNet...")
+            self.logger.info("Backbone is None, initializing new MobileFaceNet...")
             self.backbone = MobileFaceNet().to(self.device)
             self.backbone.eval()
             
@@ -486,7 +490,7 @@ class LocalTrainer:
         shared_keys = [k for k in state_dict.keys() if not personalized or self._is_shared_param(k)]
         num_backbone = len(shared_keys)
 
-        print(f"[TRAINER] Injecting {num_backbone} backbone parameters.")
+        self.logger.info(f"Injecting {num_backbone} backbone parameters.")
         new_state_dict = OrderedDict(state_dict)
         for i, k in enumerate(shared_keys):
             try:
@@ -500,7 +504,7 @@ class LocalTrainer:
         # Pasang Head Parameters (Hanya jika Full Sync dan ada dalam payload)
         if not personalized and len(parameters) > num_backbone and self.head is not None:
             head_params = parameters[num_backbone:]
-            print(f"[TRAINER] Injecting {len(head_params)} head parameters.")
+            self.logger.info(f"Injecting {len(head_params)} head parameters.")
             for i, p in enumerate(self.head.parameters()):
                 if i < len(head_params):
                     try:
@@ -514,7 +518,7 @@ class LocalTrainer:
         dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=hybrid_collate)
         self.backbone.eval()
         temp_embeddings = {nrp: [] for nrp in dataset.nrp_to_idx.keys()}
-        print(f"[TRAINER] Calculating Centroids...")
+        self.logger.info("Calculating Centroids...")
         with torch.no_grad():
             for imgs, embs, labels, is_embedding in dataloader:
                 img_mask = ~is_embedding

@@ -7,6 +7,8 @@ from PIL import Image
 from facenet_pytorch import MTCNN
 from .mobilefacenet import MobileFaceNet
 
+from .logging import get_logger
+
 DEVICE = torch.device('cpu')
 
 # Landmark kanonik 96x112 Portrait (standar InsightFace/MobileFaceNet)
@@ -33,6 +35,7 @@ class FaceHandler:
             # Normalisasi MobileFaceNet (Standard): (x - 127.5) / 128.0
             T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.50196, 0.50196, 0.50196])
         ])
+        self.logger = get_logger()
 
     def detect_and_save(self, img_path, dst_path):
         """
@@ -56,8 +59,10 @@ class FaceHandler:
                                                      flags=cv2.INTER_LINEAR,
                                                      borderMode=cv2.BORDER_REPLICATE)
                             face_img = Image.fromarray(cv2.cvtColor(aligned, cv2.COLOR_BGR2RGB))
-                    except Exception as e:
-                        print(f"[DEBUG] Alignment gagal: {e}")
+                    # except Exception as e:
+                    #     self.logger.info(f"Alignment gagal pada {os.path.basename(img_path)}: {e}")
+                    except: pass
+
 
                 # 2. Fallback: Bbox Crop
                 if face_img is None:
@@ -71,10 +76,11 @@ class FaceHandler:
 
                 face_img.save(dst_path)
                 return True
-            else:
-                print(f"[FaceHandler] Skip: Wajah tidak terdeteksi pada {os.path.basename(img_path)}")
+            # else:
+            #     self.logger.info(f"Skip: Wajah tidak terdeteksi pada {os.path.basename(img_path)}")
+
         except Exception as e:
-            print(f"[FaceHandler] ERROR pada {os.path.basename(img_path)}: {e}")
+            self.logger.error(f"ERROR deteksi/simpan pada {os.path.basename(img_path)}: {e}")
         return False
 
     def get_blur_score(self, image_path):

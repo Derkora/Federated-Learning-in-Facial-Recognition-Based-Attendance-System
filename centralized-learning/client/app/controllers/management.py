@@ -7,6 +7,8 @@ import traceback
 import collections
 from app.utils.preprocessing import DEVICE
 
+from app.utils.logging import get_logger
+
 MODEL_DIR = os.path.join(os.getenv("DATA_PATH", "/app/data"), "models")
 DATA_DIR = os.getenv("RAW_DATA_PATH", "/app/raw_data") + "/students"
 os.makedirs(MODEL_DIR, exist_ok=True)
@@ -17,6 +19,7 @@ class ManagementController:
     def __init__(self, server_url, client_id):
         self.server_url = server_url
         self.client_id = client_id
+        self.logger = get_logger()
 
     def register_client(self, ip_address):
         # Mendaftarkan terminal ke database server pusat.
@@ -25,7 +28,7 @@ class ManagementController:
             response = requests.post(f"{self.server_url}/register-client", json=payload, timeout=5)
             return response.status_code == 200
         except Exception as e:
-            print(f"[ERROR] Gagal registrasi client: {e}")
+            self.logger.error(f"Gagal registrasi client: {e}")
             return False
 
     def check_training_request(self):
@@ -55,7 +58,7 @@ class ManagementController:
                 model.load_state_dict(state_dict)
                 model.eval()
             else:
-                print(f"[ERROR] Gagal mendapatkan model. HTTP: {res_m.status_code}")
+                self.logger.error(f"Gagal mendapatkan model. HTTP: {res_m.status_code}")
                 return False, None
 
             # 2. Sinkronisasi Referensi (Embeddings)
@@ -71,14 +74,14 @@ class ManagementController:
                 
                 # --- NRP INDEXING (Sorted logic) ---
                 sorted_refs = collections.OrderedDict(sorted(refs.items()))
-                print(f"[SUCCESS] Sinkronisasi referensi berhasil ({len(sorted_refs)} identitas).")
+                self.logger.success(f"Sinkronisasi referensi berhasil ({len(sorted_refs)} identitas).")
                 
                 return True, sorted_refs
             
-            print(f"[ERROR] Gagal mendapatkan referensi. HTTP: {res_r.status_code}")
+            self.logger.error(f"Gagal mendapatkan referensi. HTTP: {res_r.status_code}")
             return False, None
         except Exception as e:
-            print(f"[ERROR] Kesalahan saat sinkronisasi aset: {e}")
+            self.logger.error(f"Kesalahan saat sinkronisasi aset: {e}")
             return False, None
 
     def package_and_upload(self):
@@ -98,7 +101,7 @@ class ManagementController:
                 folder_count += len(dirs)
                 file_count += len(files)
             
-            print(f"[INFO] Mengemas {file_count} gambar dari {folder_count} mahasiswa.")
+            self.logger.info(f"Mengemas {file_count} gambar dari {folder_count} mahasiswa.")
 
             if file_count == 0:
                 return False, "Tidak ada gambar untuk diunggah."
@@ -119,7 +122,7 @@ class ManagementController:
             os.remove(zip_path)
             return res.status_code == 200, res.text
         except Exception as e:
-            print(f"[ERROR] Gagal mengemas atau mengunggah data: {e}")
+            self.logger.error(f"Gagal mengemas atau mengunggah data: {e}")
             if os.path.exists(zip_path): os.remove(zip_path)
             return False, str(e)
 

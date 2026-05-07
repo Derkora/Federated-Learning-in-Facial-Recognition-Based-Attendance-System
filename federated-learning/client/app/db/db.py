@@ -25,6 +25,8 @@ if DATABASE_URL.startswith("sqlite"):
         cursor.execute("PRAGMA synchronous=NORMAL")
         cursor.close()
 
+from ..utils.logging import get_logger
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -32,16 +34,17 @@ def init_db():
     """Buat semua tabel jika belum ada.
     Pastikan mere pemanggil sudah di-import di file pemanggil sebelum fungsi ini dipanggil.
     """
+    logger = get_logger()
     # Pastikan direktori database ada (penting untuk SQLite)
     if DATABASE_URL.startswith("sqlite"):
         db_path = DATABASE_URL.replace("sqlite:///", "").replace("sqlite://", "")
         db_dir = os.path.dirname(db_path)
         if db_dir and not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
-            print(f"[DB] Created directory: {db_dir}")
+            logger.info(f"Database directory created: {db_dir}")
 
     Base.metadata.create_all(bind=engine)
-    print("[DB] Tables initialized.")
+    logger.info("Database tables initialized.")
 
 # Dependency FastAPI
 def get_db():

@@ -21,7 +21,7 @@ services:
     devices:
       - /dev/video0:/dev/video0
     volumes:
-      - ./client/data:/app/data
+      - cl-client-data:/app/data
       - ${RAW_DATA_PATH_CLIENT}:/app/raw_data/students
     networks:
       - cl-network
@@ -29,3 +29,7 @@ services:
 networks:
   cl-network:
     driver: bridge
+
+volumes:
+  cl-client-data:
+

@@ -21,6 +21,8 @@
                     <th>Epoch</th>
                     <th>Loss</th>
                     <th>Accuracy (%)</th>
+                    <th>Val Loss</th>
+                    <th>Val Accuracy (%)</th>
                 </tr>
             </thead>
             <tbody>
@@ -30,7 +32,10 @@
                     <td>{{ h.epoch }}</td>
                     <td>{{ "%.4f"|format(h.loss|float) }}</td>
                     <td>{{ "%.2f"|format(h.accuracy|float) }}%</td>
+                    <td>{{ "%.4f"|format(h.val_loss|float) if h.val_loss is defined else "-" }}</td>
+                    <td>{{ "%.2f"|format(h.val_accuracy|float) if h.val_accuracy is defined else "-" }}%</td>
                 </tr>
+
                 {% endfor %}
                 {% else %}
                 <tr>

@@ -6,6 +6,8 @@ import numpy as np
 import os
 from app.utils.preprocessing import image_processor, DEVICE
 
+from app.utils.logging import get_logger
+
 class AttendanceController:
     # Kontroler untuk proses Pengenalan Wajah dan Pelaporan Presensi (Optimasi Edge: No ONNX)
     
@@ -14,6 +16,7 @@ class AttendanceController:
         self.server_url = manager.server_url
         self.client_id = manager.client_id
         self._last_version_loaded = -1 # Melacak versi model yang sedang aktif di session
+        self.logger = get_logger()
 
     def process_inference(self, img_pil, model, reference_embeddings):
         # Melakukan inferensi wajah dengan Temporal Voting (Buffer Rata-rata)
@@ -32,7 +35,7 @@ class AttendanceController:
             # --- INFERENSI PURE PYTORCH (Optimasi Edge) ---
             try:
                 if current_v != self._last_version_loaded:
-                    print(f"[DEBUG] Menggunakan model PyTorch v{current_v}. Input: {face_tensor_ready.shape}")
+                    self.logger.info(f"Menggunakan model PyTorch v{current_v}. Input: {face_tensor_ready.shape}")
                     self._last_version_loaded = current_v
                 
                 with torch.no_grad():
@@ -48,7 +51,7 @@ class AttendanceController:
                     # 3. Rata-rata dan Normalisasi
                     query_emb_tensor = F.normalize((emb_orig + emb_mirror) / 2, p=2, dim=1)
             except Exception as e:
-                print(f"[ERROR] Kegagalan inferensi: {e}")
+                self.logger.error(f"Kegagalan inferensi: {e}")
                 return "Unknown", 0, False
             
             # Pastikan dimensi query_emb_tensor adalah (1, 128)
@@ -66,7 +69,7 @@ class AttendanceController:
             
             # Stack semua referensi menjadi matriks (N, 128)
             if not ref_list:
-                print("[WARNING] [CL] Tidak ada referensi identitas (Registry Kosong).")
+                self.logger.warn("Tidak ada referensi identitas (Registry Kosong).")
                 return "Unknown", 0, False
             
             ref_matrix = torch.cat(ref_list, dim=0)
@@ -80,7 +83,7 @@ class AttendanceController:
 
             # CIM Bypass: Jika skor sangat tinggi (> 0.85), anggap valid langsung dan reset buffer
             if confidence_instant > 0.85:
-                print(f"[CIM] [CL] Instant Match Confident! {best_match_instant} (Sim: {confidence_instant:.4f})")
+                self.logger.info(f"Instant Match Confident! {best_match_instant} (Sim: {confidence_instant:.4f})")
                 self.manager.prediction_buffer.clear()
                 self.manager.prediction_buffer.append(query_emb_tensor)
                 best_match, max_sim = best_match_instant, confidence_instant
@@ -103,13 +106,13 @@ class AttendanceController:
                 best_match = user_ids[max_idx_temp.item()]
             
             if max_sim > threshold:
-                print(f"[SUCCESS] {best_match} (Sim: {max_sim:.4f}) [Model: v{current_v}]")
+                self.logger.success(f"{best_match} terdeteksi (Sim: {max_sim:.4f}) [Model: v{current_v}]")
                 nrp_only = best_match.split("_")[0] if "_" in best_match else best_match
                 self.submit_attendance(nrp_only, max_sim)
                 return nrp_only, max_sim, False # Status virtual diatur oleh pemanggil (API vs Hardware loop)
             else:
                 if max_sim > 0.1:
-                    print(f"[DEBUG] Model v{current_v} | Terbaik: {best_match} | Sim: {max_sim:.4f} | Thres: {threshold}")
+                    self.logger.info(f"Model v{current_v} | Terbaik: {best_match} | Sim: {max_sim:.4f} | Thres: {threshold}")
                 
         return "Unknown", 0, False
 
@@ -124,6 +127,6 @@ class AttendanceController:
             }
             res = requests.post(f"{self.server_url}/submit-attendance", json=payload, timeout=5)
             if res.status_code == 200:
-                print(f"[SUCCESS] Presensi berhasil dikirim untuk: {user_id}")
+                self.logger.success(f"Presensi berhasil dikirim untuk: {user_id}")
         except Exception as e:
-            print(f"[ERROR] Gagal mengirim presensi ke server: {e}")
+            self.logger.error(f"Gagal mengirim presensi ke server: {e}")

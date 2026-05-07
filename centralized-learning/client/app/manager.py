@@ -9,6 +9,7 @@ import numpy as np
 import gc
 from collections import deque
 from PIL import Image
+from app.utils.logging import init_logger, get_logger
 from app.utils.mobilefacenet import MobileFaceNet
 from app.utils.preprocessing import image_processor, DEVICE
 from app.utils.freezing import calibrate_bn
@@ -24,10 +25,17 @@ class CLClientManager:
         self.data_path = os.getenv("DATA_PATH", "/app/data")
         os.makedirs(os.path.join(self.data_path, "models"), exist_ok=True)
         
-        # Muat atau Buat Identitas Persisten
+        # 1. Inisialisasi Logger (Gunakan ID mentah dulu untuk tag)
+        temp_id = self._get_raw_id()
+        self.log_path = os.path.join(self.data_path, "client_activity.log")
+        init_logger(self.log_path, tag=f"CL-CLIENT-{temp_id}")
+        self.logger = get_logger()
+        
+        # 2. Muat Identitas Persisten Resmi
         self.client_id = self._load_identity()
         
         self.raw_data_path = os.getenv("RAW_DATA_PATH", "/app/raw_data")
+
         self.camera_index = int(os.getenv("CAMERA_INDEX", "0"))
         
         self.management = ManagementController(self.server_url, self.client_id)
@@ -38,10 +46,13 @@ class CLClientManager:
         self.is_registered = False
         self.has_assets = False
         self.is_training_phase = False # Guard untuk manajemen sumber daya
+        self.camera_enabled = False # Status logis (Desired State)
+        self.is_camera_running = False # Status aktual thread hardware
+
         self.current_model_version = self._load_version()
         
         # EAGER LOADING: Muat model ke RAM segera saat inisialisasi
-        print("[INIT] Memulai Eager Loading model...")
+        self.logger.info("Memulai Eager Loading model...")
         self._reload_inference_models(force_reload=True)
         
         # Pengaturan Kamera
@@ -53,17 +64,21 @@ class CLClientManager:
         self.is_camera_running = False
         self.threshold = 0.7
         
-        # Inisialisasi File Log
-        self.log_path = os.path.join(self.data_path, "client_activity.log")
-        self._log_to_file("=== CL Client Started / Restarted ===")
+        self.logger.info("=== CL Client Started / Restarted ===")
+
+    def _get_raw_id(self):
+        """Ambil ID tanpa logging (untuk inisialisasi logger)."""
+        id_path = os.path.join(self.data_path, "client_id.txt")
+        if os.path.exists(id_path):
+            with open(id_path, "r") as f:
+                cid = f.read().strip()
+                if cid: return cid
+        return os.getenv("HOSTNAME", f"client-{int(time.time())}")
 
     def _log_to_file(self, message):
-        """Mencatat pesan ke file log persisten."""
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        try:
-            with open(self.log_path, "a") as f:
-                f.write(f"[{timestamp}] {message}\n")
-        except: pass
+
+        """Wrapper log untuk kompatibilitas kode lama."""
+        self.logger.info(message)
 
     def _load_identity(self):
         """Memuat atau membuat identitas unik client yang tersimpan di volume data."""
@@ -72,7 +87,7 @@ class CLClientManager:
             with open(id_path, "r") as f:
                 cid = f.read().strip()
                 if cid:
-                    print(f"[IDENTITY] Memuat ID persisten: {cid}")
+                    self.logger.info(f"Memuat ID persisten: {cid}")
                     return cid
         
         # Jika belum ada, gunakan HOSTNAME (Container ID) atau fallback
@@ -80,9 +95,9 @@ class CLClientManager:
         try:
             with open(id_path, "w") as f:
                 f.write(new_id)
-            print(f"[IDENTITY] Mendaftarkan ID persisten baru: {new_id}")
+            self.logger.info(f"Mendaftarkan ID persisten baru: {new_id}")
         except Exception as e:
-            print(f"[ERROR] Gagal menyimpan identitas: {e}")
+            self.logger.error(f"Gagal menyimpan identitas: {e}")
         
         return new_id
 
@@ -122,7 +137,7 @@ class CLClientManager:
                 self.has_assets = True
                 return True
             except Exception as e:
-                print(f"[ERROR] Gagal memuat bobot model dari disk: {e}")
+                self.logger.error(f"Gagal memuat bobot model dari disk: {e}")
         return False
 
     def _reload_inference_models(self, force_reload=False):
@@ -143,7 +158,7 @@ class CLClientManager:
                 # Client CL tidak melakukan pelatihan, jadi lebih aman menggunakan stats server sebagai basis.
                 loaded_sd = torch.load(path_m, map_location=DEVICE)
                 new_model.load_state_dict(loaded_sd)
-                print(f"[SYNC] Bobot global v{self.current_model_version} (Full State) diterapkan.")
+                self.logger.info(f"Bobot global v{self.current_model_version} (Full State) diterapkan.")
 
             if os.path.exists(path_r):
                 new_refs = torch.load(path_r, map_location=DEVICE)
@@ -158,12 +173,12 @@ class CLClientManager:
                 from app.utils.freezing import calibrate_bn
                 calibrate_bn(self.model, self.raw_data_path)
             except Exception as e:
-                print(f"[WARN] Gagal kalibrasi BN (CL): {e}")
+                self.logger.warn(f"Gagal kalibrasi BN (CL): {e}")
             
             gc.collect()
-            print(f"[EAGER LOAD] Model CL v{self.current_model_version} Loaded into RAM")
+            self.logger.success(f"Model CL v{self.current_model_version} berhasil dimuat ke RAM.")
         except Exception as e:
-            print(f"[CRITICAL] Reload model CL gagal: {e}")
+            self.logger.error(f"Reload model CL gagal: {e}")
 
     def start_background_tasks(self):
         # Menjalankan loop sinkronisasi dan kamera di thread latar belakang
@@ -171,28 +186,38 @@ class CLClientManager:
         threading.Thread(target=self.run_camera_loop, daemon=True).start()
 
     def toggle_camera(self):
-        """Menyalakan atau mematikan hardware kamera secara dinamis."""
-        if self.is_camera_running:
-            print("[CAMERA] Mematikan hardware kamera...")
+        """Menyalakan atau mematikan fungsi kamera (Hardware & Browser) secara dinamis."""
+        if self.camera_enabled:
+            self.logger.info("User mematikan fungsi kamera (OFF).")
+            self.camera_enabled = False
             self.is_camera_running = False
+            self.latest_frame = None 
             self.latest_result["matched"] = "CAMERA OFF"
             return False
         else:
-            print("[CAMERA] Menyalakan hardware kamera...")
-            self.is_camera_running = True
-            threading.Thread(target=self.run_camera_loop, args=(True,), daemon=True).start()
+            self.logger.info("User menyalakan fungsi kamera (ON).")
+            self.camera_enabled = True
+            
+            # Jika hardware belum jalan, coba nyalakan threadnya
+            if not (hasattr(self, "_camera_thread") and self._camera_thread.is_alive()):
+                self.is_camera_running = True
+                self._camera_thread = threading.Thread(target=self.run_camera_loop, args=(True,), daemon=True)
+                self._camera_thread.start()
             return True
+
 
     def run_camera_loop(self, manual=False):
         # PENTING: Cek apakah kamera diaktifkan via .env
-        # Jika 'manual' is True, berarti dipicu tombol UI, maka abaikan pengecekan ENV
-        if not manual:
+        if not self.camera_enabled:
             enable_camera = os.getenv("ENABLE_CAMERA", "false").lower() == "true"
             if not enable_camera:
-                print("[CAMERA] Kamera dalam posisi PADAM (Default). Aktifkan via ENABLE_CAMERA=true.")
+                self.logger.info("Kamera dalam posisi PADAM (Default).")
                 self.is_camera_running = False
                 self.latest_result["matched"] = "CAMERA OFF"
+                self.camera_enabled = False
                 return
+            else:
+                self.camera_enabled = True
 
         # Loop kamera mandiri (Headless Mode)
         cam_idx = self.camera_index
@@ -200,7 +225,7 @@ class CLClientManager:
         cam_height = int(os.getenv("CAMERA_HEIGHT", 720))
         cam_format = os.getenv("CAMERA_FORMAT", "MJPG").upper()
 
-        print(f"[CAMERA] Mencoba akses hardware kamera (Mulai dari Index {cam_idx})...")
+        self.logger.info(f"Mencoba akses hardware kamera (Mulai dari Index {cam_idx})...")
         cap = cv2.VideoCapture(cam_idx)
         
         # LOGIKA SMART SCAN: Cari index 0 s/d 3 jika index utama gagal
@@ -209,7 +234,7 @@ class CLClientManager:
             for i in [0, 1, 2]:
                 if i == cam_idx: continue
                 if cap: cap.release()
-                print(f"[CAMERA] Mencoba alternatif Index {i}...")
+                self.logger.info(f"Mencoba alternatif Index {i}...")
                 cap = cv2.VideoCapture(i)
                 if cap.isOpened():
                     cam_idx = i
@@ -218,14 +243,14 @@ class CLClientManager:
             
             # FINAL FALLBACK: Mode Simulasi (Jika hardware benar-benar tidak ada di Docker)
             if not found:
-                print("[CAMERA] [WARN] Hardware tidak ditemukan. Masuk ke MODE SIMULASI (Virtual).")
+                self.logger.warn("Hardware tidak ditemukan. Masuk ke MODE SIMULASI (Virtual).")
                 test_video = os.path.join(self.data_path, "test_video.mp4")
                 if os.path.exists(test_video):
                     cap = cv2.VideoCapture(test_video)
                     self.latest_result["is_virtual"] = True
                 else:
                     if cap: cap.release()
-                    print("[CAMERA] [ERROR] Tidak ada hardware maupun file simulasi.")
+                    self.logger.error("Tidak ada hardware maupun file simulasi.")
                     self.is_camera_running = False
                     self.latest_result["matched"] = "CAMERA ERROR"
                     return
@@ -241,13 +266,13 @@ class CLClientManager:
         time.sleep(1)
 
         if not cap.isOpened():
-            print(f"[CAMERA ERROR] Gagal akses hardware pada index {cam_idx}.")
+            self.logger.error(f"Gagal akses hardware pada index {cam_idx}.")
             self.is_camera_running = False
             self.latest_result["matched"] = "CAMERA ERROR"
             return
 
         self.is_camera_running = True
-        print(f"[CAMERA] Akses hardware berhasil (Index {cam_idx}).")
+        self.logger.success(f"Akses hardware berhasil (Index {cam_idx}).")
         
         while self.is_camera_running:
             # Re-check enable_camera in case we want to stop
@@ -256,7 +281,7 @@ class CLClientManager:
             ret, frame = cap.read()
             
             if not ret:
-                print(f"[ERROR] Gagal membaca frame dari kamera {cam_idx}. Mencoba ulang dlm 5 detik...")
+                self.logger.error(f"Gagal membaca frame dari kamera {cam_idx}. Mencoba ulang dlm 5 detik...")
                 cap.release()
                 time.sleep(5)
                 cap = cv2.VideoCapture(cam_idx)
@@ -275,8 +300,8 @@ class CLClientManager:
             # Simpan frame terbaru untuk streaming MJPEG (Resized untuk efisiensi RAM/Bandwidth)
             self.latest_frame = cv2.resize(frame, (640, 480))
             
-            # Lakukan pemrosesan jika model sudah siap (Inference)
-            if self.model:
+            # Lakukan pemrosesan jika model sudah siap dan sudah ditraining (v1+)
+            if self.model and self.current_model_version > 0:
                 start_time = time.time()
                 try:
                     # Konversi ke PIL Image
@@ -287,19 +312,25 @@ class CLClientManager:
                         img_pil, self.model, self.reference_embeddings
                     )
                     
-                    self.latest_result = {
-                        "matched": matched,
-                        "confidence": confidence,
-                        "latency_ms": int((time.time() - start_time) * 1000),
-                        "model_version": self.current_model_version,
-                        "is_virtual": False
-                    }
+                    # Cek lagi sebelum update result agar tidak menimpa status "CAMERA OFF"
+                    if self.is_camera_running:
+                        self.latest_result = {
+                            "matched": matched,
+                            "confidence": confidence,
+                            "latency_ms": int((time.time() - start_time) * 1000),
+                            "model_version": self.current_model_version,
+                            "is_virtual": False
+                        }
+
                     
                     # LOGGING: Catat hasil cocok
                     if matched != "Unknown" and matched != "Error":
                         self._log_to_file(f"INFERENCE SUCCESS: {matched} (Conf: {confidence:.4f})")
                 except Exception as e:
                     pass
+            elif self.current_model_version == 0:
+                self.latest_result["matched"] = "MODEL NOT TRAINED (v0)"
+                self.latest_result["model_version"] = "v0"
             
             # Explicit cleanup per loop to keep memory stable
             time.sleep(0.5)
@@ -309,18 +340,21 @@ class CLClientManager:
 
     def run_background_sync(self):
         # Loop utama untuk memastikan terminal selalu sinkron dengan server
-        print(f"[INFO] Memulai sinkronisasi latar belakang ({self.client_id}).")
+        self.logger.info(f"Memulai sinkronisasi latar belakang ({self.client_id}).")
         while True:
             try:
                 # 1. Registrasi Terminal ke Server
                 if not self.is_registered:
                     ip = socket.gethostbyname(socket.gethostname())
                     if self.management.register_client(ip):
+                        if not self.is_registered:
+                            self._log_to_file(f"SUCCESS: Terminal terdaftar pada server (IP: {ip})")
                         self.is_registered = True
-                        self._log_to_file(f"SUCCESS: Terminal terdaftar pada server (IP: {ip})")
+                        self.last_sync_success = True
                     else: 
                         time.sleep(5)
                         continue
+
 
                 # 2. Cek Versi Model dan Sinkronisasi Aset
                 try:
@@ -333,7 +367,7 @@ class CLClientManager:
                         
                         # Sinkronisasi threshold
                         if server_threshold != self.threshold:
-                            print(f"[INFO] Threshold diperbarui: {server_threshold}")
+                            self.logger.info(f"Threshold diperbarui: {server_threshold}")
                             self.threshold = server_threshold
                         
                         # Sinkronisasi jika versi lokal tertinggal
@@ -344,7 +378,7 @@ class CLClientManager:
                             if self.model is None:
                                 self._ensure_models_loaded()
                                 if self.model is None:
-                                    print("[INFO] Inisialisasi model MobileFaceNet dasar untuk sinkronisasi...")
+                                    self.logger.info("Inisialisasi model MobileFaceNet dasar untuk sinkronisasi...")
                                     self.model = MobileFaceNet().to(DEVICE)
                                     
                             success, refs = self.management.sync_assets(self.model)
@@ -375,9 +409,13 @@ class CLClientManager:
                             self.is_training_phase = False # Kembali ke mode normal
 
                 except Exception as e:
-                    print(f"[ERROR] Gagal komunikasi dengan server (Ping/Sync): {e}")
+                    if getattr(self, 'last_sync_success', True):
+                        self.logger.error(f"Gagal komunikasi dengan server (Ping/Sync): {e}")
+                        self.last_sync_success = False
+                    self.is_registered = False
+
 
             except Exception as e:
-                print(f"[ERROR] Terjadi kesalahan fatal pada loop latar belakang: {e}")
+                self.logger.error(f"Terjadi kesalahan fatal pada loop latar belakang: {e}")
 
             time.sleep(5)

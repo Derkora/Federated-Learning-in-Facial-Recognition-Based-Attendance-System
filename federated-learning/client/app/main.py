@@ -1,23 +1,22 @@
 import os
-import requests
-import uvicorn
-import cv2
-import numpy as np
 import time
-from PIL import Image
 import io
 import base64
+
+import cv2
+import numpy as np
+import requests
+import uvicorn
+from PIL import Image
 from fastapi import FastAPI, Request, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
-# Import modul lokal
 from app.db.db import engine, Base, get_db, init_db
-from app.db import models  # Pasang semua model ke Base metadata
+from app.db import models
 
-# Inisialisasi Database — HARUS sebelum fl_manager di-import
 init_db()
 
 from app.manager import fl_manager
@@ -96,6 +95,7 @@ async def api_inference(data: dict, background_tasks: BackgroundTasks, db: Sessi
         fl_manager.latest_result = res
         return res
     except Exception as e:
+        fl_manager.logger.error(f"Inference processing failed: {e}")
         return JSONResponse({"matched": "Error", "error": str(e)}, status_code=400)
 
 @app.post("/api/register")
@@ -115,13 +115,10 @@ async def toggle_camera():
 
 @app.get("/api/logs")
 async def get_logs():
-    """Mengambil 100 baris terakhir dari file log."""
-    if not os.path.exists(fl_manager.log_path):
-        return {"logs": "Belum ada aktivitas tercatat."}
+    """Mengambil log dari memori logger global."""
     try:
-        with open(fl_manager.log_path, "r") as f:
-            lines = f.readlines()
-            return {"logs": "".join(lines[-100:])}
+        logs = fl_manager.logger.get_logs()
+        return {"logs": "\n".join(logs)}
     except Exception as e:
         return {"logs": f"Error membaca log: {str(e)}"}
 

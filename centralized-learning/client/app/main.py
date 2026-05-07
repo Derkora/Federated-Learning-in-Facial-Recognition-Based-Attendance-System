@@ -58,7 +58,7 @@ async def api_inference(data: dict):
         cl_client.latest_result = res
         return res
     except Exception as e:
-        print(f"[ERROR] Gagal memproses inference: {e}")
+        cl_client.logger.error(f"Gagal memproses inference: {e}")
         return JSONResponse({"matched": "Error", "error": str(e)}, status_code=400)
 # Endpoint Monitoring Video (MJPEG Stream)
 @app.get("/video_feed")
@@ -87,27 +87,24 @@ async def toggle_camera():
 
 @app.get("/api/logs")
 async def get_logs():
-    """Mengambil 100 baris terakhir dari file log."""
-    if not os.path.exists(cl_client.log_path):
-        return {"logs": "Belum ada aktivitas tercatat."}
+    """Mengambil log dari memori logger global."""
     try:
-        with open(cl_client.log_path, "r") as f:
-            lines = f.readlines()
-            return {"logs": "".join(lines[-100:])}
+        logs = cl_client.logger.get_logs()
+        return {"logs": "\n".join(logs)}
     except Exception as e:
         return {"logs": f"Error membaca log: {str(e)}"}
 
 # API Permintaan Data dari Server
 @app.post("/api/request-data")
 async def request_data():
-    print(f"[INFO] Server meminta unggah dataset.")
+    cl_client.logger.info("Server meminta unggah dataset.")
     success, msg = cl_client.management.package_and_upload()
     return {"status": "success" if success else "error", "message": msg}
 
 # Event saat Startup
 @app.on_event("startup")
 def startup_event():
-    print(f"[INIT] Inisialisasi Client: {cl_client.client_id}", flush=True)
+    cl_client.logger.info(f"Inisialisasi Client: {cl_client.client_id}")
     cl_client.start_background_tasks()
 
 if __name__ == "__main__":

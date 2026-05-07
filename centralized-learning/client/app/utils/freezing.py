@@ -27,12 +27,15 @@ def set_model_freeze(model, freeze_mode="early"):
         for param in model.parameters():
             param.requires_grad = False
 
+from app.utils.logging import get_logger
+
 def calibrate_bn(model, raw_data_path, num_samples=100):
     """
     Melakukan BN Adaptation (Kalibrasi Statistik BN) pada data lokal.
     Ini membuat model Centralized memiliki kemampuan adaptasi lingkungan yang setara dengan pFedFace.
     """
-    print(f"[BN ADAPT] Memulai kalibrasi BN menggunakan data lokal di {raw_data_path}...")
+    logger = get_logger()
+    logger.info(f"Memulai kalibrasi BN menggunakan data lokal di {raw_data_path}...")
     
     # 1. Kumpulkan sampel gambar lokal
     sample_paths = []
@@ -44,7 +47,7 @@ def calibrate_bn(model, raw_data_path, num_samples=100):
                     sample_paths.append(os.path.join(root, f))
     
     if not sample_paths:
-        print("[BN ADAPT] [SKIP] Tidak ada data lokal untuk kalibrasi.")
+        logger.warn("Tidak ada data lokal untuk kalibrasi BN.")
         return
 
     # Batasi jumlah sampel agar tidak terlalu lama
@@ -68,4 +71,5 @@ def calibrate_bn(model, raw_data_path, num_samples=100):
                 continue
     
     model.eval() # Kembalikan ke mode evaluasi permanen
-    print(f"[BN ADAPT] Kalibrasi selesai menggunakan {count} wajah lokal.")
+    logger.success(f"Kalibrasi BN selesai menggunakan {count} wajah lokal.")
+

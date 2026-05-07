@@ -174,6 +174,10 @@ async def get_client_logs(client_id: str):
 # Mengunduh Bobot Model Backbone (MobileFaceNet)
 @app.get("/api/model/backbone")
 async def get_backbone_model(db: Session = Depends(get_db)):
+    # Pastikan model sudah ditraining (v1+)
+    if fl_manager.model_version == 0:
+        raise HTTPException(status_code=403, detail="MODEL NOT AVAILABLE: Versi masih v0 (Belum ditraining)")
+        
     global_model = db.query(GlobalModel).order_by(GlobalModel.last_updated.desc()).first()
     if not global_model or not global_model.weights:
         raise HTTPException(status_code=404, detail="Global model not found")
@@ -291,7 +295,7 @@ async def get_global_identities(db: Session = Depends(get_db)):
 async def sync_attendance(records: List[Dict[str, Any]] = Body(...), db: Session = Depends(get_db)):
     new_records = 0
     errors = []
-    print(f"[RECAP] Menerima {len(records)} data presensi dari terminal.")
+    fl_manager.logger.info(f"Menerima {len(records)} data presensi dari terminal.")
     
     for rec in records:
         try:
@@ -302,7 +306,7 @@ async def sync_attendance(records: List[Dict[str, Any]] = Body(...), db: Session
                 
             user = db.query(UserGlobal).filter_by(nrp=nrp).first()
             if not user:
-                print(f"[WARN] User dengan NRP {nrp} tidak ditemukan di database global.")
+                fl_manager.logger.warn(f"User dengan NRP {nrp} tidak ditemukan di database global.")
                 errors.append(f"User {nrp} not found")
                 continue
             
@@ -311,7 +315,7 @@ async def sync_attendance(records: List[Dict[str, Any]] = Body(...), db: Session
                 ts_str = rec['timestamp']
                 ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
             except Exception as e:
-                print(f"[ERROR] Format timestamp salah: {rec.get('timestamp')} | Error: {e}")
+                fl_manager.logger.error(f"Format timestamp salah: {rec.get('timestamp')} | Error: {e}")
                 ts = datetime.utcnow()
                 
             exists = db.query(AttendanceRecap).filter_by(user_id=user.user_id, timestamp=ts).first()
@@ -322,24 +326,24 @@ async def sync_attendance(records: List[Dict[str, Any]] = Body(...), db: Session
                 # Pastikan client_id ada di tabel clients untuk menghindari FK error
                 client_exists = db.query(Client).filter_by(edge_id=client_id).first()
                 if not client_exists:
-                    print(f"[FIX] Mendaftarkan client {client_id} secara otomatis untuk sinkronisasi.")
+                    fl_manager.logger.info(f"Mendaftarkan client {client_id} secara otomatis untuk sinkronisasi.")
                     new_client = Client(edge_id=client_id, name=client_id, status="online")
                     db.add(new_client)
                     db.flush()
 
-                print(f"[DEBUG] Sync Attendance | Client: {client_id} | NRP: {nrp} | Sim: {conf:.4f}")
+                fl_manager.logger.info(f"Sync Attendance | Client: {client_id} | NRP: {nrp} | Sim: {conf:.4f}")
                 new_item = AttendanceRecap(user_id=user.user_id, edge_id=client_id, timestamp=ts, confidence=conf)
                 db.add(new_item)
                 new_records += 1
         except Exception as e:
-            print(f"[CRITICAL] Gagal memproses record: {e}")
+            fl_manager.logger.error(f"Gagal memproses record: {e}")
             errors.append(str(e))
             
     try:
         db.commit()
     except Exception as e:
         db.rollback()
-        print(f"[DATABASE ERROR] Gagal commit sinkronisasi: {e}")
+        fl_manager.logger.error(f"Gagal commit sinkronisasi: {e}")
         raise HTTPException(status_code=500, detail=f"Database commit failed: {str(e)}")
 
     return {
@@ -411,7 +415,7 @@ async def get_fl_status(session_id: str, db: Session = Depends(get_db)):
 
 @app.on_event("startup")
 def startup_event():
-    print(f"[INIT] Server Federated Learning telah siap.", flush=True)
+    fl_manager.logger.success("Server Federated Learning telah siap.")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8080)

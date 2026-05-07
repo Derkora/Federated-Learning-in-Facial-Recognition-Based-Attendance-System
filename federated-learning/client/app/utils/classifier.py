@@ -2,7 +2,10 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
+from app.utils.logging import get_logger
+
 def identify_user_globally(query_embedding, local_embeddings_dict, threshold=0.35, metric="cosine", verbose=True):
+    logger = get_logger()
     if not local_embeddings_dict:
         return "Unknown", 0.0
     
@@ -54,9 +57,9 @@ def identify_user_globally(query_embedding, local_embeddings_dict, threshold=0.3
     # 4. Ambang Batas
     if confidence < threshold:
         if verbose:
-            print(f"[CLASSIFIER] Match '{best_match}' rejected (Score: {confidence:.3f} < threshold {threshold})")
+            logger.info(f"Match '{best_match}' rejected (Score: {confidence:.3f} < threshold {threshold})")
         return "Unknown", confidence
         
     if verbose:
-        print(f"[CLASSIFIER] Match '{best_match}' accepted (Score: {confidence:.3f})")
+        logger.success(f"Match '{best_match}' accepted (Score: {confidence:.3f})")
     return best_match, confidence

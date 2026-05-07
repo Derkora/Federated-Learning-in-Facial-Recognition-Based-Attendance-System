@@ -24,7 +24,7 @@ services:
     devices:
       - /dev/video0:/dev/video0
     volumes:
-      - ./client/data:/app/data
+      - fl-client-data:/app/data
       - ${RAW_DATA_PATH_CLIENT}:/app/raw_data/students
     networks:
       - fl-network
@@ -32,3 +32,7 @@ services:
 networks:
   fl-network:
     driver: bridge
+
+volumes:
+  fl-client-data:
+

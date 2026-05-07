@@ -14,17 +14,20 @@ from app.db.db import SessionLocal
 from app.db.models import FLRound, GlobalModel, UserGlobal, AttendanceRecap, Client
 from app.utils.mobilefacenet import MobileFaceNet
 from app.config import ECONOMICS, TRAINING_PARAMS, FALLBACK_MODEL_PATH, CODECARBON_AVAILABLE
+from app.utils.logging import init_logger, get_logger
+
 if CODECARBON_AVAILABLE:
     from codecarbon import OfflineEmissionsTracker
 
 # Fungsi rata-rata tertimbang untuk metrik
 def weighted_average(metrics: list) -> dict:
     # Fungsi agregasi metrik dari seluruh terminal (Client)
-    print(f"[INFO] Mengagregasi hasil dari {len(metrics)} terminal...")
+    logger = get_logger()
+    logger.info(f"Mengagregasi hasil dari {len(metrics)} terminal...")
     examples = [m[0] for m in metrics]
     total_examples = sum(examples)
     if total_examples == 0: 
-        print("[METRICS] Total examples is 0, returning empty.")
+        logger.warn("Total examples is 0, returning empty metrics.")
         return {}
 
     try:
@@ -36,10 +39,10 @@ def weighted_average(metrics: list) -> dict:
         }
         # Filter 0.0 values untuk log yang lebih bersih
         clean_metrics = {k: round(v, 4) for k, v in aggregated.items() if v != 0 or k == "accuracy"}
-        print(f"[INFO] Hasil agregasi: {clean_metrics}")
+        logger.info(f"Hasil agregasi: {clean_metrics}")
         return aggregated
     except Exception as e:
-        print(f"[ERROR] Gagal mengagregasi metrik: {e}")
+        logger.error(f"Gagal mengagregasi metrik: {e}")
         return {}
 
 # Strategi Penyimpanan Model Federated
@@ -52,11 +55,13 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
         self.manager = manager
         self.target_version = target_version
         self.snapshots = [] # Untuk SWA/Snapshot Averaging
+        self.logger = get_logger()
+
 
     def aggregate_fit(self, server_round: int, results: list, failures: list):
-        print(f"\n[INFO] Ronde {server_round} | Ringkasan Performa")
+        self.logger.info(f"Ronde {server_round} | Ringkasan Performa")
         if failures:
-            print(f"[WARNING] Ronde {server_round} mendapati {len(failures)} kegagalan client.")
+            self.logger.warn(f"Ronde {server_round} mendapati {len(failures)} kegagalan client.")
 
         # Laporan masing-masing terminal
         for i, (client_proxy, fit_res) in enumerate(results):
@@ -65,13 +70,13 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
             acc = metrics.get("accuracy", 0.0)
             loss = metrics.get("loss", 0.0)
             val_acc = metrics.get("val_accuracy", 0.0)
-            print(f"  > Client {cid}: Akurasi: {acc:.4f} | Loss: {loss:.4f} | Val Acc: {val_acc:.4f}")
+            self.logger.info(f"  > Client {cid}: Akurasi: {acc:.4f} | Loss: {loss:.4f} | Val Acc: {val_acc:.4f}")
 
         # Filter client yang tidak punya data (mencegah division by zero di FedAvg)
         valid_results = [(cp, fr) for cp, fr in results if fr.num_examples > 0]
         
         if not valid_results:
-            print(f"[WARNING] Ronde {server_round} tidak memiliki data valid untuk diagregasi.")
+            self.logger.warn(f"Ronde {server_round} tidak memiliki data valid untuk diagregasi.")
             return None, {}
 
         aggregated_parameters, aggregated_metrics = super().aggregate_fit(server_round, valid_results, failures)
@@ -93,10 +98,11 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
         aggregated_metrics["clients"] = clients_data
 
         if aggregated_parameters is None:
-            print(f"[STRATEGY] [WARNING] Agregasi Ronde {server_round} menghasilkan None (Tidak cukup data?).")
+            self.logger.warn(f"Agregasi Ronde {server_round} menghasilkan None (Tidak cukup data?).")
             return None, aggregated_metrics
             
-        print(f"[STRATEGY] Agregasi Ronde {server_round} Berhasil.")
+        self.logger.success(f"Agregasi Ronde {server_round} Berhasil.")
+
 
         self.manager.current_round = server_round
         
@@ -105,14 +111,19 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
             cid = fit_res.metrics.get("hostname") or getattr(client_proxy, "cid", f"client-{i}")
             if cid not in self.manager.metrics["unique_client_ids"]:
                 self.manager.metrics["unique_client_ids"].append(cid)
-                print(f"[MANAGER] New client detected: {cid}")
+                self.logger.info(f"New client detected: {cid}")
 
         if aggregated_parameters is not None:
             if self.manager.tracker:
                 try: self.manager.tracker.start()
                 except: pass
             
-            print(f"[SUCCESS] Agregasi ronde {server_round} selesai. Akurasi: {aggregated_metrics.get('accuracy', 0):.4f}")
+            acc = aggregated_metrics.get('accuracy', 0)
+            loss = aggregated_metrics.get('loss', 0)
+            val_acc = aggregated_metrics.get('val_accuracy', 0)
+            val_loss = aggregated_metrics.get('val_loss', 0)
+            self.logger.success(f"Agregasi ronde {server_round} selesai | Acc: {acc:.4f} | Loss: {loss:.4f} | Val Acc: {val_acc:.4f} | Val Loss: {val_loss:.4f}")
+
             try:
                 db = SessionLocal()
                 params_np = fl.common.parameters_to_ndarrays(aggregated_parameters)
@@ -124,10 +135,10 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                 global_model = db.query(GlobalModel).order_by(GlobalModel.last_updated.desc()).first()
                 if global_model and global_model.weights:
                     sd = torch.load(io.BytesIO(global_model.weights), map_location="cpu")
-                    print("[INFO] Menggunakan bobot model terakhir sebagai basis agregasi (Preserving BN).")
+                    self.logger.info("Menggunakan bobot model terakhir sebagai basis agregasi (Preserving BN).")
                 else:
                     sd = global_model_instance.state_dict()
-                    print("[INFO] Memulai agregasi dari model kosong (Seeding).")
+                    self.logger.info("Memulai agregasi dari model kosong (Seeding).")
                 
                 # Cek mode berdasarkan jumlah parameter
                 # Standard Backbone (tanpa BN/Head) biasanya ~50-60 keys (conv weights & biases)
@@ -136,13 +147,13 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                 conv_keys = [k for k in all_keys if not any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked'])]
                 
                 if len(params_np) == len(conv_keys):
-                    print(f"[INFO] Ronde {server_round}: Mode pFedFace (Backbone Only) terdeteksi.")
+                    self.logger.info(f"Ronde {server_round}: Mode pFedFace (Backbone Only) terdeteksi.")
                     target_keys = conv_keys
                 elif len(params_np) >= len(all_keys):
-                    print(f"[INFO] Ronde {server_round}: Mode Full Sync (Backbone + BN) terdeteksi.")
+                    self.logger.info(f"Ronde {server_round}: Mode Full Sync (Backbone + BN) terdeteksi.")
                     target_keys = all_keys
                 else:
-                    print(f"[WARNING] Panjang parameter tidak dikenal ({len(params_np)}). Menggunakan fallback conv_keys.")
+                    self.logger.warn(f"Panjang parameter tidak dikenal ({len(params_np)}). Menggunakan fallback conv_keys.")
                     target_keys = conv_keys[:len(params_np)]
 
                 # 2. IDENTIFIKASI PARAMETER (Orderly Filtering)
@@ -162,20 +173,20 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                 # Dalam pFedFace, bn_params biasanya kosong di sini karena tidak dikirim via Flower
                 sd.update(backbone_params)
                 if bn_params:
-                    print(f"[INFO] Ronde {server_round}: {len(bn_params)} parameter BN terdeteksi dan digabungkan.")
+                    self.logger.info(f"Ronde {server_round}: {len(bn_params)} parameter BN terdeteksi dan digabungkan.")
                     sd.update(bn_params)
 
                 # 3. HANDLE CLASSIFIER HEAD (Parameter tambahan di akhir payload)
                 num_target = len(target_keys)
                 if len(params_np) > num_target:
                     head_params_np = params_np[num_target:]
-                    print(f"[INFO] Ronde {server_round}: {len(head_params_np)} parameter Head terdeteksi.")
+                    self.logger.info(f"Ronde {server_round}: {len(head_params_np)} parameter Head terdeteksi.")
                     try:
                         # Bungkus Head dalam state_dict teratur
                         head_sd = {"weight": torch.from_numpy(head_params_np[0].copy())}
                         torch.save(head_sd, "data/global_head.pth")
                     except Exception as e:
-                        print(f"[WARN] Gagal menyimpan global_head: {e}")
+                        self.logger.warn(f"Gagal menyimpan global_head: {e}")
 
                 # Simpan hasil ke database (db sudah diinisialisasi di awal try)
                 try:
@@ -222,10 +233,10 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
 
                     # LOGGING BENAR (Sesuai Permintaan)
                     self.manager.update_logs(f"SERVER LOG: Ronde {server_round} selesai. Akurasi: {aggregated_metrics.get('accuracy', 0):.4f} | Loss: {aggregated_metrics.get('loss', 0):.4f}")
-                    print(f"[MANAGER] Ronde {server_round} tercatat di Dashboard.")
+                    self.logger.info(f"Ronde {server_round} tercatat di Dashboard.")
 
                 except Exception as e:
-                    print(f"[ERROR] Gagal menyimpan hasil agregasi ke database: {e}")
+                    self.logger.error(f"Gagal menyimpan hasil agregasi ke database: {e}")
                     db.rollback()
                 finally:
                     db.close()
@@ -242,7 +253,7 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                         try:
                             bn_params = torch.load(bn_path, map_location="cpu")
                             sd.update(bn_params)
-                            print("[INFO] Backbone global kini diperkuat dengan statistik BN.")
+                            self.logger.info("Backbone global kini diperkuat dengan statistik BN.")
                         except: pass
                         
                     # ATOMIC WRITE
@@ -250,16 +261,16 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                         torch.save(sd, tmp.name)
                         shutil.move(tmp.name, "data/backbone.pth")
                 except Exception as e:
-                    print(f"[ERROR] Gagal menyimpan file murni/BN: {e}")
+                    self.logger.error(f"Gagal menyimpan file murni/BN: {e}")
 
                     # --- SWA / SNAPSHOT AVERAGING ---
                     if server_round >= TRAINING_PARAMS.get("swa_start_round", 8):
-                        print(f"[SWA] Ronde {server_round}: Menyimpan snapshot backbone untuk perataan akhir.")
+                        self.logger.info(f"Ronde {server_round}: Menyimpan snapshot backbone untuk perataan akhir.")
                         self.snapshots.append(copy.deepcopy(sd))
 
                     # Jika Ronde Terakhir, lakukan perataan (Averaging)
                     if server_round == self.manager.default_rounds and len(self.snapshots) > 1:
-                        print(f"[SWA] Melakukan Snapshot Averaging dari {len(self.snapshots)} ronde terakhir...")
+                        self.logger.info(f"Melakukan Snapshot Averaging dari {len(self.snapshots)} ronde terakhir...")
                         swa_sd = copy.deepcopy(self.snapshots[0])
                         for key in swa_sd:
                             for i in range(1, len(self.snapshots)):
@@ -273,11 +284,11 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                         db.commit()
                         
                         torch.save(swa_sd, "data/backbone.pth")
-                        print("[SWA] Model final berhasil di-rata-ratakan (Snapshot Averaged). Akurasi stabil.")
+                        self.logger.success("Model final berhasil di-rata-ratakan (Snapshot Averaged). Akurasi stabil.")
                         self.manager.update_logs("Snapshot Averaging (SWA) berhasil diterapkan pada model final.")
 
                 except Exception as e:
-                    print(f"[ERROR] Gagal menyimpan ronde {server_round} ke DB: {e}")
+                    self.logger.error(f"Gagal menyimpan ronde {server_round} ke DB: {e}")
                     db.rollback()
                 finally:
                     # PROSES DATA CLIENT DAN SIMPAN RONDE KE DB
@@ -291,7 +302,7 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                             # Jika hostname tidak ada, gunakan proxy_id tapi log peringatan
                             if not cid:
                                 cid = proxy_id or f"client-{i}"
-                                print(f"[STRATEGY WARN] Menggunakan Proxy ID {cid} karena hostname kosong.")
+                                self.manager.logger.warn(f"Menggunakan Proxy ID {cid} karena hostname kosong.")
                             
                             m = fit_res.metrics.copy()
                             m["num_samples"] = fit_res.num_examples
@@ -302,13 +313,12 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                             else: m["epoch_history"] = eh
                             client_data[cid] = m
                         
-                        print(f"[STRATEGY] Memanggil record_round_data untuk ronde {server_round}...")
+                        self.manager.logger.info(f"Memanggil record_round_data untuk ronde {server_round}...")
                         self.manager.record_round_data(server_round, aggregated_metrics or {}, client_data, db=db)
-                        print(f"[STRATEGY] record_round_data selesai.")
                     
                     db.close()
             except Exception as e:
-                print(f"[ERROR] Gagal memproses parameter agregasi: {e}")
+                self.manager.logger.error(f"Gagal memproses parameter agregasi: {e}")
         
         if aggregated_metrics:
             self.manager.update_metrics(aggregated_metrics)
@@ -328,6 +338,8 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
         loss, metrics = super().aggregate_evaluate(server_round, valid_results, failures)
         return loss, metrics
 
+from app.utils.logging import Logger
+
 class FLServerManager:
     # Manajer Sesi dan Status Server Federated (FL)
     # Menyimpan informasi status pelatihan, metrik performa, dan log aktivitas.
@@ -337,10 +349,15 @@ class FLServerManager:
         self.is_running = False
         self.current_phase = "idle"
         self.start_time = 0
-        self.current_logs = []
         self.current_round = 0
         self.model_version = 0
         self.tracker = None
+        
+        # Inisialisasi Logger Terpusat (Global)
+        self.log_path = "/app/data/server_training.log"
+        init_logger(self.log_path, tag="FL-SERVER")
+        self.logger = get_logger()
+        
         if CODECARBON_AVAILABLE:
             try:
                 self.tracker = OfflineEmissionsTracker(
@@ -372,14 +389,37 @@ class FLServerManager:
             "unique_client_ids": [], # Pelacakan ID unik client yang berkontribusi
             "convergence_round": None
         }
-        # Inisialisasi File Log
-        self.log_path = "/app/data/server_training.log"
-        self._load_log_from_file() # Muat log lama ke UI
+        
         self.update_logs("=== Server Started / Restarted ===")
         
         self.settings_path = "/app/data/settings.json"
         self.load_settings()
         self._load_persistence()
+
+    @property
+    def current_logs(self):
+        # Kompatibilitas dengan Dashboard UI agar tetap bisa membaca list log
+        return self.logger.get_logs()
+
+    @current_logs.setter
+    def current_logs(self, value):
+        # Memungkinkan pembersihan log (misal: self.current_logs = [])
+        if isinstance(value, list) and len(value) == 0:
+            self.logger.clear_logs()
+
+
+    def update_logs(self, msg):
+        """Menambahkan log baru ke memori dan file persisten (Wrapper ke Logger)."""
+        if "[ERROR]" in msg:
+            self.logger.error(msg.replace("[ERROR] ", ""))
+        elif "[SUCCESS]" in msg:
+            self.logger.success(msg.replace("[SUCCESS] ", ""))
+        elif "[OK]" in msg:
+            self.logger.success(msg.replace("[OK] ", ""))
+        elif "[WARNING]" in msg:
+            self.logger.warn(msg.replace("[WARNING] ", ""))
+        else:
+            self.logger.info(msg)
 
     def load_settings(self):
         """Memuat pengaturan server dari file JSON."""
@@ -389,9 +429,9 @@ class FLServerManager:
                     settings = json.load(f)
                     self.inference_threshold = settings.get("inference_threshold", 0.7)
                     self.default_batch_size = settings.get("batch_size", 32)
-                print(f"[SETTINGS] Pengaturan dimuat dari {self.settings_path}")
+                self.logger.info(f"Pengaturan dimuat dari {self.settings_path}")
             except Exception as e:
-                print(f"[SETTINGS ERROR] Gagal memuat pengaturan: {e}")
+                self.logger.error(f"Gagal memuat pengaturan: {e}")
 
     def save_settings(self):
         """Menyimpan pengaturan server ke file JSON."""
@@ -403,24 +443,15 @@ class FLServerManager:
             with open(self.settings_path, "w") as f:
                 json.dump(settings, f, indent=4)
         except Exception as e:
-            print(f"[SETTINGS ERROR] Gagal menyimpan pengaturan: {e}")
+            self.logger.error(f"Gagal menyimpan pengaturan: {e}")
 
     def _load_log_from_file(self):
-        """Memuat 100 baris terakhir dari file log ke memori (untuk Dashboard UI)."""
-        if os.path.exists(self.log_path):
-            try:
-                with open(self.log_path, "r") as f:
-                    lines = f.readlines()
-                    self.current_logs = [line.strip() for line in lines[-100:]]
-                print(f"[PERSISTENCE] Berhasil memuat {len(self.current_logs)} baris log dari disk.")
-            except Exception as e:
-                print(f"[ERROR] Gagal memuat log persisten: {e}")
-        else:
-            print(f"[INFO] File log belum ada di {self.log_path}")
+        # Log sudah ditangani oleh class Logger
+        pass
 
     def _load_persistence(self):
         """Memuat ulang status dari database dengan logika retry dan logging yang sangat detail."""
-        print("[PERSISTENCE] Memulai pemulihan status server Federated...")
+        self.logger.info("Memulai pemulihan status server Federated...")
         
         max_retries = 10
         retry_delay = 5
@@ -432,17 +463,17 @@ class FLServerManager:
                 latest_model = db.query(GlobalModel).order_by(GlobalModel.last_updated.desc()).first()
                 if latest_model:
                     self.model_version = latest_model.version
-                    print(f"[PERSISTENCE] Database terhubung. Versi Model saat ini: v{self.model_version}")
+                    self.logger.info(f"Database terhubung. Versi Model saat ini: v{self.model_version}")
 
                 # 2. Muat riwayat ronde (Hanya sesi terbaru agar tidak duplikat)
                 latest_round = db.query(FLRound).order_by(FLRound.timestamp.desc()).first()
                 if latest_round:
                     latest_session_id = latest_round.session_id
                     rounds = db.query(FLRound).filter_by(session_id=latest_session_id).order_by(FLRound.round_number.asc()).all()
-                    print(f"[PERSISTENCE] Menemukan {len(rounds)} ronde federated dari sesi {latest_session_id}.")
+                    self.logger.info(f"Menemukan {len(rounds)} ronde federated dari sesi {latest_session_id}.")
                 else:
                     rounds = []
-                    print("[PERSISTENCE] Tidak ada riwayat ronde di database.")
+                    self.logger.info("Tidak ada riwayat ronde di database.")
                 
                 if rounds:
                     history = []
@@ -478,7 +509,7 @@ class FLServerManager:
                                 self.metrics["convergence_round"] = r.round_number
                                 
                         except Exception as e:
-                            print(f"[PERSISTENCE WARN] Failed to parse round {r.round_number}: {e}")
+                            self.logger.warn(f"Failed to parse round {r.round_number}: {e}")
 
                     self.metrics["round_history"] = history
                     self.metrics["compute_energy_kwh"] = total_energy
@@ -493,18 +524,18 @@ class FLServerManager:
                     
                     # 3. Update estimasi biaya/transmisi berdasarkan history yang dimuat
                     self.update_metrics({})
-                    print(f"[PERSISTENCE] Berhasil memulihkan {len(history)} ronde ke dashboard FL.")
-                    print(f"[PERSISTENCE] Ditemukan {len(unique_ids)} client aktif dari riwayat: {list(unique_ids)}")
+                    self.logger.info(f"Berhasil memulihkan {len(history)} ronde ke dashboard FL.")
+                    self.logger.info(f"Ditemukan {len(unique_ids)} client aktif dari riwayat: {list(unique_ids)}")
                 
                 db.close()
                 return # SUCCESS
             except Exception as e:
-                print(f"[PERSISTENCE] Percobaan {i+1}/{max_retries} gagal: {e}")
+                self.logger.warn(f"Percobaan {i+1}/{max_retries} gagal: {e}")
                 db.close()
                 if i < max_retries - 1:
                     time.sleep(retry_delay)
                 else:
-                    print("[PERSISTENCE ERROR] Gagal total memulihkan status FL. Dashboard mungkin akan kosong.")
+                    self.logger.error("Gagal total memulihkan status FL. Dashboard mungkin akan kosong.")
 
     def increment_version(self):
         self.model_version += 1
@@ -517,9 +548,9 @@ class FLServerManager:
                 global_model.version = self.model_version
                 global_model.last_updated = datetime.utcnow()
                 db.commit()
-                print(f"[PERSISTENCE] GlobalModel DB updated to v{self.model_version}")
+                self.logger.success(f"GlobalModel DB updated to v{self.model_version}")
         except Exception as e:
-            print(f"[ERROR] Failed to persist version increment: {e}")
+            self.logger.error(f"Failed to persist version increment: {e}")
             db.rollback()
         finally:
             db.close()
@@ -538,22 +569,6 @@ class FLServerManager:
         if phase_name: self.update_logs(f"Fase {phase_name} selesai.")
         self.is_running = False
         self.current_phase = "idle"
-
-    def update_logs(self, msg):
-        # Gunakan Waktu Indonesia Barat (UTC+7)
-        tz_wib = timezone(timedelta(hours=7))
-        ts = datetime.now(tz_wib).strftime("%H:%M:%S")
-        log_entry = f"[{ts}] {msg}"
-        self.current_logs.append(log_entry)
-        if len(self.current_logs) > 100: self.current_logs.pop(0)
-        
-        # Tulis ke file persisten
-        try:
-            with open(self.log_path, "a") as f:
-                f.write(f"[{datetime.now(tz_wib).strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
-        except: pass
-        
-        print(f"SERVER LOG: {msg}")
 
     def update_metrics(self, new_data):
         # Memperbarui metrik performa dan estimasi biaya
@@ -607,7 +622,7 @@ class FLServerManager:
         # Mencegah redundansi jika fungsi ini dipanggil ulang untuk ronde yang sama
         existing_rounds = [h["round"] for h in self.metrics["round_history"]]
         if round_num in existing_rounds:
-            print(f"[MANAGER] Ronde {round_num} sudah ada di history, memperbarui data...")
+            self.logger.info(f"Ronde {round_num} sudah ada di history, memperbarui data...")
             # Update data yang sudah ada (opsional, tapi lebih aman)
             for h in self.metrics["round_history"]:
                 if h["round"] == round_num:
@@ -615,7 +630,7 @@ class FLServerManager:
                     h["clients"] = client_metrics
             return
 
-        print(f"[MANAGER] Recording round {round_num} data with {len(client_metrics)} clients...")
+        self.logger.info(f"Recording round {round_num} data with {len(client_metrics)} clients...")
         entry = {
             "round": round_num,
             "server": server_metrics,
@@ -634,7 +649,7 @@ class FLServerManager:
             
             if cid not in self.metrics["unique_client_ids"]:
                 self.metrics["unique_client_ids"].append(cid)
-                print(f"[MANAGER] Client {cid} added to unique_client_ids")
+                self.logger.info(f"Client {cid} added to unique_client_ids")
 
         # Pembersihan berkala: Hanya simpan ID yang beneran ada di round_history
         all_active_ids = set()
@@ -655,9 +670,9 @@ class FLServerManager:
                 )
                 db.add(new_fl_round)
                 db.commit()
-                print(f"[PERSISTENCE] Ronde {round_num} berhasil disimpan ke database.")
+                self.logger.success(f"Ronde {round_num} berhasil disimpan ke database.")
             except Exception as e:
-                print(f"[ERROR] Gagal menyimpan ronde ke database: {e}")
+                self.logger.error(f"Gagal menyimpan ronde ke database: {e}")
                 db.rollback()
 
         # Memperbarui pelacakan client unik
@@ -695,7 +710,7 @@ class FLServerManager:
             return lr
 
     def get_status(self, db=None):
-        print(f"[DEBUG] get_status called. round_history len: {len(self.metrics.get('round_history', []))}")
+        # self.logger.info(f"get_status called. round_history len: {len(self.metrics.get('round_history', []))}")
         attendance_count = 0
         active_clients = []
         if db:
@@ -733,7 +748,7 @@ class FLServerManager:
             
         fallback_path = FALLBACK_MODEL_PATH
         if os.path.exists(fallback_path):
-            print(f"Memulai seeding GlobalModel dari {fallback_path}...")
+            self.logger.info(f"Memulai seeding GlobalModel dari {fallback_path}...")
             try:
                 model = MobileFaceNet()
                 loaded = torch.load(fallback_path, map_location="cpu")
@@ -753,10 +768,10 @@ class FLServerManager:
                             match_count += 1
                         else:
                             final_sd[key] = current_sd[key]
-                    print(f"[SUCCESS] GlobalModel seeded dengan state_dict ({match_count} weights cocok).")
+                    self.logger.success(f"GlobalModel seeded dengan state_dict ({match_count} weights cocok).")
                 else:
                     final_sd = current_sd
-                    print(f"[SUCCESS] GlobalModel seeded dengan default state_dict.")
+                    self.logger.success("GlobalModel seeded dengan default state_dict.")
                 
                 buf = io.BytesIO()
                 torch.save(final_sd, buf)
@@ -764,7 +779,7 @@ class FLServerManager:
                 db.add(new_model)
                 db.commit()
             except Exception as e:
-                print(f"[ERROR] Gagal inisialisasi GlobalModel: {e}")
+                self.logger.error(f"Gagal inisialisasi GlobalModel: {e}")
                 db.rollback()
                 
     def get_label_map_from_db(self):
@@ -804,7 +819,7 @@ class FLServerManager:
                 
                 initial_parameters = fl.common.ndarrays_to_parameters(weights_np)
         except Exception as e:
-            print(f"[ERROR] Gagal memuat parameter awal: {e}")
+            self.logger.error(f"Gagal memuat parameter awal: {e}")
         finally:
             db.close()
 

@@ -8,9 +8,9 @@ from collections import defaultdict
 # Agregasi Fitur dan Vektor Wajah (Centroids)
 # Fungsi ini menggabungkan kiriman dari berbagai terminal untuk membuat sebuah
 # "galeri global" atau registry yang berisi identitas seluruh mahasiswa.
-def aggregate_and_save_registry_assets(log_func):
+def aggregate_and_save_registry_assets(logger):
     try:
-        log_func("[INFO] Memulai Agregasi Registry: Penggabungan data terminal...")
+        logger.info("Memulai Agregasi Registry: Penggabungan data terminal...")
         submission_dir = "data/submissions"
         if not os.path.exists(submission_dir): return
         
@@ -23,7 +23,6 @@ def aggregate_and_save_registry_assets(log_func):
         if not all_submissions: return
 
         # 1. Agregasi Parameter Batch Normalization (BN)
-        # Parameter BN dari setiap terminal diratakan untuk menjaga kestabilan model di berbagai kondisi pencahayaan terminal.
         clients_bn = [sub['bn'] for sub in all_submissions.values()]
         global_bn = {}
         bn_keys = list(clients_bn[0].keys())
@@ -36,8 +35,8 @@ def aggregate_and_save_registry_assets(log_func):
                 global_bn[key] = torch.stack(tensors).mean(0)
         
         os.makedirs("data", exist_ok=True)
-        torch.save(global_bn, "data/global_bn_combined.pth")
-        log_func("[OK] File global_bn_combined.pth berhasil dibuat.")
+        # torch.save(global_bn, "data/global_bn_combined.pth")
+        logger.success("Batch Normalization combined.")
         
         # 2. Agregasi Centroids (Fitur Wajah Unik)
         nrp_centroids_list = defaultdict(list)
@@ -54,7 +53,7 @@ def aggregate_and_save_registry_assets(log_func):
                 avg_vec = vecs[0]
             all_centroids[nrp] = torch.nn.functional.normalize(avg_vec.unsqueeze(0), p=2, dim=1).squeeze(0)
                 
-        # ATOMIC WRITE: Preserve consistency
+        # ATOMIC WRITE
         os.makedirs("data", exist_ok=True)
         
         # Save BN
@@ -67,7 +66,7 @@ def aggregate_and_save_registry_assets(log_func):
             torch.save(all_centroids, tmp.name)
             shutil.move(tmp.name, "data/global_embedding_registry.pth")
             
-        log_func(f"[OK] Agregasi Asset Selesai ({len(all_centroids)} identitas).")
+        logger.success(f"Agregasi Asset Selesai ({len(all_centroids)} identitas).")
         
     except Exception as e:
-        log_func(f"[ERROR] Gagal melakukan agregasi: {e}")
+        logger.error(f"Gagal melakukan agregasi: {e}")

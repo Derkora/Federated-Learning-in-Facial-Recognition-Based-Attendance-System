@@ -1,21 +1,24 @@
+# --- STANDAR LIBRARY ---
 import os
 import shutil
 import time
+import json
+import zipfile
+from datetime import datetime, time as dt_time, timedelta, timezone
+
+# --- THIRD PARTY ---
 import torch
 import requests
-import json
-from datetime import datetime, time as dt_time, timedelta, timezone
+import uvicorn
 from fastapi import FastAPI, Depends, Request, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
-import uvicorn
-import zipfile
 
+# --- APP MODULES ---
 from app.db import models, db, schemas, crud
 models.Base.metadata.create_all(bind=db.engine)
-
 from app.utils.mobilefacenet import MobileFaceNet
 from app.config import (
     MODEL_PATH, REF_PATH, UPLOAD_DIR, TRAINING_PARAMS
@@ -27,10 +30,10 @@ from app.controllers.inference import inference_controller
 
 if not os.path.exists(os.path.dirname(MODEL_PATH)): os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
 if not os.path.exists(MODEL_PATH):
-    print("[INIT] Membuat model global awal v0...", flush=True)
+    cl_manager.logger.info("Membuat model global awal v0...")
     torch.save(MobileFaceNet().state_dict(), MODEL_PATH)
 if not os.path.exists(REF_PATH):
-    print("[INIT] Membuat basis data referensi awal...", flush=True)
+    cl_manager.logger.info("Membuat basis data referensi awal...")
     torch.save({}, REF_PATH)
 
 # Konfigurasi Aplikasi Dashboard Server
@@ -143,7 +146,7 @@ async def health_check():
 @app.post("/register-client", response_model=schemas.ClientResponse)
 async def register_client(client_data: schemas.ClientBase, request: Request, dbs: Session = Depends(db.get_db)):
     client_ip = request.client.host
-    print(f"[INFO] Mendaftarkan terminal {client_data.edge_id} dari {client_ip}", flush=True)
+    cl_manager.logger.info(f"Mendaftarkan terminal {client_data.edge_id} dari {client_ip}")
     existing = dbs.query(models.Client).filter(models.Client.edge_id == client_data.edge_id).first()
     if existing:
         existing.last_seen = datetime.now(timezone(timedelta(hours=7)))
@@ -177,13 +180,13 @@ async def upload_bulk_zip(file: UploadFile = File(...)):
             
             # Daftarkan pemetaan di manajer
             cl_manager.register_upload(edge_id, nrps)
-            print(f"[SUCCESS] Berhasil mengekstrak {len(nrps)} folder mahasiswa.", flush=True)
+            cl_manager.logger.success(f"Berhasil mengekstrak {len(nrps)} folder mahasiswa.")
             
         os.remove(UPLOAD_TEMP)
         cl_manager.update_logs(f"Menerima {len(nrps)} data mahasiswa dari {edge_id}")
         return {"status": "success", "filename": file.filename, "edge_id": edge_id}
     except Exception as e:
-        print(f"[UPLOAD ERROR] Gagal ekstrak: {e}", flush=True)
+        cl_manager.logger.error(f"Gagal ekstrak dataset ZIP: {e}")
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 # --- ALUR KERJA PELATIHAN TERPUSAT (RESEARCH WORKFLOW) ---
@@ -200,7 +203,7 @@ def workflow_import(dbs: Session = Depends(db.get_db)):
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     
     cl_manager.upload_requested = True
-    print("[INFO] Menunggu client mengirimkan dataset...", flush=True)
+    cl_manager.logger.info("Menunggu client mengirimkan dataset...")
     try:
         online_count = dbs.query(models.Client).filter(models.Client.status == "online").count()
         res = training_controller.fetch_data(wait_timeout=600, expected_clients=online_count)
@@ -237,12 +240,15 @@ def workflow_import(dbs: Session = Depends(db.get_db)):
 
 # Tahap 2: Pra-pemrosesan & Penyeimbangan Dataset
 @app.post("/workflow/preprocess")
-def workflow_preprocess():
+def workflow_preprocess(dbs: Session = Depends(db.get_db)):
     if cl_manager.is_running: raise HTTPException(400, "Server sedang sibuk")
     cl_manager.start_phase("Preprocess & Balance")
-    print("[INFO] Memulai tahap pra-pemrosesan...", flush=True)
+    cl_manager.logger.info("Memulai tahap pra-pemrosesan...")
     try:
-        return training_controller.preprocess_and_balance()
+        res = training_controller.preprocess_and_balance()
+        if res.get('status') == 'success':
+            training_controller.sync_nrp_from_processed(dbs=dbs)
+        return res
     finally:
         cl_manager.end_phase()
 
@@ -251,7 +257,7 @@ def workflow_preprocess():
 def workflow_train(epochs: int = TRAINING_PARAMS["epochs"], dbs: Session = Depends(db.get_db)):
     if cl_manager.is_running: raise HTTPException(400, "Server sedang sibuk")
     cl_manager.start_phase("Training")
-    print(f"[INFO] Memulai pelatihan model ({epochs} epoch)...", flush=True)
+    cl_manager.logger.info(f"Memulai pelatihan model ({epochs} epoch)...")
     try:
         res = training_controller.train_model(epochs=epochs)
         if res['status'] == 'success':
@@ -287,11 +293,11 @@ def workflow_train(epochs: int = TRAINING_PARAMS["epochs"], dbs: Session = Depen
 def workflow_export(dbs: Session = Depends(db.get_db)):
     if cl_manager.is_running: raise HTTPException(400, "Server sedang sibuk")
     cl_manager.start_phase("Export & Eval")
-    print("[INFO] Memulai tahap ekspor dan evaluasi model...", flush=True)
+    cl_manager.logger.info("Memulai tahap ekspor dan evaluasi model...")
     try:
         res = training_controller.generate_reference_and_eval(dbs=dbs)
         if res['status'] == 'success':
-            # cl_manager.increment_version() # HAPUS: Sudah di-handle di generate_reference_and_eval (DB)
+            cl_manager.increment_version(dbs=dbs)
             download_mb = res.get('download_volume_mb', 0)
             cl_manager.update_metrics({
                 "download_volume_mb": download_mb,
@@ -300,7 +306,6 @@ def workflow_export(dbs: Session = Depends(db.get_db)):
             
             # Update data download_mb ke ronde terakhir di database
             try:
-                from app.db import models
                 last_round = dbs.query(models.TrainingRound).order_by(models.TrainingRound.round_id.desc()).first()
                 if last_round:
                     last_round.download_volume_mb = float(download_mb)
@@ -320,7 +325,7 @@ def workflow_full_lifecycle(dbs: Session = Depends(db.get_db)):
         res_import = workflow_import(dbs=dbs)
         if res_import.get('status') != 'success': return res_import
         
-        res_pre = workflow_preprocess()
+        res_pre = workflow_preprocess(dbs=dbs)
         if res_pre.get('status') != 'success': return res_pre
         
         res_train = workflow_train(dbs=dbs)
@@ -329,6 +334,7 @@ def workflow_full_lifecycle(dbs: Session = Depends(db.get_db)):
         res_export = workflow_export(dbs=dbs)
         cl_manager.update_logs("Siklus pelatihan penuh berhasil diselesaikan.")
         return res_export
+
         
     except Exception as e:
         cl_manager.update_logs(f"[ERROR] Kesalahan fatal dalam siklus: {e}")
@@ -359,7 +365,7 @@ async def submit_attendance(recap: schemas.AttendanceRecapBase, dbs: Session = D
     label = str(recap.user_id)
     parts = label.split("_", 1)
     nrp = label.split("_", 1)[0].strip()
-    print(f"[DEBUG] Submit Attendance | Client: {recap.edge_id} | NRP: {nrp} | Sim: {recap.confidence:.4f}", flush=True)
+    cl_manager.logger.info(f"Sync Attendance | Client: {recap.edge_id} | NRP: {nrp} | Sim: {recap.confidence:.4f}")
     student = dbs.query(models.UserGlobal).filter(models.UserGlobal.nrp == nrp).first()
     if not student:
         name = parts[1].strip() if len(parts) > 1 else "Unknown"
