@@ -146,6 +146,11 @@ class TrainingController:
                 # ATOMIC SWAP: Ganti folder .tmp menjadi folder final setelah SELESAI SEMUA
                 if os.path.exists(dst): shutil.rmtree(dst)
                 os.rename(tmp_dst, dst)
+                
+                # Optimasi RAM antar-user
+                import gc
+                gc.collect()
+                time.sleep(0.1)
             
             self.logger.success("Preprocessing selesai. Seluruh wajah telah disejajarkan (Aligned).")
             return {"status": "success", "message": "Seleksi Laplacian dan Landmark Alignment selesai."}

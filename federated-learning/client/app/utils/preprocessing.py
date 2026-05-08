@@ -1,6 +1,7 @@
 import os
 import cv2
 import torch
+import time
 import numpy as np
 import torchvision.transforms as T
 from torchvision.transforms import InterpolationMode
@@ -159,10 +160,22 @@ class ImageProcessor:
             return 0
 
     def select_best_faces(self, folder_path, n=50):
-        """Memilih N gambar tertajam dari folder."""
+        """Memilih N gambar tertajam dari folder dengan dukungan Cache."""
         if not os.path.exists(folder_path):
             return []
             
+        # --- FITUR CACHE: Cek apakah sudah pernah dihitung sebelumnya ---
+        cache_path = os.path.join(folder_path, ".selection_cache.json")
+        import json
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path, "r") as f:
+                    cache_data = json.load(f)
+                    if cache_data.get("n") == n:
+                        # self.logger.info(f"Menggunakan cache seleksi untuk {os.path.basename(folder_path)}")
+                        return cache_data.get("filenames", [])
+            except: pass
+
         all_imgs = [
             os.path.join(folder_path, f) 
             for f in os.listdir(folder_path) 
@@ -174,7 +187,7 @@ class ImageProcessor:
 
         # Urutkan berdasarkan skor Laplacian tertinggi
         scored = []
-        import time
+        
         for i, img_path in enumerate(all_imgs):
             score = self.get_blur_score(img_path)
             scored.append((img_path, score))
@@ -182,11 +195,17 @@ class ImageProcessor:
             # Optimasi RAM untuk Edge (Raspi): Bersihkan setiap 10 foto
             if i % 10 == 0:
                 gc.collect()
-                time.sleep(0.01) # Jeda mikro untuk stabilitas I/O
+                time.sleep(0.01)
             
         scored.sort(key=lambda x: x[1], reverse=True)
         
         selected = [os.path.basename(s[0]) for s in scored[:n]]
+        
+        try:
+            with open(cache_path, "w") as f:
+                json.dump({"n": n, "filenames": selected}, f)
+        except: pass
+
         gc.collect() # Final cleanup
         return selected
 

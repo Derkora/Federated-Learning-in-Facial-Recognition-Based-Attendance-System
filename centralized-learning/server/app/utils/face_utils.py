@@ -93,12 +93,44 @@ class FaceHandler:
         except: return 0
 
     def select_best_faces(self, folder_path, n=50):
-        """Pilih N gambar terbaik berdasarkan ketajaman."""
+        """Pilih N gambar terbaik berdasarkan ketajaman dengan dukungan Cache."""
         if not os.path.exists(folder_path): return []
+        
+        # --- FITUR CACHE: Cek apakah sudah pernah dihitung sebelumnya ---
+        cache_path = os.path.join(folder_path, ".selection_cache.json")
+        import json
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path, "r") as f:
+                    cache_data = json.load(f)
+                    if cache_data.get("n") == n:
+                        return cache_data.get("filenames", [])
+            except: pass
+
         imgs = [os.path.join(folder_path, f) for f in os.listdir(folder_path) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
         if not imgs: return []
-        scored = sorted([(p, self.get_blur_score(p)) for p in imgs], key=lambda x: x[1], reverse=True)
-        return [os.path.basename(s[0]) for s in scored[:n]]
+        
+        scored = []
+        import time, gc
+        for i, p in enumerate(imgs):
+            score = self.get_blur_score(p)
+            scored.append((p, score))
+            # Optimasi RAM: Bersihkan setiap 10 foto
+            if i % 10 == 0:
+                gc.collect()
+                time.sleep(0.01)
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        selected = [os.path.basename(s[0]) for s in scored[:n]]
+
+        # --- SIMPAN CACHE ---
+        try:
+            with open(cache_path, "w") as f:
+                json.dump({"n": n, "filenames": selected}, f)
+        except: pass
+
+        gc.collect()
+        return selected
 
     def get_embedding(self, model, img_pil):
         """Generate embedding menggunakan Flip Trick (Avg Orig + Mirror)."""

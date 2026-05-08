@@ -120,7 +120,12 @@ class FaceDataset(Dataset):
                 self.samples.append({"type": "image", "path": p, "label": idx})
                 self.class_counts[idx] += 1
             
-            self.logger.info(f"  [OK] {nrp}: {len(selected)} samples selected ({mode}).")
+            # self.logger.info(f"  [OK] {nrp}: {len(selected)} samples selected ({mode}).")
+            
+            # Optimasi RAM antar-user: Napas sejenak dan bersihkan sampah RAM
+            gc.collect()
+            import time
+            time.sleep(0.1) # Jeda antar mahasiswa
 
         # Tambahkan sampel embedding global (Berbagi Pengetahuan / Knowledge Sharing)
         if global_embeddings:
