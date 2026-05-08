@@ -9,7 +9,7 @@ from app.utils.preprocessing import image_processor, DEVICE
 from app.utils.logging import get_logger
 
 class AttendanceController:
-    # Kontroler untuk proses Pengenalan Wajah dan Pelaporan Presensi (Optimasi Edge: No ONNX)
+    # Kontroler untuk proses Pengenalan Wajah dan Pelaporan Presensi.
     
     def __init__(self, manager):
         self.manager = manager
@@ -75,43 +75,22 @@ class AttendanceController:
             ref_matrix = torch.cat(ref_list, dim=0)
             ref_matrix = F.normalize(ref_matrix, p=2, dim=1)
             
-            # Hitung skor instant sekaligus
-            scores_instant = torch.mm(query_emb_tensor, ref_matrix.t())
-            
-            # Ambil Top 2 untuk Riset
-            vals_i, idxs_i = torch.topk(scores_instant, k=min(2, len(user_ids)), dim=1)
-            confidence_instant = vals_i[0][0].item()
-            best_match_instant = user_ids[idxs_i[0][0].item()]
-            
-            if len(user_ids) > 1:
-                sec_match_i = user_ids[idxs_i[0][1].item()]
-                sec_conf_i = vals_i[0][1].item()
-                self.logger.info(f"Riset Instant: Top1: {best_match_instant} ({confidence_instant:.4f}) | Top2: {sec_match_i} ({sec_conf_i:.4f}) | Gap: {confidence_instant-sec_conf_i:.4f}")
-
-
-            # CIM Bypass: Jika skor sangat tinggi (> 0.85), anggap valid langsung dan reset buffer
-            if confidence_instant > 0.85:
-                self.logger.info(f"Instant Match Confident! {best_match_instant} (Sim: {confidence_instant:.4f})")
+            # --- LOGIKA TEMPORAL VOTING (Sederhana) ---
+            now = time.time()
+            if now - self.manager.last_face_time > 1.0:
                 self.manager.prediction_buffer.clear()
-                self.manager.prediction_buffer.append(query_emb_tensor)
-                best_match, max_sim = best_match_instant, confidence_instant
-            else:
-                # Jika tidak sangat tinggi, gunakan rata-rata temporal
-                now = time.time()
-                if now - self.manager.last_face_time > 1.0:
-                    self.manager.prediction_buffer.clear()
-                
-                self.manager.prediction_buffer.append(query_emb_tensor)
-                self.manager.last_face_time = now
-                
-                mean_emb_tensor = torch.stack(list(self.manager.prediction_buffer)).mean(0)
-                mean_emb_tensor = F.normalize(mean_emb_tensor, p=2, dim=1)
-                
-                # Hitung skor temporal sekaligus
-                scores_temporal = torch.mm(mean_emb_tensor, ref_matrix.t())
-                max_sim_temp, max_idx_temp = torch.max(scores_temporal, dim=1)
-                max_sim = max_sim_temp.item()
-                best_match = user_ids[max_idx_temp.item()]
+            
+            self.manager.prediction_buffer.append(query_emb_tensor)
+            self.manager.last_face_time = now
+            
+            mean_emb_tensor = torch.stack(list(self.manager.prediction_buffer)).mean(0)
+            mean_emb_tensor = F.normalize(mean_emb_tensor, p=2, dim=1)
+            
+            # Hitung skor temporal sekaligus
+            scores_temporal = torch.mm(mean_emb_tensor, ref_matrix.t())
+            max_sim_temp, max_idx_temp = torch.max(scores_temporal, dim=1)
+            max_sim = max_sim_temp.item()
+            best_match = user_ids[max_idx_temp.item()]
             
             if max_sim > threshold:
                 self.logger.success(f"{best_match} terdeteksi (Sim: {max_sim:.4f}) [Model: v{current_v}]")

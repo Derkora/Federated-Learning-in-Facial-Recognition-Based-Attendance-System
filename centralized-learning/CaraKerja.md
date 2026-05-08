@@ -38,6 +38,6 @@ Setelah terminal mengunduh model terbaru, sistem menjalankan mesin inferensi rea
 - **BN Adaptation (Client Calibration)**: Menyesuaikan model pusat dengan kondisi pencahayaan spesifik di terminal menggunakan data lokal.
 - **Flip Trick Evaluation**: Mengambil rata-rata embedding dari wajah asli dan mirror untuk stabilitas skor.
 - **Vectorized Classifier**: Pencocokan wajah menggunakan operasi matriks (`torch.mm`) yang cepat dan efisien RAM.
-- **Research Logging (Top-2 Analysis)**: Mencatat skor identitas terbaik pertama dan kedua serta marginnya (**Gap**) untuk analisis ambiguitas data riset.
-- **Confident Instant Match (CIM)**: Jika skor similarity > 0.85, verifikasi instan. Threshold standar ditetapkan pada **0.7**.
+- **Production Logging**: Mencatat skor identitas terbaik dengan timestamp untuk auditabilitas data presensi.
+- **Temporal Voting Strategy**: Verifikasi identitas menggunakan rata-rata buffer temporal untuk stabilitas. Threshold standar ditetapkan pada **0.7**.
 - **Memory Management (GC)**: Pemicu *Garbage Collection* otomatis untuk menjaga stabilitas RAM 1GB.

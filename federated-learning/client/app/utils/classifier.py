@@ -42,17 +42,11 @@ def identify_user_globally(query_embedding, local_embeddings_dict, threshold=0.3
     # 3. Hitung Skor Sekaligus
     if metric == "cosine":
         scores = torch.mm(query_tensor, ref_matrix.t())
-        # Ambil Top 2 untuk riset (Tanpa Blocker)
-        vals, idxs = torch.topk(scores, k=min(2, len(user_ids)), dim=1)
+        # Ambil Top 1 saja (Tanpa riset Top-2)
+        val, idx = torch.max(scores, dim=1)
         
-        confidence = float(vals[0][0].item())
-        best_match = user_ids[idxs[0][0].item()]
-        
-        # Logging Tambahan untuk Riset (NRP 028 vs 072 etc)
-        if len(user_ids) > 1 and verbose:
-            second_match = user_ids[idxs[0][1].item()]
-            second_conf = float(vals[0][1].item())
-            logger.info(f"Riset: Top1: {best_match} ({confidence:.3f}) | Top2: {second_match} ({second_conf:.3f}) | Gap: {confidence-second_conf:.3f}")
+        confidence = float(val.item())
+        best_match = user_ids[idx.item()]
     else:
         # Euclidean Distance
         dists = torch.cdist(query_tensor, ref_matrix, p=2)

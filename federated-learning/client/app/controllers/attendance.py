@@ -14,6 +14,8 @@ from app.utils.classifier import identify_user_globally
 from app.utils.security import encryptor
 from app.utils.sync_utils import sync_record_to_server
 
+from app.db.db import SessionLocal
+
 class AttendanceController:
     # Kontroler untuk proses Pengenalan Wajah dan Pencatatan Presensi.
     # Menangani alur inferensi dari gambar kamera hingga pelaporan ke server.
@@ -69,32 +71,22 @@ class AttendanceController:
         # Manajemen Cache Identitas
         local_refs = self._get_cached_identities(db)
 
-        # --- LOGIKA TEMPORAL VOTING & CIM (Confident Instant Match) ---
-        # 1. Cek Kemiripan Instant Frame (Tanpa Buffer)
-        query_embedding = query_embedding_tensor.cpu().numpy()[0]
-        user_id_instant, confidence_instant = identify_user_globally(query_embedding, local_refs, threshold=self.fl_manager.inference_threshold, verbose=False)
-        
-        # CIM Bypass: Jika skor sangat tinggi (> 0.85), anggap valid langsung dan reset buffer
-        if confidence_instant > 0.85 and user_id_instant != "Unknown":
-            self.fl_manager.logger.success(f"[CIM] Instant Match Confident! {user_id_instant} (Sim: {confidence_instant:.4f})")
+        # --- LOGIKA TEMPORAL VOTING (Sederhana) ---
+        # 1. Update Buffer Temporal
+        now = time.time()
+        if now - self.fl_manager.last_face_time > 1.0:
             self.fl_manager.prediction_buffer.clear()
-            self.fl_manager.prediction_buffer.append(query_embedding_tensor)
-            user_id, confidence = user_id_instant, confidence_instant
-        else:
-            # Jika tidak sangat tinggi, gunakan rata-rata temporal (Normal voting)
-            now = time.time()
-            if now - self.fl_manager.last_face_time > 1.0:
-                self.fl_manager.prediction_buffer.clear()
-                
-            self.fl_manager.prediction_buffer.append(query_embedding_tensor)
-            self.fl_manager.last_face_time = now
             
-            mean_embedding_tensor = torch.stack(list(self.fl_manager.prediction_buffer)).mean(0)
-            mean_embedding_tensor = torch.nn.functional.normalize(mean_embedding_tensor, p=2, dim=1)
-            mean_embedding = mean_embedding_tensor.cpu().numpy()[0]
-            
-            # Pencocokan identitas dengan threshold produksi
-            user_id, confidence = identify_user_globally(mean_embedding, local_refs, threshold=self.fl_manager.inference_threshold)
+        self.fl_manager.prediction_buffer.append(query_embedding_tensor)
+        self.fl_manager.last_face_time = now
+        
+        # 2. Rata-rata temporal (Voting)
+        mean_embedding_tensor = torch.stack(list(self.fl_manager.prediction_buffer)).mean(0)
+        mean_embedding_tensor = torch.nn.functional.normalize(mean_embedding_tensor, p=2, dim=1)
+        mean_embedding = mean_embedding_tensor.cpu().numpy()[0]
+        
+        # 3. Pencocokan identitas tunggal
+        user_id, confidence = identify_user_globally(mean_embedding, local_refs, threshold=self.fl_manager.inference_threshold)
         
         # Pencatatan Absensi
         if user_id != "Unknown":
@@ -157,43 +149,32 @@ class AttendanceController:
                 # 3. Rata-rata dan Normalisasi
                 query_embedding_tensor = torch.nn.functional.normalize((emb_orig + emb_mirror) / 2, p=2, dim=1)
                 
-            # --- LOGIKA TEMPORAL VOTING & CIM (Confident Instant Match) ---
-            # 1. Cek Kemiripan Instant Frame
-            query_embedding_np = query_embedding_tensor.cpu().numpy()[0]
+            # --- LOGIKA TEMPORAL VOTING (Sederhana) ---
             local_refs = getattr(self.fl_manager, 'cached_refs', {})
             if not local_refs:
-                from app.db.db import SessionLocal
+                
                 db = SessionLocal()
                 try:
                     local_refs = self._get_cached_identities(db)
                 finally:
                     db.close()
 
-            user_id_instant, confidence_instant = identify_user_globally(query_embedding_np, local_refs, threshold=self.fl_manager.inference_threshold, verbose=False)
-
-            # CIM Bypass: Jika skor sangat tinggi (> 0.85), anggap valid langsung dan reset buffer
-            if confidence_instant > 0.85 and user_id_instant != "Unknown":
-                self.fl_manager.logger.success(f"[CIM] Instant Match Confident! {user_id_instant} (Sim: {confidence_instant:.4f})")
+            # Temporal Voting
+            now = time.time()
+            if now - self.fl_manager.last_face_time > 1.0:
                 self.fl_manager.prediction_buffer.clear()
-                self.fl_manager.prediction_buffer.append(query_embedding_tensor)
-                matched, confidence = user_id_instant, confidence_instant
-            else:
-                # Temporal Voting (Normal)
-                now = time.time()
-                if now - self.fl_manager.last_face_time > 1.0:
-                    self.fl_manager.prediction_buffer.clear()
-                self.fl_manager.prediction_buffer.append(query_embedding_tensor)
-                self.fl_manager.last_face_time = now
-                
-                mean_embedding_tensor = torch.stack(list(self.fl_manager.prediction_buffer)).mean(0)
-                mean_embedding_tensor = torch.nn.functional.normalize(mean_embedding_tensor, p=2, dim=1)
-                mean_embedding = mean_embedding_tensor.cpu().numpy()[0]
-                
-                matched, confidence = identify_user_globally(
-                    mean_embedding, 
-                    local_refs, 
-                    threshold=self.fl_manager.inference_threshold
-                )
+            self.fl_manager.prediction_buffer.append(query_embedding_tensor)
+            self.fl_manager.last_face_time = now
+            
+            mean_embedding_tensor = torch.stack(list(self.fl_manager.prediction_buffer)).mean(0)
+            mean_embedding_tensor = torch.nn.functional.normalize(mean_embedding_tensor, p=2, dim=1)
+            mean_embedding = mean_embedding_tensor.cpu().numpy()[0]
+            
+            matched, confidence = identify_user_globally(
+                mean_embedding, 
+                local_refs, 
+                threshold=self.fl_manager.inference_threshold
+            )
             
             return matched, float(confidence)
         except Exception as e:

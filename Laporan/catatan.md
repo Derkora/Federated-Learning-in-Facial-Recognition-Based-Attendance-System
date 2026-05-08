@@ -18,10 +18,9 @@
 - **Detail**: Resolusi input dikunci pada **96 (width) x 112 (height)**.
 - **Justifikasi**: Fokus pada area vertikal wajah (portrait) memberikan kepadatan fitur yang lebih baik untuk model MobileFaceNet dibandingkan resolusi landscape atau square standar.
 
-## 5. Implementasi Flip Trick & CIM pada Inferensi
+## 5. Implementasi Flip Trick pada Inferensi
 - **Flip Trick**: Mengevaluasi wajah asli dan mirror (rata-rata embedding) untuk stabilitas skor.
-- **Confident Instant Match (CIM)**: Bypass temporal voting jika skor > 0.85 untuk respons instan.
-- **Justifikasi**: Meningkatkan *User Experience* (kecepatan absensi) tanpa mengorbankan keamanan (keamanan tetap terjaga melalui threshold 0.7 untuk kasus umum).
+- **Justifikasi**: Meningkatkan stabilitas pengenalan wajah terutama pada kondisi wajah yang tidak simetris atau pencahayaan miring.
 
 ## 6. Integrasi Database untuk Versioning Model
 - **Sistem**: Pelacakan versi model (v1, v2, dst.) dikelola secara permanen di database PostgreSQL.
@@ -101,9 +100,9 @@ Dalam pengujian, ditemukan bahwa Client 2 (tanpa data pendaftar) memiliki akuras
 - **Update**: Menambahkan `RandomPerspective` (p=0.2), `GaussianBlur` (kernel=3), dan `RandomErasing` (p=0.1) ke dalam pipeline `trainer.py`.
 - **Justifikasi**: Menambah variasi geometris dan noise buatan untuk mensimulasikan kondisi kamera yang tidak fokus atau terhalang sebagian. Hal ini meningkatkan kemampuan generalisasi model terhadap kualitas gambar yang buruk di lapangan.
 
-## 19. Logging Diagnostik Berorientasi Riset (Top1/Top2)
-- **Detail**: Sistem kini mencatat identitas terbaik pertama (**Top-1**) dan kedua (**Top-2**) beserta selisih skornya (**Gap**) pada setiap proses inferensi.
-- **Justifikasi**: Memungkinkan analisis mendalam terkait ambiguitas identitas (misal: mengapa mahasiswa A sering disangka mahasiswa B). Data ini sangat krusial untuk menghitung metrik riset lanjutan seperti *False Acceptance Rate* (FAR) dan mengevaluasi kualitas pemisahan antar kelas di ruang laten.
+## 19. Logging Diagnostik Berorientasi Produksi
+- **Detail**: Sistem kini mencatat log kecocokan tunggal yang paling akurat dengan timestamp dan skor kepercayaan.
+- **Justifikasi**: Memungkinkan pemantauan performa absensi secara real-time dan auditabilitas data presensi yang bersih tanpa kebisingan data riset mentah.
 
 ## 20. Prioritas Source of Truth: Global Registry (Tier 2)
 - **Update**: Melakukan refactor pada logika pencocokan identitas (`attendance.py`) untuk memprioritaskan **Global Registry** daripada data gambar lokal untuk semua pengguna.

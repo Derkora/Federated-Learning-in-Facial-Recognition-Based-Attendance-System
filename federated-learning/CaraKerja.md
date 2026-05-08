@@ -45,6 +45,6 @@ Langkah krusial untuk kualitas input yang seragam (Identik dengan CL):
 1.  **Eager Loading**: Memuat model versi terbaru ke RAM secara terisolasi.
 2.  **Vectorized Identity Identification**: Pencarian identitas menggunakan operasi matriks (`torch.mm`) yang efisien.
 3.  **Flip Trick Evaluation**: Merata-ratakan embedding wajah asli dan mirror.
-4.  **Research Logging (Top-2 Analysis)**: Mencatat identitas terbaik ke-1 dan ke-2 serta marginnya (**Gap**) untuk kebutuhan analisis data riset (identifikasi ambiguitas).
-5.  **Temporal Voting & CIM**: Mendukung *Instant Match* jika skor > 0.85. Threshold standar ditetapkan pada **0.7**.
+4.  **Production Logging**: Mencatat hasil identifikasi terbaik dengan skor kepercayaan untuk auditabilitas presensi.
+5.  **Temporal Voting Strategy**: Verifikasi identitas menggunakan rata-rata buffer temporal untuk stabilitas. Threshold standar ditetapkan pada **0.7**.
 6.  **Explicit Memory Cleanup (GC)**: Pembersihan RAM secara rutin melalui `gc.collect()`.

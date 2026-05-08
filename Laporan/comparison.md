@@ -21,14 +21,13 @@ Kedua sistem menggunakan parameter yang identik untuk memastikan perbandingan ya
 | **BN Adaptation** | **Client-side Calibration** | **Inherent (Local BN Storage)** |
 | **Booster (SWA)**  | **SWA (Last 3 Epochs: 8, 9, 10)** | **Snapshot Avg (Last 3 Rounds: 8, 9, 10)** |
 | **Centroid Data** | **Full Dataset (50 Images)** | **Full Dataset (50 Images)** |
-| **Threshold** | **0.7 (CIM: 0.85)** | **0.7 (CIM: 0.85)** |
+| **Threshold** | **0.7** | **0.7** |
 | **Metode Inferensi** | Flip Trick + Temporal Voting | Flip Trick + Temporal Voting |
 | **Res. Management** | **Downscale 640px + Vectorization** | **Downscale 640px + Vectorization** |
 | **Batch Size** | 8 (Optimized for 1GB RAM) | 4 per Client (Optimized for 1GB RAM) |
 | **Learning Rate** | **0.01 (Cosine Decay)** | **0.01 (Cosine Decay)** |
 | **Augmentasi** | **Premium (Perspective, Blur, Jitter)** | **Premium (Perspective, Blur, Jitter)** |
 | **Basis Validasi** | Citra Asli (Real Images) | Hybrid (Citra Asli + Global Embeddings) |
-| **Auditabilitas** | Top-2 Research Logs + Server Training | Top-2 Research Logs + Dual-Logging |
 
 ## 3. Analisis Perbedaan Operasional
 
