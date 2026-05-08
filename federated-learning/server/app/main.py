@@ -171,16 +171,11 @@ async def get_client_logs(client_id: str):
 
 # --- AKSES MODEL DAN ASET ---
 
-# Mengunduh Bobot Model Backbone (MobileFaceNet)
 @app.get("/api/model/backbone")
 async def get_backbone_model(db: Session = Depends(get_db)):
-    # Pastikan model sudah ditraining (v1+)
-    if fl_manager.model_version == 0:
-        raise HTTPException(status_code=403, detail="MODEL NOT AVAILABLE: Versi masih v0 (Belum ditraining)")
-        
     global_model = db.query(GlobalModel).order_by(GlobalModel.last_updated.desc()).first()
     if not global_model or not global_model.weights:
-        raise HTTPException(status_code=404, detail="Global model not found")
+        raise HTTPException(status_code=404, detail="Global model weights not found in database.")
     return Response(content=global_model.weights, media_type="application/octet-stream")
 
 # Mengunduh Parameter Batch Normalization (BN)

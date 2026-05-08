@@ -174,13 +174,20 @@ class ImageProcessor:
 
         # Urutkan berdasarkan skor Laplacian tertinggi
         scored = []
-        for img_path in all_imgs:
+        import time
+        for i, img_path in enumerate(all_imgs):
             score = self.get_blur_score(img_path)
             scored.append((img_path, score))
+            
+            # Optimasi RAM untuk Edge (Raspi): Bersihkan setiap 10 foto
+            if i % 10 == 0:
+                gc.collect()
+                time.sleep(0.01) # Jeda mikro untuk stabilitas I/O
             
         scored.sort(key=lambda x: x[1], reverse=True)
         
         selected = [os.path.basename(s[0]) for s in scored[:n]]
+        gc.collect() # Final cleanup
         return selected
 
 image_processor = ImageProcessor()
