@@ -114,8 +114,7 @@
 
         if (data.matched && data.matched !== "Standby") {
             if (data.matched === "Unknown") {
-                statusCard.innerText = "Memindai wajah...";
-                statusCard.style.color = "#f8fafc";
+                statusCard.innerHTML = `<span style="color: #ef4444;">Unknown (Ditolak)</span> <br><small>${(data.confidence * 100).toFixed(1)}% | ${data.latency_ms}ms</small>`;
             } else if (data.matched.includes("Error")) {
                 statusCard.innerHTML = `<span style="color: #ef4444;">Error: ${data.message || 'Gagal'}</span>`;
             } else {

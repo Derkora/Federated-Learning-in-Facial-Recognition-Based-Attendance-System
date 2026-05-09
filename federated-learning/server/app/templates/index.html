@@ -29,10 +29,10 @@
 </div>
 
 <!-- CLIENT MONITORING SECTION -->
-<div class="glass" style="padding: 2rem;">
+<div class="glass" style="padding: 2rem; margin-top: 2rem;">
     <h3
         style="color: var(--accent); margin-top: 0; margin-bottom: 1.5rem; font-size: 1.2rem; display: flex; align-items: center; gap: 0.5rem;">
-        🖥️ Terminal Terhubung
+        Terminal Terhubung
     </h3>
     <div id="active-terminals"
         style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 1rem;">
@@ -119,16 +119,44 @@
                             IP: ${client.ip}<br>
                             Terakhir: ${client.last_seen}
                         </div>
-                        <button class="btn btn-sm btn-outline-primary" onclick="viewClientLogs('${client.id}')" style="width: 100%; font-size: 0.75rem;">
-                            View Logs
-                        </button>
+                        <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                            <button class="btn btn-sm btn-outline-primary" onclick="viewClientLogs('${client.id}')" style="width: 100%; font-size: 0.75rem;">
+                                Log Pelatihan
+                            </button>
+                            <button class="btn btn-sm btn-primary" onclick="viewInferenceLogs('${client.id}')" style="width: 100%; font-size: 0.75rem;">
+                                Log Inferensi
+                            </button>
+                        </div>
                     </div>
                 `).join('');
             } else {
                 terminalContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 0.9rem;">Tidak ada terminal yang terdaftar.</p>';
             }
 
-            // 4. Polling Management
+            // 4. Update Inference Logs (Live Monitoring Table)
+            const inferenceBody = document.getElementById('inference-logs-body');
+            if (data.inference_logs && data.inference_logs.length > 0) {
+                // Simpan global untuk modal
+                window.allInferenceLogs = data.inference_logs;
+                
+                // Tampilkan hanya 50 terakhir di tabel utama agar tidak berat
+                const displayLogs = data.inference_logs.slice(0, 50);
+                inferenceBody.innerHTML = displayLogs.map(log => `
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); transition: background 0.3s;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">
+                        <td style="padding: 0.5rem; color: var(--text-muted);">${log.timestamp}</td>
+                        <td style="padding: 0.5rem; font-weight: 500;">${log.client_id}</td>
+                        <td style="padding: 0.5rem;">
+                            <span class="badge ${log.user_id === 'Unknown' ? 'badge-danger' : 'badge-success'}" style="font-size: 0.7rem;">
+                                ${log.user_id}
+                            </span>
+                        </td>
+                        <td style="padding: 0.5rem; font-family: 'Fira Code', monospace; color: var(--accent);">${log.confidence}</td>
+                        <td style="padding: 0.5rem; color: var(--text-muted);">${log.latency}</td>
+                    </tr>
+                `).join('');
+            }
+
+            // 5. Polling Management
             if (data.is_running && !pollInterval) startPolling();
             if (!data.is_running && pollInterval) stopPolling();
 
@@ -140,18 +168,67 @@
         const modalTitle = document.getElementById('log-modal-title');
         const modalBody = document.getElementById('log-modal-body');
         
-        modalTitle.innerText = `Client Logs: ${clientId}`;
-        modalBody.innerText = "Loading logs...";
+        modalTitle.innerText = `Log Pelatihan: ${clientId}`;
+        modalBody.innerText = "Memuat log pelatihan...";
         modal.style.display = 'flex';
         
         try {
             const res = await fetch(`/api/clients/logs/${clientId}`);
             const data = await res.json();
-            modalBody.innerText = data.logs || "No logs found.";
+            modalBody.innerText = data.logs || "Log tidak ditemukan.";
             modalBody.scrollTop = modalBody.scrollHeight;
         } catch (e) {
-            modalBody.innerText = "Error fetching logs: " + e.message;
+            modalBody.innerText = "Gagal mengambil log: " + e.message;
         }
+    }
+
+    function viewInferenceLogs(clientId) {
+        const modal = document.getElementById('log-modal');
+        const modalTitle = document.getElementById('log-modal-title');
+        const modalBody = document.getElementById('log-modal-body');
+        
+        modalTitle.innerText = `Log Inferensi: ${clientId}`;
+        modal.style.display = 'flex';
+        
+        if (!window.allInferenceLogs) {
+            modalBody.innerText = "Belum ada data inferensi terkumpul.";
+            return;
+        }
+
+        const filtered = window.allInferenceLogs.filter(log => log.client_id === clientId);
+        
+        if (filtered.length === 0) {
+            modalBody.innerText = `Tidak ada data inferensi untuk ${clientId}.`;
+            return;
+        }
+
+        // Buat tabel dengan garis (border) agar rapi
+        let html = `<table style="width:100%; border-collapse:collapse; font-family:monospace; font-size:0.8rem; border: 1px solid rgba(0,255,0,0.2);">
+            <thead>
+                <tr style="background: rgba(0,255,0,0.1); text-align:left;">
+                    <th style="padding:8px; border: 1px solid rgba(0,255,0,0.2);">WAKTU</th>
+                    <th style="padding:8px; border: 1px solid rgba(0,255,0,0.2);">NRP</th>
+                    <th style="padding:8px; border: 1px solid rgba(0,255,0,0.2);">STATUS</th>
+                    <th style="padding:8px; border: 1px solid rgba(0,255,0,0.2);">SIM</th>
+                    <th style="padding:8px; border: 1px solid rgba(0,255,0,0.2);">LATENCY</th>
+                </tr>
+            </thead>
+            <tbody>`;
+        
+        filtered.forEach(log => {
+            const isUnknown = log.status === "UNKNOWN" || log.user_id === "Unknown";
+            const statusColor = isUnknown ? '#ff4444' : '#0f0';
+            
+            html += `<tr>
+                <td style="padding:6px; border: 1px solid rgba(0,255,0,0.1); color:#aaa;">${log.timestamp}</td>
+                <td style="padding:6px; border: 1px solid rgba(0,255,0,0.1); color:${isUnknown ? '#aaa' : '#fff'};">${log.user_id}</td>
+                <td style="padding:6px; border: 1px solid rgba(0,255,0,0.1); color:${statusColor}; font-weight:bold;">${log.status || (isUnknown ? 'UNKNOWN' : 'KNOWN')}</td>
+                <td style="padding:6px; border: 1px solid rgba(0,255,0,0.1); color:#0af;">${log.confidence}</td>
+                <td style="padding:6px; border: 1px solid rgba(0,255,0,0.1); color:#aaa;">${log.latency}</td>
+            </tr>`;
+        });
+        html += `</tbody></table>`;
+        modalBody.innerHTML = html;
     }
 
     function closeModal() {

@@ -19,6 +19,7 @@ class AttendanceController:
         self.logger = get_logger()
 
     def process_inference(self, img_pil, model, reference_embeddings):
+        start_time = time.perf_counter()
         # Melakukan inferensi wajah dengan Temporal Voting (Buffer Rata-rata)
         threshold = self.manager.threshold
         
@@ -92,28 +93,57 @@ class AttendanceController:
             max_sim = max_sim_temp.item()
             best_match = user_ids[max_idx_temp.item()]
             
+            latency = int((time.perf_counter() - start_time) * 1000)
+            
+            # --- NEW: Log Inferensi ke Server untuk Riset (FAR/TAR) ---
+            import threading
+            threading.Thread(target=self._log_inference_to_server, args=(best_match, max_sim, latency)).start()
+
             if max_sim > threshold:
                 self.logger.success(f"{best_match} terdeteksi (Sim: {max_sim:.4f}) [Model: v{current_v}]")
                 nrp_only = best_match.split("_")[0] if "_" in best_match else best_match
-                self.submit_attendance(nrp_only, max_sim)
-                return nrp_only, max_sim, False # Status virtual diatur oleh pemanggil (API vs Hardware loop)
+                self.submit_attendance(nrp_only, max_sim, latency)
+                return nrp_only, max_sim, True # True = Terverifikasi
             else:
                 if max_sim > 0.1:
                     self.logger.info(f"Model v{current_v} | Terbaik: {best_match} | Sim: {max_sim:.4f} | Thres: {threshold}")
-                
+                return "Unknown", max_sim, False # False = Tidak Terverifikasi
+        
         return "Unknown", 0, False
 
-    def submit_attendance(self, user_id, confidence):
+    def submit_attendance(self, user_id, confidence, latency=0):
         # Mengirimkan laporan presensi mahasiswa ke server pusat.
         try:
             payload = {
                 "user_id": user_id, 
                 "edge_id": self.client_id, 
                 "confidence": confidence, 
-                "lecture_id": "L123"
+                "lecture_id": "L123",
+                "latency_ms": latency
             }
             res = requests.post(f"{self.server_url}/submit-attendance", json=payload, timeout=5)
             if res.status_code == 200:
                 self.logger.success(f"Presensi berhasil dikirim untuk: {user_id}")
         except Exception as e:
             self.logger.error(f"Gagal mengirim presensi ke server: {e}")
+
+    def _log_inference_to_server(self, user_id, confidence, latency_ms):
+        """Mengirim data inferensi mentah ke server untuk pemantauan terpusat."""
+        try:
+            # Pastikan hanya NRP yang dikirim (potong nama jika ada)
+            nrp_only = user_id.split("_")[0] if "_" in user_id else user_id
+
+            # Tentukan status berdasarkan threshold sistem
+            threshold = getattr(self.manager, 'threshold', 0.7)
+            status = "KNOWN" if float(confidence) >= threshold else "UNKNOWN"
+
+            payload = {
+                "client_id": self.client_id,
+                "user_id": nrp_only,
+                "confidence": float(confidence),
+                "latency_ms": int(latency_ms),
+                "status": status
+            }
+            requests.post(f"{self.server_url}/api/logs/inference", json=payload, timeout=2)
+        except Exception as e:
+            self.logger.error(f"[CIM] Gagal mengirim log inferensi: {e}")

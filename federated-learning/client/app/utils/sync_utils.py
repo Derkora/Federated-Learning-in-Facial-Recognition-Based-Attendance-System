@@ -8,7 +8,7 @@ from app.utils.logging import get_logger
 # Sinkronisasi data ke server pusat
 # Fungsi ini dijalankan di background untuk mengirim data absensi yang baru dicatat
 # ke server Federated Learning agar bisa direkap secara global.
-def sync_record_to_server(user_id, name, confidence, client_id):
+def sync_record_to_server(user_id, name, confidence, client_id, latency=0):
     logger = get_logger()
     server_url = os.getenv("SERVER_API_URL", "http://server-fl:8080")
     payload = [{
@@ -16,7 +16,8 @@ def sync_record_to_server(user_id, name, confidence, client_id):
         "name": name,
         "client_id": client_id,
         "timestamp": datetime.now(timezone(timedelta(hours=7))).strftime('%Y-%m-%dT%H:%M:%S'),
-        "confidence": confidence
+        "confidence": confidence,
+        "latency_ms": latency
     }]
     
     try:

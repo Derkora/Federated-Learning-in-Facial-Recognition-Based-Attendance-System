@@ -133,7 +133,38 @@ async def register_client(request: Request, data: dict, db: Session = Depends(ge
             client.status = "online"
             client.last_seen = datetime.now(timezone(timedelta(hours=7)))
         db.commit()
-    return {"status": "ok", "server_time": time.time(), "detected_ip": ip}
+# Endpoint Baru: Menerima Log Inferensi Real-time dari Client (untuk FAR/TAR)
+@app.post("/api/logs/inference")
+async def receive_inference_log(data: dict):
+    """Menerima data hasil identifikasi wajah dari terminal untuk pemantauan terpusat."""
+    client_id = data.get("client_id", "unknown")
+    user_id = data.get("user_id", "Unknown")
+    confidence = data.get("confidence", 0.0)
+    latency = data.get("latency_ms", 0)
+    status = data.get("status", "UNKNOWN")
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    
+    # Simpan ke memori manager untuk dashboard
+    log_entry = {
+        "timestamp": timestamp,
+        "client_id": client_id,
+        "user_id": user_id,
+        "confidence": f"{confidence:.4f}",
+        "latency": f"{latency}ms",
+        "status": status
+    }
+    
+    if "inference_logs" not in fl_manager.metrics:
+        fl_manager.metrics["inference_logs"] = []
+        
+    fl_manager.metrics["inference_logs"].insert(0, log_entry)
+    # Simpan hingga 10.000 baris untuk riwayat riset yang panjang
+    fl_manager.metrics["inference_logs"] = fl_manager.metrics["inference_logs"][:10000]
+    
+    # Simpan ke disk agar persisten
+    fl_manager.save_inference_logs()
+    
+    return {"status": "logged"}
 
 # Laporan Penyelesaian Tahap Discovery dari Terminal
 @app.post("/api/clients/discovery_done")
@@ -290,7 +321,7 @@ async def get_global_identities(db: Session = Depends(get_db)):
 async def sync_attendance(records: List[Dict[str, Any]] = Body(...), db: Session = Depends(get_db)):
     new_records = 0
     errors = []
-    fl_manager.logger.info(f"Menerima {len(records)} data presensi dari terminal.")
+    # fl_manager.logger.info(f"Menerima {len(records)} data presensi dari terminal.")
     
     for rec in records:
         try:
@@ -321,12 +352,11 @@ async def sync_attendance(records: List[Dict[str, Any]] = Body(...), db: Session
                 # Pastikan client_id ada di tabel clients untuk menghindari FK error
                 client_exists = db.query(Client).filter_by(edge_id=client_id).first()
                 if not client_exists:
-                    fl_manager.logger.info(f"Mendaftarkan client {client_id} secara otomatis untuk sinkronisasi.")
                     new_client = Client(edge_id=client_id, name=client_id, status="online")
                     db.add(new_client)
                     db.flush()
 
-                fl_manager.logger.info(f"Sync Attendance | Client: {client_id} | NRP: {nrp} | Sim: {conf:.4f}")
+
                 new_item = AttendanceRecap(user_id=user.user_id, edge_id=client_id, timestamp=ts, confidence=conf)
                 db.add(new_item)
                 new_records += 1

@@ -25,7 +25,7 @@ class AttendanceController:
         self._last_version_loaded = -1 # Melacak versi model yang aktif di session
 
     async def process_inference(self, image_b64: str, db: Session, background_tasks):
-        start_time = time.time()
+        start_time = time.perf_counter()
         
         # Dekode gambar dari base64
         img_bytes = base64.b64decode(image_b64)
@@ -101,9 +101,11 @@ class AttendanceController:
                 db.add(new_attendance)
                 db.commit()
                 
+                latency = int((time.perf_counter() - start_time) * 1000)
                 background_tasks.add_task(
                     sync_record_to_server, 
-                    user_id, user_name, float(confidence), os.getenv("HOSTNAME", "client-1")
+                    user_id, user_name, float(confidence), os.getenv("HOSTNAME", "client-1"),
+                    latency # Kirim latency asli ke fungsi sync
                 )
                 self.fl_manager.logger.success(f"Wajah Terverifikasi: {user_id} (Sim: {confidence:.4f})")
             except Exception as e:
@@ -114,7 +116,12 @@ class AttendanceController:
             if confidence > 0.1: 
                 self.fl_manager.logger.info(f"Model v{current_v} | Kecocokan: Unknown | Sim: {confidence:.4f} | Thres: {self.fl_manager.inference_threshold}")
             
-        latency = int((time.time() - start_time) * 1000)
+        latency = int((time.perf_counter() - start_time) * 1000)
+        
+        # --- NEW: Log Inferensi ke Server untuk Riset (FAR/TAR) ---
+        import threading
+        threading.Thread(target=self._log_inference_to_server, args=(user_id, float(confidence), latency)).start()
+
         return {
             "matched": user_id if user_id != "Unknown" else "Unknown", 
             "is_confirmed": user_id != "Unknown",
@@ -176,10 +183,40 @@ class AttendanceController:
                 threshold=self.fl_manager.inference_threshold
             )
             
+            latency = int((time.time() - now) * 1000)
+            
+            # Log ke server secara background (Gunakan thread/requests simple)
+            import threading
+            threading.Thread(target=self._log_inference_to_server, args=(matched, float(confidence), latency)).start()
+
             return matched, float(confidence)
         except Exception as e:
             self.fl_manager.logger.error(f"Kegagalan sistem pengenalan wajah: {e}")
             return "Unknown", 0.0
+
+    def _log_inference_to_server(self, user_id, confidence, latency_ms):
+        """Mengirim data inferensi mentah ke server untuk pemantauan terpusat."""
+        import requests
+        try:
+            server_url = getattr(self.fl_manager, 'server_api_url', "http://server-fl:8080")
+            
+            # Pastikan hanya NRP yang dikirim (potong nama jika ada)
+            nrp_only = user_id.split("_")[0] if "_" in user_id else user_id
+            
+            # Tentukan status berdasarkan threshold sistem
+            threshold = getattr(self.fl_manager, 'inference_threshold', 0.7)
+            status = "KNOWN" if confidence >= threshold else "UNKNOWN"
+
+            payload = {
+                "client_id": os.getenv("HOSTNAME", "client-1"),
+                "user_id": nrp_only,
+                "confidence": float(confidence),
+                "latency_ms": int(latency_ms),
+                "status": status
+            }
+            requests.post(f"{server_url}/api/logs/inference", json=payload, timeout=2)
+        except Exception as e:
+            self.fl_manager.logger.error(f"[CIM] Gagal mengirim log inferensi ke server: {e}")
 
     def _get_cached_identities(self, db):
         # Memperbarui cache identitas (Setiap 30 detik atau jika data kosong)

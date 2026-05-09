@@ -38,9 +38,11 @@ class CentralizedServerManager:
             "total_round_time_s": 0,
             "compute_energy_kwh": 0,
             "compute_cost_idr": 0,
-            "epoch_history": [] # Riwayat {"epoch": i, "loss": l, "accuracy": a}
+            "epoch_history": [], # Riwayat {"epoch": i, "loss": l, "accuracy": a}
+            "inference_logs": [] # Log detail untuk riset FAR/TAR
         }
         self.settings_path = "data/settings_cl.json"
+        self.inference_logs_path = "data/inference_logs.json"
         
         # Default dari config
         self.default_epochs = TRAINING_PARAMS["epochs"]
@@ -117,7 +119,9 @@ class CentralizedServerManager:
                     self.metrics["loss"] = float(last.global_loss) if last.global_loss is not None else 0.0
                     self.logger.info(f"Berhasil memulihkan {len(history)} baris riwayat ke dashboard.")
 
-                # 3. Sinkronisasi Metrik Ekonomi
+                # 4. Sinkronisasi Log Inferensi
+                self.load_inference_logs()
+
                 self.update_metrics({})
                 self.logger.info("Sinkronisasi metrik selesai. Server Siap.")
                 db.close()
@@ -160,6 +164,26 @@ class CentralizedServerManager:
         except Exception as e:
             self.update_logs(f"[ERROR] Gagal menyimpan pengaturan: {e}")
             return False
+
+    def save_inference_logs(self):
+        """Menyimpan log inferensi ke file JSON agar persisten."""
+        try:
+            logs = self.metrics.get("inference_logs", [])
+            os.makedirs(os.path.dirname(self.inference_logs_path), exist_ok=True)
+            with open(self.inference_logs_path, "w") as f:
+                json.dump(logs, f, indent=4)
+        except Exception as e:
+            self.logger.error(f"Gagal menyimpan log inferensi: {e}")
+
+    def load_inference_logs(self):
+        """Memuat log inferensi dari file JSON saat startup."""
+        if os.path.exists(self.inference_logs_path):
+            try:
+                with open(self.inference_logs_path, "r") as f:
+                    self.metrics["inference_logs"] = json.load(f)
+                self.logger.info(f"Berhasil memulihkan {len(self.metrics['inference_logs'])} log inferensi.")
+            except Exception as e:
+                self.logger.error(f"Gagal memuat log inferensi: {e}")
 
     def start_phase(self, phase_name):
         # Menandai awal dari fase alur kerja penelitian
@@ -287,5 +311,6 @@ class CentralizedServerManager:
             "default_batch_size": self.default_batch_size,
             "inference_threshold": self.inference_threshold,
             "uptime": int(time.time() - self.start_time) if self.start_time > 0 else 0,
-            "active_clients": active_clients
+            "active_clients": active_clients,
+            "inference_logs": self.metrics.get("inference_logs", [])
         }

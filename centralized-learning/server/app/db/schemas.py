@@ -16,3 +16,4 @@ class AttendanceRecapBase(BaseModel):
     edge_id: str
     confidence: float
     lecture_id: str = None
+    latency_ms: int = 0

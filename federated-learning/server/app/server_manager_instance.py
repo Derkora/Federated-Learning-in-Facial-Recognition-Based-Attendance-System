@@ -387,12 +387,14 @@ class FLServerManager:
             "compute_energy_kwh": 0, "compute_cost_idr": 0,
             "round_history": [], # Riwayat data ronde dengan rincian client
             "unique_client_ids": [], # Pelacakan ID unik client yang berkontribusi
-            "convergence_round": None
+            "convergence_round": None,
+            "inference_logs": [] # Log detail untuk riset FAR/TAR
         }
         
         self.update_logs("=== Server Started / Restarted ===")
         
         self.settings_path = "/app/data/settings.json"
+        self.inference_logs_path = "/app/data/inference_logs.json"
         self.load_settings()
         self._load_persistence()
 
@@ -432,6 +434,25 @@ class FLServerManager:
                 self.logger.info(f"Pengaturan dimuat dari {self.settings_path}")
             except Exception as e:
                 self.logger.error(f"Gagal memuat pengaturan: {e}")
+
+    def save_inference_logs(self):
+        """Menyimpan log inferensi ke file JSON agar persisten."""
+        try:
+            logs = self.metrics.get("inference_logs", [])
+            with open(self.inference_logs_path, "w") as f:
+                json.dump(logs, f, indent=4)
+        except Exception as e:
+            self.logger.error(f"Gagal menyimpan log inferensi: {e}")
+
+    def load_inference_logs(self):
+        """Memuat log inferensi dari file JSON saat startup."""
+        if os.path.exists(self.inference_logs_path):
+            try:
+                with open(self.inference_logs_path, "r") as f:
+                    self.metrics["inference_logs"] = json.load(f)
+                self.logger.info(f"Berhasil memulihkan {len(self.metrics['inference_logs'])} log inferensi.")
+            except Exception as e:
+                self.logger.error(f"Gagal memuat log inferensi: {e}")
 
     def save_settings(self):
         """Menyimpan pengaturan server ke file JSON."""
@@ -526,6 +547,9 @@ class FLServerManager:
                     self.update_metrics({})
                     self.logger.info(f"Berhasil memulihkan {len(history)} ronde ke dashboard FL.")
                     self.logger.info(f"Ditemukan {len(unique_ids)} client aktif dari riwayat: {list(unique_ids)}")
+                
+                # Muat log inferensi dari file
+                self.load_inference_logs()
                 
                 db.close()
                 return # SUCCESS
@@ -738,7 +762,8 @@ class FLServerManager:
             "inference_threshold": self.inference_threshold,
             "attendance_count": attendance_count,
             "uptime": int(datetime.now().timestamp() - self.start_time) if self.start_time > 0 else 0,
-            "active_clients": active_clients
+            "active_clients": active_clients,
+            "inference_logs": self.metrics.get("inference_logs", [])
         }
 
     def ensure_model_seeded(self, db):

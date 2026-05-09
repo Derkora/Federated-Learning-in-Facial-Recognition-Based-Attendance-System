@@ -142,6 +142,39 @@ async def health_check():
         "inference_threshold": cl_manager.inference_threshold
     }
 
+# Endpoint Baru: Menerima Log Inferensi Real-time dari Client (untuk FAR/TAR)
+@app.post("/api/logs/inference")
+async def receive_inference_log(data: dict):
+    """Menerima data hasil identifikasi wajah dari terminal untuk pemantauan terpusat."""
+    client_id = data.get("client_id", "unknown")
+    user_id = data.get("user_id", "Unknown")
+    confidence = data.get("confidence", 0.0)
+    latency = data.get("latency_ms", 0)
+    status = data.get("status", "UNKNOWN")
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    
+    # Simpan ke memori manager
+    log_entry = {
+        "timestamp": timestamp,
+        "client_id": client_id,
+        "user_id": user_id,
+        "confidence": f"{confidence:.4f}",
+        "latency": f"{latency}ms",
+        "status": status
+    }
+    
+    if "inference_logs" not in cl_manager.metrics:
+        cl_manager.metrics["inference_logs"] = []
+        
+    cl_manager.metrics["inference_logs"].insert(0, log_entry)
+    # Simpan hingga 10.000 baris
+    cl_manager.metrics["inference_logs"] = cl_manager.metrics["inference_logs"][:10000]
+    
+    # Simpan ke disk agar persisten
+    cl_manager.save_inference_logs()
+    
+    return {"status": "logged"}
+
 # Pendaftaran Terminal (Client) Baru
 @app.post("/register-client", response_model=schemas.ClientResponse)
 async def register_client(client_data: schemas.ClientBase, request: Request, dbs: Session = Depends(db.get_db)):
@@ -365,7 +398,10 @@ async def submit_attendance(recap: schemas.AttendanceRecapBase, dbs: Session = D
     label = str(recap.user_id)
     parts = label.split("_", 1)
     nrp = label.split("_", 1)[0].strip()
-    cl_manager.logger.info(f"Sync Attendance | Client: {recap.edge_id} | NRP: {nrp} | Sim: {recap.confidence:.4f}")
+    # Jangan tampilkan di konsol utama agar tidak kotor
+    # cl_manager.logger.info(f"Sync Attendance | Client: {recap.edge_id} | NRP: {nrp} | Sim: {recap.confidence:.4f}")
+    
+
     student = dbs.query(models.UserGlobal).filter(models.UserGlobal.nrp == nrp).first()
     if not student:
         name = parts[1].strip() if len(parts) > 1 else "Unknown"
