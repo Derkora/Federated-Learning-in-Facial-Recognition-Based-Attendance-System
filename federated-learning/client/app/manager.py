@@ -809,7 +809,7 @@ class FLClientManager:
 
         db = SessionLocal()
         try:
-            res = self._safe_request("GET", f"{self.server_api_url}/api/users/global")
+            res = self._safe_request("GET", f"{self.server_api_url}/api/training/identities")
             if res and res.status_code == 200:
                 global_users = res.json()
                 for u in global_users:
