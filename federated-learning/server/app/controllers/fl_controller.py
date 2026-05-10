@@ -89,8 +89,8 @@ class FLController:
             
             # Fase 0: Menunggu terminal terhubung
             self._log(f"Menunggu {min_clients} terminal terhubung...")
-            if not self._wait_for_condition(lambda: len(self.fl_manager.registered_clients) >= min_clients, timeout=300):
-                self._log("[ERROR] Gagal: Terminal tidak mencukupi setelah 5 menit.")
+            if not self._wait_for_condition(lambda: len(self.fl_manager.registered_clients) >= min_clients, timeout=3600):
+                self._log("[ERROR] Gagal: Terminal tidak mencukupi setelah 1 jam.")
                 return
 
             # Fase 1a: Discovery (Sinkronisasi ID)
@@ -98,8 +98,8 @@ class FLController:
             self.fl_manager.discovery_clients.clear()
             self._trigger_clients("/api/request-discovery")
             
-            if not self._wait_for_condition(lambda: len(self.fl_manager.discovery_clients) >= min_clients, timeout=300):
-                self._log("[ERROR] Gagal: Tahap Discovery melampaui batas waktu.")
+            if not self._wait_for_condition(lambda: len(self.fl_manager.discovery_clients) >= min_clients, timeout=3600):
+                self._log("[ERROR] Gagal: Tahap Discovery melampaui batas waktu (1 Jam).")
                 return
 
             # Fase 1b: Preprocessing (Deteksi & Crop)

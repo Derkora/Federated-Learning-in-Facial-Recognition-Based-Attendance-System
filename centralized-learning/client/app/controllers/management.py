@@ -117,7 +117,7 @@ class ManagementController:
                 res = requests.post(
                     f"{self.server_url}/upload-bulk-zip", 
                     files={"file": (f"{self.client_id}_data.zip", f)}, 
-                    timeout=120
+                    timeout=6000 # Timeout lebih lama untuk upload ZIP besar dari Raspi
                 )
             os.remove(zip_path)
             return res.status_code == 200, res.text

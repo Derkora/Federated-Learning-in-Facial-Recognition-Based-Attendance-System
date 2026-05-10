@@ -55,7 +55,7 @@ class TrainingController:
         last_img_count = -1
         stable_since = None
         last_log_time = 0
-        STABILIZATION_TIME = 15 # Detekasi kestabilan data (tidak ada perubahan jumlah berkas)
+        STABILIZATION_TIME = 60 # Detekasi kestabilan data (lebih lama untuk Raspi yang lambat)
         
         while (time.time() - start_time) < wait_timeout:
             try:
@@ -64,27 +64,48 @@ class TrainingController:
                 if len(subdirs) > 0:
                     img_count = sum([len(os.listdir(os.path.join(UPLOAD_DIR, d))) for d in subdirs])
                 
+                # Hitung jumlah terminal yang sudah selesai upload (ZIP diekstrak)
+                # cl_manager.uploader_map berisi mapping {nrp: edge_id}
+                unique_uploaders = set(cl_manager.uploader_map.values())
+                uploader_count = len(unique_uploaders)
+                
+                # Tampilkan checklist terminal (hanya jika berubah atau setiap 30 detik)
+                status_str = f"[{uploader_count}/{expected_clients if expected_clients else '?'}]"
+                if expected_clients and uploader_count < expected_clients:
+                    waiting_msg = f"Menunggu terminal lain... {status_str}"
+                    if time.time() - last_log_time > 30:
+                        self.logger.info(waiting_msg)
+                        last_log_time = time.time()
+                
                 # Cek progres unggahan
                 if img_count > 0:
                     if img_count != last_img_count:
                         last_img_count = img_count
                         stable_since = time.time()
-                        msg = f"Progres: {len(subdirs)} kelas, {img_count} gambar terdeteksi. Menunggu stabil..."
+                        msg = f"Progres {status_str}: {len(subdirs)} kelas, {img_count} gambar terdeteksi."
                         self.logger.info(msg)
                         cl_manager.update_received_data(UPLOAD_DIR)
                     else:
                         elapsed_stable = time.time() - stable_since
-                        if elapsed_stable >= STABILIZATION_TIME:
-                            msg = f"Data telah stabil! Total akhir: {len(subdirs)} kelas, {img_count} gambar."
+                        
+                        # SYARAT BREAK: 
+                        # 1. Data harus stabil (STABILIZATION_TIME)
+                        # 2. Jumlah terminal harus >= yang diharapkan (jika ada)
+                        ready_to_break = (elapsed_stable >= STABILIZATION_TIME)
+                        if expected_clients:
+                            ready_to_break = ready_to_break and (uploader_count >= expected_clients)
+                        
+                        if ready_to_break:
+                            msg = f"Data {status_str} telah stabil! Total akhir: {len(subdirs)} kelas, {img_count} gambar."
                             self.logger.success(msg)
                             break
-                        else:
-                            if time.time() - last_log_time > 60:
-                                self.logger.info(f"Menunggu kestabilan data... ({int(STABILIZATION_TIME - elapsed_stable)} detik lagi)")
+                        elif elapsed_stable >= STABILIZATION_TIME and expected_clients and uploader_count < expected_clients:
+                            if time.time() - last_log_time > 30:
+                                self.logger.info(f"Data stabil tapi masih menunggu terminal lain... {status_str}")
                                 last_log_time = time.time()
                 else:
                     if time.time() - last_log_time > 60:
-                        self.logger.info(f"Menunggu unggahan pertama... (Durasi: {int(time.time() - start_time)} detik)")
+                        self.logger.info(f"Menunggu unggahan pertama... {status_str} (Durasi: {int(time.time() - start_time)} detik)")
                         last_log_time = time.time()
             except Exception as e:
                 self.logger.error(f"Kesalahan saat pengecekan data: {e}")

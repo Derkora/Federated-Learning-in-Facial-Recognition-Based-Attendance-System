@@ -239,7 +239,7 @@ def workflow_import(dbs: Session = Depends(db.get_db)):
     cl_manager.logger.info("Menunggu client mengirimkan dataset...")
     try:
         online_count = dbs.query(models.Client).filter(models.Client.status == "online").count()
-        res = training_controller.fetch_data(wait_timeout=600, expected_clients=online_count)
+        res = training_controller.fetch_data(wait_timeout=3600, expected_clients=online_count)
         
         if res['status'] == 'success':
             cl_manager.update_metrics({"upload_volume_mb": res['upload_volume_mb']})
