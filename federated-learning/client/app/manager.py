@@ -154,7 +154,7 @@ class FLClientManager:
         self.logger.info(message)
 
     def _log_to_file(self, message):
-        """Wrapper log untuk kompatibilitas kode lama."""
+        """Wrapper log untuk kompatibilitas kode lama dengan Timezone WIB."""
         self.logger.info(message)
 
     def _safe_request(self, method, url, max_retries=3, **kwargs):
@@ -190,13 +190,6 @@ class FLClientManager:
             self._log(f"[ERROR] Gagal registrasi ke server: {str(e)}")
         return False
 
-    def _log_to_file(self, message):
-        """Mencatat pesan ke file log persisten di /app/data."""
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        try:
-            with open(self.log_path, "a") as f:
-                f.write(f"[{timestamp}] {message}\n")
-        except: pass
 
     def _get_raw_id(self):
         """Ambil ID tanpa logging (untuk inisialisasi logger)."""
@@ -605,7 +598,7 @@ class FLClientManager:
     def report_status(self, status=None):
         if status:
             self.fl_status = status
-            self._log_to_file(f"STATUS UPDATE: {status}")
+            self.logger.info(f"STATUS UPDATE: {status}")
         now = time.time()
         
         try:
@@ -664,19 +657,22 @@ class FLClientManager:
 
 
     def handle_phase_transition(self, phase):
-        phase = phase.lower()
+        phase = phase.lower().strip().replace(" ", "_")
+        if phase == self.last_phase:
+            return
+            
         self.logger.info(f"Phase Transition: {self.last_phase} -> {phase}")
         
-        if phase == "discovery":
+        if phase in ["discovery", "data_preparation"]:
             self.is_training_phase = True
             threading.Thread(target=self.run_discovery_phase).start()
         elif phase == "syncing":
             self.is_training_phase = True
             threading.Thread(target=self.run_sync_phase).start()
-        elif phase in ["training", "training phase"]:
+        elif phase in ["training", "training_phase"]:
             self.is_training_phase = True
             threading.Thread(target=self.start_fl, daemon=True).start()
-        elif phase in ["registry generation", "registry_generation"]:
+        elif phase in ["registry_generation"]:
              self.is_training_phase = True
              threading.Thread(target=self.run_registry_phase).start()
         if phase == "idle" or phase == "completed":
@@ -1047,6 +1043,13 @@ class FLClientManager:
             if os.path.exists(target_folder): shutil.rmtree(target_folder)
             os.rename(tmp_target, target_folder)
             self.logger.success(f"Preprocessing {nrp} selesai.")
+            
+            # Explicit Cleanup untuk mencegah OOM di Edge (Jetson/Pi)
+            gc.collect()
+            time.sleep(0.1)
+        
+        # Free MTCNN RAM after finishing all preprocessing to prepare for Training Phase
+        image_processor.unload_detector()
         
         # PENTING: Unload MTCNN setelah selesai untuk menghemat RAM (~150MB)
         image_processor.unload_detector()

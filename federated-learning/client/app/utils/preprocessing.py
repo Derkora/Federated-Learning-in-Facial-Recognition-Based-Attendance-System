@@ -160,53 +160,80 @@ class ImageProcessor:
             return 0
 
     def select_best_faces(self, folder_path, n=50):
-        """Memilih N gambar tertajam dari folder dengan dukungan Cache."""
+        """Memilih N gambar tertajam dari folder dengan dukungan Cache Incremental."""
         if not os.path.exists(folder_path):
             return []
             
-        # --- FITUR CACHE: Cek apakah sudah pernah dihitung sebelumnya ---
-        cache_path = os.path.join(folder_path, ".selection_cache.json")
+        final_cache_path = os.path.join(folder_path, ".selection_cache.json")
+        scores_cache_path = os.path.join(folder_path, ".laplacian_scores.json")
         import json
-        if os.path.exists(cache_path):
+        
+        # 1. Cek Hasil Akhir (Jika sudah selesai sempurna)
+        if os.path.exists(final_cache_path):
             try:
-                with open(cache_path, "r") as f:
+                with open(final_cache_path, "r") as f:
                     cache_data = json.load(f)
                     if cache_data.get("n") == n:
-                        # self.logger.info(f"Menggunakan cache seleksi untuk {os.path.basename(folder_path)}")
                         return cache_data.get("filenames", [])
             except: pass
 
-        all_imgs = [
-            os.path.join(folder_path, f) 
-            for f in os.listdir(folder_path) 
+        all_imgs = sorted([
+            f for f in os.listdir(folder_path) 
             if f.lower().endswith(('.jpg', '.jpeg', '.png'))
-        ]
+        ])
         
-        if not all_imgs:
-            return []
+        if not all_imgs: return []
 
-        # Urutkan berdasarkan skor Laplacian tertinggi
-        scored = []
-        
-        for i, img_path in enumerate(all_imgs):
+        # 2. Muat Skor Parsial (Checkpoint)
+        scored_map = {}
+        if os.path.exists(scores_cache_path):
+            try:
+                with open(scores_cache_path, "r") as f:
+                    scored_map = json.load(f)
+            except: pass
+
+        # 3. Hitung Skor (Hanya untuk yang belum ada di scored_map)
+        needs_save = False
+        for i, img_name in enumerate(all_imgs):
+            if img_name in scored_map:
+                continue
+                
+            img_path = os.path.join(folder_path, img_name)
             score = self.get_blur_score(img_path)
-            scored.append((img_path, score))
+            scored_map[img_name] = score
+            needs_save = True
             
-            # Optimasi RAM untuk Edge (Raspi): Bersihkan setiap 10 foto
+            # Simpan skor setiap 50 gambar untuk menghemat I/O tapi tetap aman
+            if i % 50 == 0 and needs_save:
+                try:
+                    with open(scores_cache_path, "w") as f:
+                        json.dump(scored_map, f)
+                except: pass
+            
+            # RAM Cleanup
             if i % 10 == 0:
                 gc.collect()
-                time.sleep(0.01)
-            
-        scored.sort(key=lambda x: x[1], reverse=True)
+
+        # Simpan skor akhir jika ada perubahan
+        if needs_save:
+            try:
+                with open(scores_cache_path, "w") as f:
+                    json.dump(scored_map, f)
+            except: pass
+
+        # 4. Urutkan dan ambil N terbaik
+        scored_list = [(name, score) for name, score in scored_map.items()]
+        scored_list.sort(key=lambda x: x[1], reverse=True)
         
-        selected = [os.path.basename(s[0]) for s in scored[:n]]
+        selected = [s[0] for s in scored_list[:n]]
         
+        # Simpan cache hasil akhir
         try:
-            with open(cache_path, "w") as f:
+            with open(final_cache_path, "w") as f:
                 json.dump({"n": n, "filenames": selected}, f)
         except: pass
 
-        gc.collect() # Final cleanup
+        gc.collect()
         return selected
 
 image_processor = ImageProcessor()

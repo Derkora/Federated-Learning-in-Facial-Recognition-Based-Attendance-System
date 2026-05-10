@@ -61,7 +61,7 @@ class FLController:
         
         try:
             db = SessionLocal()
-            self.fl_manager.start_phase("Data Preparation")
+            self.fl_manager.start_phase("discovery")
             self.fl_manager.ensure_model_seeded(db)
             db.close()
 
@@ -103,6 +103,7 @@ class FLController:
                 return
 
             # Fase 1b: Preprocessing (Deteksi & Crop)
+            self.fl_manager.start_phase("syncing")
             self._log("Fase 1b: Pemrosesan gambar di sisi terminal...")
             self.fl_manager.ready_clients.clear()
             self._trigger_clients("/api/request-preprocess")
@@ -114,6 +115,7 @@ class FLController:
                 return
             
             # Fase 2: Pelatihan Federated (Flower)
+            self.fl_manager.start_phase("training")
             self._log(f"Memulai pelatihan Flower dengan {len(self.fl_manager.ready_clients)} terminal...")
             self.fl_manager.is_running = True  
             self.fl_manager.start_training(session_id, rounds=rounds, min_clients=min_clients)
