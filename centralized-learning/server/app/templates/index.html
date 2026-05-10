@@ -28,6 +28,31 @@
     </div>
 </div>
 
+<!-- TRAINING PERFORMANCE SECTION (Real-time) -->
+<div class="glass" style="padding: 2rem; margin-top: 2rem;">
+    <h3 style="color: var(--accent); margin-top: 0; margin-bottom: 1.5rem; font-size: 1.2rem;">
+        Performa Pelatihan (Real-time)
+    </h3>
+    <div style="overflow-x: auto;">
+        <table id="training-performance-table" class="result-table" style="width: 100%; border-collapse: collapse;">
+            <thead>
+                <tr style="background: rgba(255,255,255,0.05);">
+                    <th style="padding: 10px; border: 1px solid rgba(255,255,255,0.1); color: var(--accent);">Epoch</th>
+                    <th style="padding: 10px; border: 1px solid rgba(255,255,255,0.1); color: var(--accent);">Loss</th>
+                    <th style="padding: 10px; border: 1px solid rgba(255,255,255,0.1); color: var(--accent);">Accuracy (%)</th>
+                    <th style="padding: 10px; border: 1px solid rgba(255,255,255,0.1); color: var(--accent);">Val Loss</th>
+                    <th style="padding: 10px; border: 1px solid rgba(255,255,255,0.1); color: var(--accent);">Val Accuracy (%)</th>
+                </tr>
+            </thead>
+            <tbody id="training-performance-body">
+                <tr>
+                    <td colspan="5" style="text-align: center; padding: 20px; color: var(--text-muted);">Menunggu data pelatihan...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
 <!-- CLIENT MONITORING SECTION -->
 <div class="glass" style="padding: 2rem; margin-top: 2rem;">
     <h3
@@ -57,6 +82,12 @@
         padding: 5px 10px;
         border-bottom: 1px solid rgba(255, 255, 255, 0.05);
         font-size: 0.9rem;
+    }
+
+    .result-table th, .result-table td {
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        padding: 12px 15px;
+        text-align: left;
     }
 </style>
 
@@ -149,30 +180,21 @@
                 terminalContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 0.9rem;">Tidak ada terminal yang terdaftar.</p>';
             }
 
-            // 5. Update Inference Logs (Live Table)
-            const inferenceBody = document.getElementById('inference-logs-body');
-            if (status.metrics.inference_logs && status.metrics.inference_logs.length > 0) {
-                // Simpan global untuk modal
-                window.allInferenceLogs = status.metrics.inference_logs;
-                
-                // Tampilkan hanya 50 terakhir di tabel utama
-                const displayLogs = status.metrics.inference_logs.slice(0, 50);
-                inferenceBody.innerHTML = displayLogs.map(log => `
-                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); transition: background 0.3s;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">
-                        <td style="padding: 0.5rem; color: var(--text-muted);">${log.timestamp}</td>
-                        <td style="padding: 0.5rem; font-weight: 500;">${log.client_id}</td>
-                        <td style="padding: 0.5rem;">
-                            <span class="badge ${log.user_id === 'Unknown' ? 'badge-danger' : 'badge-success'}" style="font-size: 0.7rem;">
-                                ${log.user_id}
-                            </span>
-                        </td>
-                        <td style="padding: 0.5rem; font-family: 'Fira Code', monospace; color: var(--accent);">${log.confidence}</td>
-                        <td style="padding: 0.5rem; color: var(--text-muted);">${log.latency}</td>
+            // 5. Update Training Performance Table (Real-time)
+            const performanceBody = document.getElementById('training-performance-body');
+            if (status.metrics.epoch_history && status.metrics.epoch_history.length > 0) {
+                performanceBody.innerHTML = status.metrics.epoch_history.map(h => `
+                    <tr>
+                        <td style="padding: 10px; border: 1px solid rgba(255,255,255,0.1);">${h.epoch}</td>
+                        <td style="padding: 10px; border: 1px solid rgba(255,255,255,0.1);">${parseFloat(h.loss).toFixed(4)}</td>
+                        <td style="padding: 10px; border: 1px solid rgba(255,255,255,0.1); font-weight: 600; color: var(--accent);">${parseFloat(h.accuracy).toFixed(2)}%</td>
+                        <td style="padding: 10px; border: 1px solid rgba(255,255,255,0.1);">${h.val_loss ? parseFloat(h.val_loss).toFixed(4) : '-'}</td>
+                        <td style="padding: 10px; border: 1px solid rgba(255,255,255,0.1);">${h.val_accuracy ? parseFloat(h.val_accuracy).toFixed(2) + '%' : '-'}</td>
                     </tr>
                 `).join('');
             }
 
-            // 5. Polling Management
+            // 6. Polling Management
             if (status.is_running && !pollInterval) startPolling();
             if (!status.is_running && pollInterval) stopPolling();
 
@@ -207,10 +229,21 @@
         modal.style.display = 'flex';
         
         if (!window.allInferenceLogs) {
-            modalBody.innerText = "Belum ada data inferensi terkumpul.";
+            // Cek status terbaru dulu
+            updateUIState().then(() => {
+                if (!window.allInferenceLogs) {
+                    modalBody.innerText = "Belum ada data inferensi terkumpul.";
+                } else {
+                    renderInferenceModal(clientId);
+                }
+            });
             return;
         }
+        renderInferenceModal(clientId);
+    }
 
+    function renderInferenceModal(clientId) {
+        const modalBody = document.getElementById('log-modal-body');
         const filtered = window.allInferenceLogs.filter(log => log.client_id === clientId);
         
         if (filtered.length === 0) {

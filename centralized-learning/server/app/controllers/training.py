@@ -386,14 +386,23 @@ class TrainingController:
                 
                 epoch_acc = round(100 * correct / total, 2)
                 avg_loss = round(total_loss / len(train_loader), 4)
-                epoch_history.append({
+                
+                current_epoch_data = {
                     "epoch": epoch + 1, 
                     "loss": avg_loss, 
                     "accuracy": epoch_acc,
                     "val_loss": val_avg_loss,
                     "val_accuracy": val_acc
-                })
+                }
+                epoch_history.append(current_epoch_data)
                 
+                # UPDATE REAL-TIME KE DASHBOARD
+                cl_manager.update_metrics({
+                    "accuracy": val_acc,
+                    "loss": val_avg_loss,
+                    "epoch_history": [current_epoch_data]
+                })
+
                 msg = f"Epoch {epoch+1}/{epochs} | Acc: {epoch_acc/100:.4f} | Loss: {avg_loss:.4f} | Val Acc: {val_acc/100:.4f} | Val Loss: {val_avg_loss:.4f}"
                 self.logger.success(msg)
 

@@ -65,14 +65,10 @@
             </thead>
             <tbody>
                 <tr>
-                    <td rowspan="2"><b>Transmisi Data</b></td>
-                    <td>Total Bandwidth (Gambar + Model)</td>
+                    <td><b>Transmisi Data</b></td>
+                    <td>Total Transmisi Data (Upload + Download)</td>
                     <td>{{ "%.2f"|format(status.metrics.upload_volume_mb + status.metrics.download_volume_mb) }} MB</td>
-                    <td rowspan="2">Rp {{ "%.2f"|format(status.metrics.transmission_cost_idr|float) }}</td>
-                </tr>
-                <tr>
-                    <td>Estimasi Total Bandwidth (Transmisi)</td>
-                    <td>{{ "%.2f"|format(status.metrics.upload_volume_mb + status.metrics.download_volume_mb) }} MB</td>
+                    <td>Rp {{ "%.2f"|format(status.metrics.transmission_cost_idr|float) }}</td>
                 </tr>
                 <tr>
                     <td rowspan="2"><b>Konsumsi Daya</b></td>

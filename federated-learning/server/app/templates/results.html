@@ -124,14 +124,10 @@
             </thead>
             <tbody>
                 <tr>
-                    <td rowspan="2"><b>Transmisi Data</b></td>
-                    <td>Total Bandwidth (Model + Registry)</td>
+                    <td><b>Transmisi Data</b></td>
+                    <td>Total Transmisi Data (Model + Registry Assets)</td>
                     <td>{{ (status.metrics.backbone_sync_mb + status.metrics.registry_sync_mb) | round(2) }} MB</td>
-                    <td rowspan="2">Rp {{ "%.2f"|format(status.metrics.transmission_cost_idr|float) }}</td>
-                </tr>
-                <tr>
-                    <td>Estimasi Total Bandwidth (Transmisi)</td>
-                    <td>{{ (status.metrics.backbone_sync_mb + status.metrics.registry_sync_mb) | round(2) }} MB</td>
+                    <td>Rp {{ "%.2f"|format(status.metrics.transmission_cost_idr|float) }}</td>
                 </tr>
                 <tr>
                     <td rowspan="2"><b>Konsumsi Daya</b></td>
