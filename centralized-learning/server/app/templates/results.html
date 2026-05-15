@@ -30,10 +30,10 @@
                 {% for h in status.metrics.epoch_history %}
                 <tr>
                     <td>{{ h.epoch }}</td>
-                    <td>{{ "%.4f"|format(h.loss|float) }}</td>
-                    <td>{{ "%.2f"|format(h.accuracy|float) }}%</td>
-                    <td>{{ "%.4f"|format(h.val_loss|float) if h.val_loss is defined else "-" }}</td>
-                    <td>{{ "%.2f"|format(h.val_accuracy|float) if h.val_accuracy is defined else "-" }}%</td>
+                    <td>{{ "%.4f"|format(h.loss|float)|replace('.', ',') }}</td>
+                    <td>{{ "%.2f"|format(h.accuracy|float)|replace('.', ',') }}%</td>
+                    <td>{{ "%.4f"|format(h.val_loss|float)|replace('.', ',') if h.val_loss is not none else "-" }}</td>
+                    <td>{{ "%.2f"|format(h.val_accuracy|float)|replace('.', ',') if h.val_accuracy is not none else "-" }}%</td>
                 </tr>
 
                 {% endfor %}
@@ -66,19 +66,19 @@
             <tbody>
                 <tr>
                     <td><b>Transmisi Data</b></td>
-                    <td>Total Transmisi Data (Upload + Download)</td>
-                    <td>{{ "%.2f"|format(status.metrics.upload_volume_mb + status.metrics.download_volume_mb) }} MB</td>
-                    <td>Rp {{ "%.2f"|format(status.metrics.transmission_cost_idr|float) }}</td>
+                    <td>Estimasi Total Bandwidth (MB)</td>
+                    <td>{{ "%.2f"|format(status.metrics.upload_volume_mb + status.metrics.download_volume_mb)|replace('.', ',') }}</td>
+                    <td>Rp {{ "%.2f"|format(status.metrics.transmission_cost_idr|float)|replace('.', ',') }}</td>
                 </tr>
                 <tr>
                     <td rowspan="2"><b>Konsumsi Daya</b></td>
-                    <td>Energi Terpakai (Total Sistem)</td>
-                    <td>{{ "%.6f"|format(status.metrics.compute_energy_kwh|float) }} kWh</td>
-                    <td rowspan="2">Rp {{ "%.2f"|format(status.metrics.compute_cost_idr|float) }}</td>
+                    <td>Energi Terpakai (kWh)</td>
+                    <td>{{ "%.6f"|format(status.metrics.compute_energy_kwh|float)|replace('.', ',') }}</td>
+                    <td rowspan="2">Rp {{ "%.2f"|format(status.metrics.compute_cost_idr|float)|replace('.', ',') }}</td>
                 </tr>
                 <tr>
-                    <td>Durasi Pelatihan</td>
-                    <td>{{ status.metrics.training_duration_s }} s</td>
+                    <td>Durasi Pelatihan (detik)</td>
+                    <td>{{ (status.metrics.training_duration_s|string)|replace('.', ',') }}</td>
                 </tr>
             </tbody>
         </table>

@@ -86,7 +86,10 @@ class AttendanceController:
         mean_embedding = mean_embedding_tensor.cpu().numpy()[0]
         
         # 3. Pencocokan identitas tunggal
-        user_id, confidence = identify_user_globally(mean_embedding, local_refs, threshold=self.fl_manager.inference_threshold)
+        best_match, confidence = identify_user_globally(mean_embedding, local_refs, threshold=self.fl_manager.inference_threshold)
+        
+        # UI akan melihat 'Unknown' jika di bawah threshold, tapi log tetap mencatat NRP terdekat
+        user_id = best_match if confidence >= self.fl_manager.inference_threshold else "Unknown"
         
         # Pencatatan Absensi
         if user_id != "Unknown":
@@ -114,13 +117,14 @@ class AttendanceController:
 
         else:
             if confidence > 0.1: 
-                self.fl_manager.logger.info(f"Model v{current_v} | Kecocokan: Unknown | Sim: {confidence:.4f} | Thres: {self.fl_manager.inference_threshold}")
+                self.fl_manager.logger.info(f"Model v{current_v} | Terbaik: {best_match} | Sim: {confidence:.4f} | Thres: {self.fl_manager.inference_threshold}")
             
         latency = int((time.perf_counter() - start_time) * 1000)
         
         # --- NEW: Log Inferensi ke Server untuk Riset (FAR/TAR) ---
         import threading
-        threading.Thread(target=self._log_inference_to_server, args=(user_id, float(confidence), latency)).start()
+        # KIRIM best_match ke server log agar dashboard bisa melihat NRP terdekat meskipun UI bilang Unknown
+        threading.Thread(target=self._log_inference_to_server, args=(best_match, float(confidence), latency)).start()
 
         return {
             "matched": user_id if user_id != "Unknown" else "Unknown", 
@@ -177,17 +181,21 @@ class AttendanceController:
             mean_embedding_tensor = torch.nn.functional.normalize(mean_embedding_tensor, p=2, dim=1)
             mean_embedding = mean_embedding_tensor.cpu().numpy()[0]
             
-            matched, confidence = identify_user_globally(
+            best_match, confidence = identify_user_globally(
                 mean_embedding, 
                 local_refs, 
                 threshold=self.fl_manager.inference_threshold
             )
             
+            # Tentukan status akhir untuk UI
+            matched = best_match if confidence >= self.fl_manager.inference_threshold else "Unknown"
+            
             latency = int((time.time() - now) * 1000)
             
             # Log ke server secara background (Gunakan thread/requests simple)
             import threading
-            threading.Thread(target=self._log_inference_to_server, args=(matched, float(confidence), latency)).start()
+            # KIRIM best_match ke server log agar dashboard bisa melihat NRP terdekat meskipun UI bilang Unknown
+            threading.Thread(target=self._log_inference_to_server, args=(best_match, float(confidence), latency)).start()
 
             return matched, float(confidence)
         except Exception as e:

@@ -30,10 +30,10 @@
                 {% for r in status.metrics.round_history %}
                 <tr>
                     <td>{{ r.round }}</td>
-                    <td>{{ "%.4f"|format(r.server.loss) if r.server.loss is defined else "-" }}</td>
-                    <td>{{ "%.2f"|format(r.server.accuracy * 100) if r.server.accuracy is defined else "-" }}%</td>
-                    <td>{{ "%.4f"|format(r.server.val_loss) if r.server.val_loss is defined else "-" }}</td>
-                    <td>{{ "%.2f"|format(r.server.val_accuracy * 100) if r.server.val_accuracy is defined else "-" }}%</td>
+                    <td>{{ "%.4f"|format(r.server.loss)|replace('.', ',') if r.server.loss is defined and r.server.loss is not none else "-" }}</td>
+                    <td>{{ "%.2f"|format(r.server.accuracy * 100)|replace('.', ',') if r.server.accuracy is defined and r.server.accuracy is not none else "-" }}%</td>
+                    <td>{{ "%.4f"|format(r.server.val_loss)|replace('.', ',') if r.server.val_loss is defined and r.server.val_loss is not none else "-" }}</td>
+                    <td>{{ "%.2f"|format(r.server.val_accuracy * 100)|replace('.', ',') if r.server.val_accuracy is defined and r.server.val_accuracy is not none else "-" }}%</td>
                 </tr>
 
 
@@ -48,7 +48,7 @@
     </div>
 </div>
 
-<!-- Dynamic Client Performance Tables -->
+<!-- Table 2: Dynamic Client Performance Tables -->
 {% for cid in status.metrics.unique_client_ids %}
 <div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
@@ -65,6 +65,7 @@
                         <th>Acc Lokal (%)</th>
                         <th>Val Loss Lokal</th>
                         <th>Val Acc Lokal (%)</th>
+                        <th>Durasi (detik)</th>
                         <th>Riwayat Epoch (Loss / Acc)</th>
                     </tr>
                 </thead>
@@ -75,10 +76,11 @@
                     <tr>
                         <td>{{ r.round }}</td>
                         <td>{{ c.num_samples }}</td>
-                        <td>{{ "%.4f"|format(c.loss) }}</td>
-                        <td>{{ "%.2f"|format(c.accuracy * 100) }}%</td>
-                        <td>{{ "%.4f"|format(c.val_loss) if c.val_loss is defined else "-" }}</td>
-                        <td>{{ "%.2f"|format(c.val_accuracy * 100) if c.val_accuracy is defined else "-" }}%</td>
+                        <td>{{ "%.4f"|format(c.loss)|replace('.', ',') }}</td>
+                        <td>{{ "%.2f"|format(c.accuracy * 100)|replace('.', ',') }}%</td>
+                        <td>{{ "%.4f"|format(c.val_loss)|replace('.', ',') if c.val_loss is defined and c.val_loss is not none else "-" }}</td>
+                        <td>{{ "%.2f"|format(c.val_accuracy * 100)|replace('.', ',') if c.val_accuracy is defined and c.val_accuracy is not none else "-" }}%</td>
+                        <td style="text-align: center; color: #38bdf8;">{{ "%.2f"|format(c.duration_s)|replace('.', ',') if c.duration_s is defined and c.duration_s is not none else "-" }}</td>
 
 
                         <td style="font-size: 0.85rem; font-family: 'JetBrains Mono';">
@@ -87,7 +89,7 @@
                                 {% for eh in c.epoch_history %}
                                 {# Ensure eh is a dictionary before accessing properties #}
                                 {% if eh is mapping %}
-                                    E{{ eh.epoch }}: {{ "%.3f"|format(eh.loss) if eh.loss is defined else "-" }} / {{ "%.1f"|format(eh.accuracy * 100) if eh.accuracy is defined else "-" }}%<br>
+                                    E{{ eh.epoch }}: {{ "%.3f"|format(eh.loss)|replace('.', ',') if eh.loss is defined else "-" }} / {{ "%.1f"|format(eh.accuracy * 100)|replace('.', ',') if eh.accuracy is defined else "-" }}%<br>
                                 {% else %}
                                     {{ eh }}<br>
                                 {% endif %}
@@ -125,19 +127,19 @@
             <tbody>
                 <tr>
                     <td><b>Transmisi Data</b></td>
-                    <td>Total Transmisi Data (Model + Registry Assets)</td>
-                    <td>{{ (status.metrics.backbone_sync_mb + status.metrics.registry_sync_mb) | round(2) }} MB</td>
-                    <td>Rp {{ "%.2f"|format(status.metrics.transmission_cost_idr|float) }}</td>
+                    <td>Estimasi Total Bandwidth (MB)</td>
+                    <td>{{ ((status.metrics.backbone_sync_mb + status.metrics.registry_sync_mb) | round(2))|string|replace('.', ',') }}</td>
+                    <td>Rp {{ "%.2f"|format(status.metrics.transmission_cost_idr|float)|replace('.', ',') }}</td>
                 </tr>
                 <tr>
                     <td rowspan="2"><b>Konsumsi Daya</b></td>
-                    <td>Energi Terpakai (Total Sistem)</td>
-                    <td>{{ "%.6f"|format(status.metrics.compute_energy_kwh|float) }} kWh</td>
-                    <td rowspan="2">Rp {{ "%.2f"|format(status.metrics.compute_cost_idr|float) }}</td>
+                    <td>Energi Terpakai (kWh)</td>
+                    <td>{{ "%.6f"|format(status.metrics.compute_energy_kwh|float)|replace('.', ',') }}</td>
+                    <td rowspan="2">Rp {{ "%.2f"|format(status.metrics.compute_cost_idr|float)|replace('.', ',') }}</td>
                 </tr>
                 <tr>
-                    <td>Total Waktu Pelatihan</td>
-                    <td>{{ status.metrics.total_round_time_s }} s</td>
+                    <td>Durasi Pelatihan (detik)</td>
+                    <td>{{ (status.metrics.total_round_time_s|string)|replace('.', ',') }}</td>
                 </tr>
             </tbody>
         </table>

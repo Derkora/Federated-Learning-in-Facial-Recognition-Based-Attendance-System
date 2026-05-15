@@ -24,10 +24,12 @@ Kedua sistem menggunakan parameter yang identik untuk memastikan perbandingan ya
 | **Threshold** | **0.7** | **0.7** |
 | **Metode Inferensi** | Flip Trick + Temporal Voting | Flip Trick + Temporal Voting |
 | **Res. Management** | **Downscale 640px + Vectorization** | **Downscale 640px + Vectorization** |
-| **Batch Size** | 8 (Optimized for 1GB RAM) | 4 per Client (Optimized for 1GB RAM) |
-| **Learning Rate** | **0.01 (Cosine Decay)** | **0.01 (Cosine Decay)** |
+| **Batch Size** | 32 (Gradient Stability) | 32 per Client (Gradient Stability) |
+| **Learning Rate** | **0.05 (Cosine Decay)** | **0.05 (Cosine Decay)** |
 | **Augmentasi** | **Premium (Perspective, Blur, Jitter)** | **Premium (Perspective, Blur, Jitter)** |
 | **Basis Validasi** | Citra Asli (Real Images) | Hybrid (Citra Asli + Global Embeddings) |
+| **Ekonomi (Bandwidth)**| **Rp 3,25 / MB** | **Rp 3,25 / MB** |
+| **Ekonomi (Energi)**| **Rp 1.444,70 / kWh** | **Rp 1.444,70 / kWh** |
 
 ## 3. Analisis Perbedaan Operasional
 

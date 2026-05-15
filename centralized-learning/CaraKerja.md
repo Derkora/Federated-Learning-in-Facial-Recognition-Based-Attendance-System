@@ -24,11 +24,11 @@ Proses penyiapan data di sisi terminal sebelum pengiriman ke server pusat:
 ---
 
 ### Tahap 3: Pelatihan Terpusat (Centralized Training)
-1. **Resource-Aware Training**: Batch Size diatur ke **8** untuk menjaga stabilitas memori server/edge dan mencegah osilasi gradien pada dataset kecil.
+1. **Resource-Aware Training**: Batch Size diatur ke **32** untuk menjamin stabilitas gradien dan memaksimalkan efisiensi memori server.
 2. **Partial Freezing**: Server membekukan Stage 1 & 2 (`conv1` hingga `blocks[0-11]`) untuk menjaga fitur umum wajah.
-3. **Transfer Learning**: Server melatih backbone Stage 3 dan ArcMargin head menggunakan SGD (Nesterov) & Cosine Annealing (10 Ronde) dengan Initial LR **0.01**.
-4. **Premium Augmentation**: Menggunakan `RandomPerspective`, `GaussianBlur`, `ColorJitter`, dan `RandomErasing` untuk ketangguhan ekstrem terhadap variasi kamera.
-5. **Optimasi Akhir**: Menggunakan **SWA (Stochastic Weight Averaging)** pada 3 ronde terakhir (8, 9, 10) untuk stabilitas bobot.
+3. **Optimized Training Cycle**: Server melatih backbone Stage 3 dan ArcMargin head menggunakan SGD (Nesterov) & Cosine Annealing (10 Epochs) dengan Initial LR **0.05**.
+4. **Enhanced Preprocessing Feedback**: Setiap folder mahasiswa diproses secara transparan dengan log detail progres dan skor ketajaman (*Sharpness*) secara real-time.
+5. **Final Optimization**: Menggunakan **SWA (Stochastic Weight Averaging)** pada ronde terakhir untuk menghasilkan bobot model yang lebih tergeneralisasi.
 
 ---
 

@@ -54,13 +54,11 @@ def identify_user_globally(query_embedding, local_embeddings_dict, threshold=0.3
         confidence = float(1.0 - (min_dist.item() / 2.0))
         best_match = user_ids[min_idx.item()]
 
-    # 4. Ambang Batas
-    if confidence < threshold:
-        if verbose:
-            logger.info(f"Match '{best_match}' rejected (Score: {confidence:.3f} < threshold {threshold})")
-        return "Unknown", confidence
-        
+    # 4. Hasil (Penerapan ambang batas kini dilakukan oleh pemanggil agar log tetap mencatat NRP terdekat)
     if verbose:
-        logger.success(f"Match '{best_match}' accepted (Score: {confidence:.3f})")
+        if confidence < threshold:
+            logger.info(f"Match '{best_match}' below threshold (Score: {confidence:.3f} < {threshold})")
+        else:
+            logger.success(f"Match '{best_match}' accepted (Score: {confidence:.3f})")
 
     return best_match, confidence

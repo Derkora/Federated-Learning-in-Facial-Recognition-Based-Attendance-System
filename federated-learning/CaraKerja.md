@@ -23,9 +23,9 @@ Langkah krusial untuk kualitas input yang seragam (Identik dengan CL):
 ---
 
 ## Tahap 3: Pelatihan Terfederasi (Federated Learning)
-1. **Low-Batch Local Training**: Client melatih model secara lokal dengan Batch Size **4** guna mencegah OOM pada perangkat Raspberry Pi 3B (1GB RAM) dan menjaga stabilitas gradien.
+1. **Resource-Aware Training**: Client melatih model secara lokal dengan Batch Size **32** guna menjamin stabilitas gradien dan menjaga efisiensi memori.
 2. **Partial Freezing**: Client membekukan Stage 1 & 2 secara lokal untuk efisiensi komputasi dan menjaga fitur umum.
-3. **Local Training (pFedFace)**: Client melatih Stage 3 dan Head menggunakan SGD (Nesterov) dengan Initial LR **0.01** (10 Ronde x 1 Local Epoch).
+3. **Local Training (pFedFace)**: Client melatih Stage 3 dan Head menggunakan SGD (Nesterov) dengan Initial LR **0.05** (10 Ronde x 1 Local Epoch).
 4. **Premium Augmentation**: Menggunakan `RandomPerspective`, `GaussianBlur`, `ColorJitter`, dan `RandomErasing` untuk menangani variasi lingkungan terminal.
 5. **Hybrid Validation Metrics**: Menghitung akurasi berdasarkan data citra lokal (asli) dan **Global Embeddings** dari terminal lain untuk mencegah bias.
 6. **Knowledge Sharing**: Server melakukan FedAvg pada parameter backbone bersama setiap ronde.

@@ -15,10 +15,21 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 # --- APP MODULES ---
 from app.db import models, db, schemas, crud
 models.Base.metadata.create_all(bind=db.engine)
+
+# Auto-fix: Tambahkan kolom baru jika belum ada (Migration Lite)
+try:
+    with db.engine.connect() as conn:
+        conn.execute(text("ALTER TABLE training_rounds ADD COLUMN IF NOT EXISTS val_loss FLOAT;"))
+        conn.execute(text("ALTER TABLE training_rounds ADD COLUMN IF NOT EXISTS val_accuracy FLOAT;"))
+        conn.commit()
+        # cl_manager.logger.info("Database schema updated (val_loss/val_accuracy added).")
+except Exception as e:
+    print(f"Migration check failed: {e}")
 from app.utils.mobilefacenet import MobileFaceNet
 from app.config import (
     MODEL_PATH, REF_PATH, UPLOAD_DIR, TRAINING_PARAMS
@@ -153,7 +164,6 @@ async def receive_inference_log(data: dict):
     status = data.get("status", "UNKNOWN")
     timestamp = datetime.now().strftime("%H:%M:%S")
     
-    # Simpan ke memori manager
     log_entry = {
         "timestamp": timestamp,
         "client_id": client_id,
@@ -167,13 +177,22 @@ async def receive_inference_log(data: dict):
         cl_manager.metrics["inference_logs"] = []
         
     cl_manager.metrics["inference_logs"].insert(0, log_entry)
-    # Simpan hingga 10.000 baris
     cl_manager.metrics["inference_logs"] = cl_manager.metrics["inference_logs"][:10000]
-    
-    # Simpan ke disk agar persisten
     cl_manager.save_inference_logs()
-    
     return {"status": "logged"}
+
+# Endpoint Baru: Menerima data energi dari Client (untuk audit nilai ekonomi)
+@app.post("/api/logs/energy")
+async def receive_energy_log(data: dict):
+    """Menerima konsumsi energi riil dari terminal untuk penghitungan biaya operasional."""
+    client_id = data.get("client_id", "unknown")
+    energy_kwh = data.get("energy_kwh", 0.0)
+    
+    current_energy = cl_manager.metrics.get("compute_energy_kwh", 0)
+    cl_manager.update_metrics({"compute_energy_kwh": current_energy + energy_kwh})
+    
+    cl_manager.logger.info(f"Energi diterima dari {client_id}: {energy_kwh:.6f} kWh")
+    return {"status": "success", "energy_total": cl_manager.metrics["compute_energy_kwh"]}
 
 # Pendaftaran Terminal (Client) Baru
 @app.post("/register-client", response_model=schemas.ClientResponse)
@@ -198,8 +217,18 @@ async def upload_bulk_zip(file: UploadFile = File(...)):
     UPLOAD_TEMP = f"data/upload_{edge_id}_{int(time.time())}.zip"
     os.makedirs("data", exist_ok=True)
     
+    # Hitung Ukuran File Ril
+    file_size_bytes = 0
     with open(UPLOAD_TEMP, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+        while True:
+            chunk = await file.read(1024 * 1024) # 1MB chunks
+            if not chunk: break
+            buffer.write(chunk)
+            file_size_bytes += len(chunk)
+    
+    # Update Metrik Transmisi Ril
+    upload_mb = round(file_size_bytes / (1024 * 1024), 2)
+    cl_manager.update_metrics({"upload_volume_mb": cl_manager.metrics.get("upload_volume_mb", 0) + upload_mb})
         
     try:
         with zipfile.ZipFile(UPLOAD_TEMP, 'r') as zip_ref:
@@ -213,11 +242,11 @@ async def upload_bulk_zip(file: UploadFile = File(...)):
             
             # Daftarkan pemetaan di manajer
             cl_manager.register_upload(edge_id, nrps)
-            cl_manager.logger.success(f"Berhasil mengekstrak {len(nrps)} folder mahasiswa.")
+            cl_manager.logger.success(f"Berhasil mengekstrak {len(nrps)} folder mahasiswa ({upload_mb} MB).")
             
         os.remove(UPLOAD_TEMP)
-        cl_manager.update_logs(f"Menerima {len(nrps)} data mahasiswa dari {edge_id}")
-        return {"status": "success", "filename": file.filename, "edge_id": edge_id}
+        cl_manager.update_logs(f"Menerima {len(nrps)} data mahasiswa ({upload_mb} MB) dari {edge_id}")
+        return {"status": "success", "filename": file.filename, "edge_id": edge_id, "size_mb": upload_mb}
     except Exception as e:
         cl_manager.logger.error(f"Gagal ekstrak dataset ZIP: {e}")
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
@@ -278,7 +307,7 @@ def workflow_preprocess(dbs: Session = Depends(db.get_db)):
     cl_manager.start_phase("Preprocess & Balance")
     cl_manager.logger.info("Memulai tahap pra-pemrosesan...")
     try:
-        res = training_controller.preprocess_and_balance()
+        res = training_controller.workflow_preprocess()
         if res.get('status') == 'success':
             training_controller.sync_nrp_from_processed(dbs=dbs)
         return res
@@ -312,6 +341,8 @@ def workflow_train(epochs: int = TRAINING_PARAMS["epochs"], dbs: Session = Depen
                     h['epoch'], 
                     h['loss'], 
                     h['accuracy'],
+                    val_loss=h.get('val_loss'),
+                    val_accuracy=h.get('val_accuracy'),
                     duration=res['duration_s'] if is_last else 0,
                     energy=res.get('compute_energy_kwh', 0) if is_last else 0,
                     upload=cl_manager.metrics.get('upload_volume_mb', 0) if is_last else 0,

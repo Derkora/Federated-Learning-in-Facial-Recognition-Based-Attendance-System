@@ -27,7 +27,7 @@ class CentralizedServerManager:
         
         # Inisialisasi Logger Terpusat (Global)
         self.log_path = "/app/data/server_training.log"
-        init_logger(self.log_path, tag="CL-SERVER")
+        init_logger(self.log_path, max_memory_logs=10000, tag="CL-SERVER")
         self.logger = get_logger()
         
         self.metrics = {
@@ -100,7 +100,9 @@ class CentralizedServerManager:
                         history.append({
                             "epoch": r.round_number if r.round_number is not None else 0,
                             "loss": float(r.global_loss) if r.global_loss is not None else 0.0,
-                            "accuracy": float(r.global_accuracy) if r.global_accuracy is not None else 0.0
+                            "accuracy": float(r.global_accuracy) if r.global_accuracy is not None else 0.0,
+                            "val_loss": float(r.val_loss) if r.val_loss is not None else None,
+                            "val_accuracy": float(r.val_accuracy) if r.val_accuracy is not None else None
                         })
                         total_duration += r.training_duration_s or 0
                         total_energy += r.compute_energy_kwh or 0
@@ -261,7 +263,7 @@ class CentralizedServerManager:
         cost_per_kwh = ECONOMICS["compute_cost_per_kwh"] # Rp 1.444,70
         self.metrics["compute_cost_idr"] = round(energy_kwh * cost_per_kwh, 2)
 
-    def save_training_round(self, db, round_num, loss, accuracy, duration=0, energy=0, upload=0, download=0):
+    def save_training_round(self, db, round_num, loss, accuracy, val_loss=None, val_accuracy=None, duration=0, energy=0, upload=0, download=0):
         # Menyimpan hasil ronde ke Database Postgres
         try:
             from .db import models
@@ -269,6 +271,8 @@ class CentralizedServerManager:
                 round_number=round_num,
                 global_loss=float(loss),
                 global_accuracy=float(accuracy),
+                val_loss=float(val_loss) if val_loss is not None else None,
+                val_accuracy=float(val_accuracy) if val_accuracy is not None else None,
                 training_duration_s=float(duration),
                 compute_energy_kwh=float(energy),
                 upload_volume_mb=float(upload),

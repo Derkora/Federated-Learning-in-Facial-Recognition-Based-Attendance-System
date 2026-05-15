@@ -121,6 +121,12 @@ class FaceHandler:
                 time.sleep(0.01)
 
         scored.sort(key=lambda x: x[1], reverse=True)
+        selected_scores = [s[1] for s in scored[:n]]
+        avg_sharpness = sum(selected_scores) / len(selected_scores) if selected_scores else 0
+        
+        nrp_name = os.path.basename(folder_path)
+        self.logger.info(f"  > [Sharpness] User {nrp_name}: Terpilih {len(selected_scores)} foto | Rata-rata Skor: {avg_sharpness:.2f}")
+        
         selected = [os.path.basename(s[0]) for s in scored[:n]]
 
         # --- SIMPAN CACHE ---

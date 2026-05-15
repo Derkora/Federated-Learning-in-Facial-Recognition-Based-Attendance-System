@@ -28,31 +28,6 @@
     </div>
 </div>
 
-<!-- TRAINING PERFORMANCE SECTION (Real-time) -->
-<div class="glass" style="padding: 2rem; margin-top: 2rem;">
-    <h3 style="color: var(--accent); margin-top: 0; margin-bottom: 1.5rem; font-size: 1.2rem;">
-        Performa Pelatihan (Real-time)
-    </h3>
-    <div style="overflow-x: auto;">
-        <table id="training-performance-table" class="result-table" style="width: 100%; border-collapse: collapse;">
-            <thead>
-                <tr style="background: rgba(255,255,255,0.05);">
-                    <th style="padding: 10px; border: 1px solid rgba(255,255,255,0.1); color: var(--accent);">Epoch</th>
-                    <th style="padding: 10px; border: 1px solid rgba(255,255,255,0.1); color: var(--accent);">Loss</th>
-                    <th style="padding: 10px; border: 1px solid rgba(255,255,255,0.1); color: var(--accent);">Accuracy (%)</th>
-                    <th style="padding: 10px; border: 1px solid rgba(255,255,255,0.1); color: var(--accent);">Val Loss</th>
-                    <th style="padding: 10px; border: 1px solid rgba(255,255,255,0.1); color: var(--accent);">Val Accuracy (%)</th>
-                </tr>
-            </thead>
-            <tbody id="training-performance-body">
-                <tr>
-                    <td colspan="5" style="text-align: center; padding: 20px; color: var(--text-muted);">Menunggu data pelatihan...</td>
-                </tr>
-            </tbody>
-        </table>
-    </div>
-</div>
-
 <!-- CLIENT MONITORING SECTION -->
 <div class="glass" style="padding: 2rem; margin-top: 2rem;">
     <h3
@@ -180,18 +155,10 @@
                 terminalContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 0.9rem;">Tidak ada terminal yang terdaftar.</p>';
             }
 
-            // 5. Update Training Performance Table (Real-time)
-            const performanceBody = document.getElementById('training-performance-body');
-            if (status.metrics.epoch_history && status.metrics.epoch_history.length > 0) {
-                performanceBody.innerHTML = status.metrics.epoch_history.map(h => `
-                    <tr>
-                        <td style="padding: 10px; border: 1px solid rgba(255,255,255,0.1);">${h.epoch}</td>
-                        <td style="padding: 10px; border: 1px solid rgba(255,255,255,0.1);">${parseFloat(h.loss).toFixed(4)}</td>
-                        <td style="padding: 10px; border: 1px solid rgba(255,255,255,0.1); font-weight: 600; color: var(--accent);">${parseFloat(h.accuracy).toFixed(2)}%</td>
-                        <td style="padding: 10px; border: 1px solid rgba(255,255,255,0.1);">${h.val_loss ? parseFloat(h.val_loss).toFixed(4) : '-'}</td>
-                        <td style="padding: 10px; border: 1px solid rgba(255,255,255,0.1);">${h.val_accuracy ? parseFloat(h.val_accuracy).toFixed(2) + '%' : '-'}</td>
-                    </tr>
-                `).join('');
+
+            // 5. Update Inference Logs (Memory only for Modal)
+            if (status.inference_logs && status.inference_logs.length > 0) {
+                window.allInferenceLogs = status.inference_logs;
             }
 
             // 6. Polling Management
@@ -247,37 +214,67 @@
         const filtered = window.allInferenceLogs.filter(log => log.client_id === clientId);
         
         if (filtered.length === 0) {
-            modalBody.innerText = `Tidak ada data inferensi untuk ${clientId}.`;
+            modalBody.innerHTML = `<div style="text-align:center; padding: 2rem; color: var(--text-muted);">Tidak ada data inferensi untuk ${clientId}.</div>`;
             return;
         }
 
-        // Buat tabel dengan garis (border) agar rapi
-        let html = `<table style="width:100%; border-collapse:collapse; font-family:monospace; font-size:0.8rem; border: 1px solid rgba(0,255,0,0.2);">
+        // Limit display to latest 1000 to prevent browser lag, but keep full data for export
+        const displayData = filtered.slice(0, 1000);
+        
+        let html = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                <span style="font-size: 0.8rem; color: var(--text-muted);">Menampilkan ${displayData.length} dari ${filtered.length} log terbaru</span>
+                <button class="btn btn-sm btn-outline-primary" onclick="downloadCSV('${clientId}')" style="font-size: 0.7rem;">
+                    Unduh CSV (Full 10k)
+                </button>
+            </div>
+            <table style="width:100%; border-collapse:collapse; font-family: 'Fira Code', monospace; font-size:0.75rem; border: 1px solid rgba(16, 185, 129, 0.2);">
             <thead>
-                <tr style="background: rgba(0,255,0,0.1); text-align:left;">
-                    <th style="padding:8px; border: 1px solid rgba(0,255,0,0.2);">WAKTU</th>
-                    <th style="padding:8px; border: 1px solid rgba(0,255,0,0.2);">NRP</th>
-                    <th style="padding:8px; border: 1px solid rgba(0,255,0,0.2);">STATUS</th>
-                    <th style="padding:8px; border: 1px solid rgba(0,255,0,0.2);">SIM</th>
-                    <th style="padding:8px; border: 1px solid rgba(0,255,0,0.2);">LATENCY</th>
+                <tr style="background: rgba(16, 185, 129, 0.1); text-align:left; color: var(--accent);">
+                    <th style="padding:10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2);">WAKTU</th>
+                    <th style="padding:10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2);">IDENTITAS (NRP)</th>
+                    <th style="padding:10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2);">STATUS</th>
+                    <th style="padding:10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2);">CONFIDENCE</th>
+                    <th style="padding:10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2);">LATENCY</th>
                 </tr>
             </thead>
             <tbody>`;
         
-        filtered.forEach(log => {
+        displayData.forEach(log => {
             const isUnknown = log.status === "UNKNOWN" || log.user_id === "Unknown";
-            const statusColor = isUnknown ? '#ff4444' : '#0f0';
+            const statusColor = isUnknown ? '#ef4444' : '#10b981';
+            const rowBg = isUnknown ? 'rgba(239, 68, 68, 0.02)' : 'transparent';
             
-            html += `<tr>
-                <td style="padding:6px; border: 1px solid rgba(0,255,0,0.1); color:#aaa;">${log.timestamp}</td>
-                <td style="padding:6px; border: 1px solid rgba(0,255,0,0.1); color:${isUnknown ? '#aaa' : '#fff'};">${log.user_id}</td>
-                <td style="padding:6px; border: 1px solid rgba(0,255,0,0.1); color:${statusColor}; font-weight:bold;">${log.status || (isUnknown ? 'UNKNOWN' : 'KNOWN')}</td>
-                <td style="padding:6px; border: 1px solid rgba(0,255,0,0.1); color:#0af;">${log.confidence}</td>
-                <td style="padding:6px; border: 1px solid rgba(0,255,0,0.1); color:#aaa;">${log.latency}</td>
+            html += `<tr style="background: ${rowBg}; border-bottom: 1px solid rgba(255, 255, 255, 0.03);">
+                <td style="padding:8px; color:#9ca3af;">${log.timestamp}</td>
+                <td style="padding:8px; color:${isUnknown ? '#9ca3af' : '#fff'}; font-weight: ${isUnknown ? '400' : '600'};">${log.user_id}</td>
+                <td style="padding:8px; color:${statusColor}; font-weight:bold; letter-spacing: 1px;">${log.status || (isUnknown ? 'UNKNOWN' : 'KNOWN')}</td>
+                <td style="padding:8px; color:#38bdf8; font-weight: 600;">${parseFloat(log.confidence).toFixed(4).replace('.', ',')}</td>
+                <td style="padding:8px; color:#9ca3af;">${log.latency}</td>
             </tr>`;
         });
         html += `</tbody></table>`;
         modalBody.innerHTML = html;
+    }
+
+    function downloadCSV(clientId) {
+        const filtered = window.allInferenceLogs.filter(log => log.client_id === clientId);
+        if (filtered.length === 0) return;
+
+        let csv = "Timestamp,User_ID,Status,Confidence,Latency\n";
+        filtered.forEach(log => {
+            csv += `${log.timestamp},${log.user_id},${log.status},${log.confidence},${log.latency}\n`;
+        });
+
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.setAttribute('hidden', '');
+        a.setAttribute('href', url);
+        a.setAttribute('download', `inference_logs_${clientId}_${new Date().getTime()}.csv`);
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
     }
 
     function closeModal() {
@@ -289,12 +286,17 @@
 </script>
 
 <!-- LOG MODAL -->
-<div id="log-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; justify-content: center; align-items: center; backdrop-filter: blur(5px);">
-    <div class="glass" style="width: 80%; max-width: 800px; height: 70vh; display: flex; flex-direction: column; padding: 2rem; position: relative; border: 1px solid rgba(255,255,255,0.1);">
-        <button onclick="closeModal()" style="position: absolute; top: 1rem; right: 1rem; background: none; border: none; color: #fff; font-size: 1.5rem; cursor: pointer;">&times;</button>
-        <h2 id="log-modal-title" style="color: var(--accent); margin-top: 0; margin-bottom: 1.5rem;">Client Logs</h2>
-        <div id="log-modal-body" style="flex: 1; background: #000; color: #0f0; padding: 1rem; border-radius: 8px; font-family: 'Fira Code', monospace; font-size: 0.85rem; overflow-y: auto; white-space: pre-wrap; border: 1px solid rgba(0,255,0,0.2);">
-            Loading...
+<div id="log-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 1000; justify-content: center; align-items: center; backdrop-filter: blur(8px);">
+    <div class="glass" style="width: 90%; max-width: 900px; height: 80vh; display: flex; flex-direction: column; padding: 2.5rem; position: relative; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);">
+        <button onclick="closeModal()" style="position: absolute; top: 1.5rem; right: 1.5rem; background: rgba(255,255,255,0.05); border: none; color: #fff; width: 32px; height: 32px; border-radius: 50%; display: flex; justify-content: center; align-items: center; cursor: pointer; transition: all 0.2s;">&times;</button>
+        <div style="margin-bottom: 2rem;">
+            <h2 id="log-modal-title" style="color: var(--accent); margin: 0; font-size: 1.5rem;">Client Logs</h2>
+            <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.5rem;">Audit identifikasi wajah real-time dari terminal.</p>
+        </div>
+        <div id="log-modal-body" style="flex: 1; background: rgba(0,0,0,0.3); color: #e5e7eb; padding: 1.5rem; border-radius: 12px; overflow-y: auto; border: 1px solid rgba(255,255,255,0.05); box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);">
+            <div style="display: flex; justify-content: center; align-items: center; height: 100%;">
+                <span style="color: var(--text-muted);">Memuat data...</span>
+            </div>
         </div>
     </div>
 </div>

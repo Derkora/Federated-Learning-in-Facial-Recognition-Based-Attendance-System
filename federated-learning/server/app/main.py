@@ -144,6 +144,8 @@ async def receive_inference_log(data: dict):
     status = data.get("status", "UNKNOWN")
     timestamp = datetime.now().strftime("%H:%M:%S")
     
+    # fl_manager.logger.info(f"[CIM] Log Inferensi Diterima: {user_id} ({confidence:.4f}) dari {client_id}")
+    
     # Simpan ke memori manager untuk dashboard
     log_entry = {
         "timestamp": timestamp,

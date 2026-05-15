@@ -104,19 +104,37 @@ class MobileFaceNet(nn.Module):
         return x
 
 class ArcMarginProduct(nn.Module):
-    def __init__(self, in_features, out_features, s=32.0, m=0.5):
+    def __init__(self, in_features, out_features, s=32.0, m=0.5, k=3):
         super(ArcMarginProduct, self).__init__()
-        self.weight = nn.Parameter(torch.FloatTensor(out_features, in_features))
-        nn.init.xavier_uniform_(self.weight)
-        self.m = m
+        self.in_features = in_features
+        self.out_features = out_features
         self.s = s
+        self.m = m
+        self.k = k
+        self.weight = nn.Parameter(torch.FloatTensor(out_features * k, in_features))
+        nn.init.xavier_uniform_(self.weight)
+        
         self.cos_m = math.cos(m)
         self.sin_m = math.sin(m)
         self.th = math.cos(math.pi - m)
         self.mm = math.sin(math.pi - m) * m
 
+    def get_logits(self, input):
+        cosine_all = F.linear(F.normalize(input), F.normalize(self.weight))
+        if self.k > 1:
+            cosine_all = cosine_all.view(-1, self.out_features, self.k)
+            cosine, _ = torch.max(cosine_all, dim=2)
+        else:
+            cosine = cosine_all
+        return cosine * self.s
+
     def forward(self, input, label):
-        cosine = F.linear(F.normalize(input), F.normalize(self.weight))
+        cosine_all = F.linear(F.normalize(input), F.normalize(self.weight))
+        if self.k > 1:
+            cosine_all = cosine_all.view(-1, self.out_features, self.k)
+            cosine, _ = torch.max(cosine_all, dim=2)
+        else:
+            cosine = cosine_all
         sine = torch.sqrt(1.0 - torch.pow(cosine, 2))
         phi = cosine * self.cos_m - sine * self.sin_m
         phi = torch.where(cosine > self.th, phi, cosine - self.mm)

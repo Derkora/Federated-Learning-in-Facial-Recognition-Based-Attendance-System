@@ -8,6 +8,7 @@ import json
 import requests
 import base64
 import io
+import time
 import gc
 
 from app.db.db import SessionLocal
@@ -95,6 +96,17 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         loss, accuracy, num_samples, epoch_history = 0.0, 0.0, 0, []
         status = "Skipped"
 
+        # 0. Timer & Energy Start
+        start_fit_time = time.time()
+        
+        tracker = None
+        energy_kwh = 0.0
+        try:
+            from codecarbon import OfflineEmissionsTracker
+            tracker = OfflineEmissionsTracker(country_iso_code="IDN", measure_power_secs=15, log_level="error", save_to_file=False)
+            tracker.start()
+        except: pass
+
         try:
             if hasattr(self, 'fl_manager'):
                 total_rounds = config.get("total_rounds", 10)
@@ -142,16 +154,25 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         except Exception as e:
             self.logger.error(f"Evaluate failed (non-fatal): {e}")
 
-        # Memory Cleanup
+        # Memory Cleanup & Energy Stop
         del global_embs
         gc.collect()
             
+        fit_duration = time.time() - start_fit_time
+        if tracker:
+            try:
+                energy_kwh = tracker.stop()
+                if energy_kwh is None: energy_kwh = 0.0
+            except: pass
+
         return self.trainer.get_backbone_parameters(personalized=True), num_samples, {
             "loss": float(loss),
             "accuracy": float(accuracy),
             "val_loss": float(val_loss),
             "val_accuracy": float(val_accuracy),
             "status": status,
+            "duration_s": float(fit_duration),
+            "energy_kwh": float(energy_kwh),
             "hostname": os.getenv("HOSTNAME", "unknown-client"),
             "epoch_history": json.dumps(epoch_history)
         }

@@ -89,6 +89,14 @@ class ManagementController:
         if not os.path.exists(DATA_DIR) or not os.listdir(DATA_DIR):
             return False, "Data tidak ditemukan."
         
+        tracker = None
+        energy_kwh = 0.0
+        try:
+            from codecarbon import OfflineEmissionsTracker
+            tracker = OfflineEmissionsTracker(country_iso_code="IDN", measure_power_secs=15, log_level="error", save_to_file=False)
+            tracker.start()
+        except: pass
+
         zip_path = "/app/data/upload.zip"
         try:
             # Pastikan direktori tujuan ada
@@ -104,6 +112,7 @@ class ManagementController:
             self.logger.info(f"Mengemas {file_count} gambar dari {folder_count} mahasiswa.")
 
             if file_count == 0:
+                if tracker: tracker.stop()
                 return False, "Tidak ada gambar untuk diunggah."
                 
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
@@ -117,11 +126,25 @@ class ManagementController:
                 res = requests.post(
                     f"{self.server_url}/upload-bulk-zip", 
                     files={"file": (f"{self.client_id}_data.zip", f)}, 
-                    timeout=6000 # Timeout lebih lama untuk upload ZIP besar dari Raspi
+                    timeout=6000 
                 )
+            
+            # Stop tracker and send energy log
+            if tracker:
+                try:
+                    energy_kwh = tracker.stop()
+                    if energy_kwh:
+                        requests.post(f"{self.server_url}/api/logs/energy", json={
+                            "client_id": self.client_id,
+                            "energy_kwh": energy_kwh
+                        }, timeout=5)
+                        self.logger.info(f"Laporan energi terkirim: {energy_kwh:.6f} kWh")
+                except: pass
+
             os.remove(zip_path)
             return res.status_code == 200, res.text
         except Exception as e:
+            if tracker: tracker.stop()
             self.logger.error(f"Gagal mengemas atau mengunggah data: {e}")
             if os.path.exists(zip_path): os.remove(zip_path)
             return False, str(e)

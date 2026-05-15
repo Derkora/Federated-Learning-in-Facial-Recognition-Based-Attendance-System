@@ -59,13 +59,22 @@ def calibrate_bn(model, raw_data_path, device="cpu", num_samples=100):
     
     logger.info(f"Memulai kalibrasi BN menggunakan data lokal di {raw_data_path}...")
     
-    # 1. Kumpulkan sampel gambar lokal
+    # 1. Kumpulkan sampel gambar lokal (Pencarian Bertingkat)
     sample_paths = []
+    
+    # Prioritas 1: Folder Students (Raw)
     root_dir = os.path.join(raw_data_path, "students")
+    
+    # Prioritas 2: Root Raw Data
     if not os.path.exists(root_dir):
-        root_dir = raw_data_path # Fallback ke root jika folder students tidak ada
+        root_dir = raw_data_path
         
-    if os.path.exists(root_dir):
+    # Prioritas 3: Processed Data (Paling Mungkin Ada di Docker Client)
+    if not os.path.exists(root_dir) or len(os.listdir(root_dir) if os.path.exists(root_dir) else []) == 0:
+        processed_dir = os.path.join(os.path.dirname(raw_data_path), "data", "processed")
+        if os.path.exists(processed_dir):
+            root_dir = processed_dir
+            logger.info(f"Menggunakan fallback data processed di: {root_dir}")
         for root, dirs, files in os.walk(root_dir):
             for f in files:
                 if f.lower().endswith(('.jpg', '.jpeg', '.png')):

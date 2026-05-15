@@ -169,14 +169,14 @@ class LocalTrainer:
             transforms.RandomHorizontalFlip(),
             transforms.RandomRotation(degrees=20),
             transforms.RandomPerspective(distortion_scale=0.2, p=0.3),
-            transforms.ColorJitter(brightness=0.6, contrast=0.6, saturation=0.5, hue=0.15),
-            transforms.RandomGrayscale(p=0.3),
-            transforms.RandomAutocontrast(p=0.3),
-            transforms.RandomApply([transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0))], p=0.5),
-            transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.3),
+            transforms.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.4, hue=0.1),
+            transforms.RandomGrayscale(p=0.2),
+            transforms.RandomAutocontrast(p=0.2),
+            transforms.RandomApply([transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0))], p=0.4),
+            transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.2),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.50196, 0.50196, 0.50196]),
-            transforms.RandomErasing(p=0.2)
+            transforms.RandomErasing(p=0.1)
         ])
 
         
@@ -240,7 +240,7 @@ class LocalTrainer:
         else:
             self.nrp_to_idx = dataset.nrp_to_idx
 
-        dataloader = DataLoader(dataset, batch_size=16, shuffle=True, collate_fn=hybrid_collate, drop_last=True)
+        dataloader = DataLoader(dataset, batch_size=32, shuffle=True, collate_fn=hybrid_collate, drop_last=True)
         
         # --- PENERAPAN PARTIAL FREEZING ---
         # Opsi: "none", "early", "backbone"
@@ -338,7 +338,7 @@ class LocalTrainer:
                 
                 # METRIK: Hitung Akurasi Sebenarnya (Tanpa Margin Pelatihan)
                 with torch.no_grad():
-                    logits_for_acc = F.linear(F.normalize(features_local), F.normalize(self.head.weight)) * self.head.s
+                    logits_for_acc = self.head.get_logits(features_local)
                     _, predicted = torch.max(logits_for_acc.data, 1)
                     total += labels.size(0)
                     correct += (predicted == labels).sum().item()
@@ -402,7 +402,7 @@ class LocalTrainer:
                     features[emb_mask] = embs[emb_mask]
                 
                 # Akurasi Sebenarnya untuk Pelaporan
-                logits = F.linear(F.normalize(features), F.normalize(self.head.weight)) * self.head.s
+                logits = self.head.get_logits(features)
                 outputs = self.head(features, labels)
                 loss = criterion(outputs, labels)
                 
@@ -424,7 +424,7 @@ class LocalTrainer:
         if old_head is not None:
             embedding_size = old_head.weight.shape[1]
             
-        new_head = ArcMarginProduct(embedding_size, new_num_classes).to(self.device)
+        new_head = ArcMarginProduct(embedding_size, new_num_classes, k=3).to(self.device)
         
         if old_head is None:
             self.logger.info(f"New Head Created: {new_num_classes} classes (initial/lazy)")
@@ -432,27 +432,28 @@ class LocalTrainer:
             self.nrp_to_idx = new_nrp_to_idx
             return new_head
 
+        k = new_head.k
         copied_count = 0
         with torch.no_grad():
             for nrp, new_idx in new_nrp_to_idx.items():
                 if nrp in old_nrp_to_idx:
                     old_idx = old_nrp_to_idx[nrp]
-                    if old_idx < old_head.weight.shape[0] and new_idx < new_num_classes: 
-                         new_head.weight[new_idx] = old_head.weight[old_idx]
-                         copied_count += 1
+                    # Salin seluruh k sub-centers untuk identitas ini
+                    new_head.weight[new_idx*k : (new_idx+1)*k] = old_head.weight[old_idx*k : (old_idx+1)*k]
+                    copied_count += 1
         
-        self.logger.info(f"Head Expanded: {old_head.weight.shape[0]} -> {new_num_classes} ({copied_count} weights preserved)")
+        self.logger.info(f"Head Expanded: {len(old_nrp_to_idx)} -> {new_num_classes} classes ({copied_count} identities preserved)")
         self.head = new_head
         self.nrp_to_idx = new_nrp_to_idx
         return new_head
 
 
     def _is_shared_param(self, name):
-        """Filter ketat untuk pFedFace: Kecualikan BatchNorm agar tetap lokal."""
+        """Filter untuk paritas penuh dengan CL: Sertakan BatchNorm dalam agregasi global."""
         name = name.lower()
-        if any(x in name for x in ['bn', 'running_', 'num_batches_tracked']):
-            return False
-        return any(x in name for x in ['weight', 'bias'])
+        # Dulu pFedFace mengecualikan BN (bn, running_, num_batches_tracked).
+        # Sekarang disertakan agar model antar-client identik (Full Parity).
+        return any(x in name for x in ['weight', 'bias', 'bn', 'running_', 'num_batches_tracked'])
 
     def get_backbone_parameters(self, personalized=True):
         if self.backbone is None: return []

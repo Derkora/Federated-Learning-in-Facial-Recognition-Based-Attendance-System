@@ -45,39 +45,29 @@ class TrainingController:
         self.logger = get_logger()
 
 
-    def fetch_data(self, wait_timeout=3600, expected_clients=None):
-        # Tahap 1: Sinkronisasi dan Menunggu Unggahan Data dari Terminal
-        self.logger.info(f"Memulai pemantauan unggahan data di {UPLOAD_DIR} (Timeout: 1 Jam)...")
-        if expected_clients:
-            self.logger.info(f"Menunggu data dari minimal {expected_clients} terminal.")
-            
+    def _wait_for_stable_data(self, wait_timeout=3600, expected_clients=None):
+        """Helper untuk menunggu hingga data yang diunggah stabil (tidak bertambah lagi)."""
         start_time = time.time()
         last_img_count = -1
         stable_since = None
         last_log_time = 0
-        STABILIZATION_TIME = 60 # Detekasi kestabilan data (lebih lama untuk Raspi yang lambat)
+        STABILIZATION_TIME = 60 
         
         while (time.time() - start_time) < wait_timeout:
             try:
+                if not os.path.exists(UPLOAD_DIR):
+                    os.makedirs(UPLOAD_DIR, exist_ok=True)
+                    
                 subdirs = [d for d in os.listdir(UPLOAD_DIR) if os.path.isdir(os.path.join(UPLOAD_DIR, d))]
                 img_count = 0
                 if len(subdirs) > 0:
                     img_count = sum([len(os.listdir(os.path.join(UPLOAD_DIR, d))) for d in subdirs])
                 
-                # Hitung jumlah terminal yang sudah selesai upload (ZIP diekstrak)
-                # cl_manager.uploader_map berisi mapping {nrp: edge_id}
                 unique_uploaders = set(cl_manager.uploader_map.values())
                 uploader_count = len(unique_uploaders)
                 
-                # Tampilkan checklist terminal (hanya jika berubah atau setiap 30 detik)
                 status_str = f"[{uploader_count}/{expected_clients if expected_clients else '?'}]"
-                if expected_clients and uploader_count < expected_clients:
-                    waiting_msg = f"Menunggu terminal lain... {status_str}"
-                    if time.time() - last_log_time > 30:
-                        self.logger.info(waiting_msg)
-                        last_log_time = time.time()
                 
-                # Cek progres unggahan
                 if img_count > 0:
                     if img_count != last_img_count:
                         last_img_count = img_count
@@ -87,10 +77,6 @@ class TrainingController:
                         cl_manager.update_received_data(UPLOAD_DIR)
                     else:
                         elapsed_stable = time.time() - stable_since
-                        
-                        # SYARAT BREAK: 
-                        # 1. Data harus stabil (STABILIZATION_TIME)
-                        # 2. Jumlah terminal harus >= yang diharapkan (jika ada)
                         ready_to_break = (elapsed_stable >= STABILIZATION_TIME)
                         if expected_clients:
                             ready_to_break = ready_to_break and (uploader_count >= expected_clients)
@@ -98,25 +84,32 @@ class TrainingController:
                         if ready_to_break:
                             msg = f"Data {status_str} telah stabil! Total akhir: {len(subdirs)} kelas, {img_count} gambar."
                             self.logger.success(msg)
-                            break
-                        elif elapsed_stable >= STABILIZATION_TIME and expected_clients and uploader_count < expected_clients:
-                            if time.time() - last_log_time > 30:
-                                self.logger.info(f"Data stabil tapi masih menunggu terminal lain... {status_str}")
-                                last_log_time = time.time()
+                            return True, last_img_count
                 else:
                     if time.time() - last_log_time > 60:
-                        self.logger.info(f"Menunggu unggahan pertama... {status_str} (Durasi: {int(time.time() - start_time)} detik)")
+                        self.logger.info(f"Menunggu unggahan pertama... {status_str}")
                         last_log_time = time.time()
             except Exception as e:
                 self.logger.error(f"Kesalahan saat pengecekan data: {e}")
             
             time.sleep(5)
-        
-        if last_img_count <= 0:
-            return {"status": "error", "message": "Tidak ada data yang diterima hingga batas waktu."}
+        return False, last_img_count
+
+    def fetch_data(self, wait_timeout=3600, expected_clients=None):
+        # Tahap 1: Sinkronisasi dan Menunggu Unggahan Data dari Terminal
+        self.logger.info(f"Memulai pemantauan unggahan data di {UPLOAD_DIR} (Timeout: 1 Jam)...")
+        if expected_clients:
+            self.logger.info(f"Menunggu data dari minimal {expected_clients} terminal.")
             
-        # Hitung Ukuran Payload
+        success, last_img_count = self._wait_for_stable_data(wait_timeout, expected_clients)
+        
+        if not success and last_img_count <= 0:
+            return {"status": "error", "message": "Tidak ada data yang diterima hingga batas waktu."}
+
+            
+        # Hitung Ukuran Payload dan Jumlah Kelas
         total_size = 0
+        subdirs = [d for d in os.listdir(UPLOAD_DIR) if os.path.isdir(os.path.join(UPLOAD_DIR, d))]
         for dirpath, _, filenames in os.walk(UPLOAD_DIR):
             for f in filenames: total_size += os.path.getsize(os.path.join(dirpath, f))
         
@@ -127,55 +120,65 @@ class TrainingController:
             "images": last_img_count
         }
 
-    def preprocess_and_balance(self):
-        # Tahap 2: Menyeleksi wajah terbaik dan melakukan pemotongan (Face Cropping)
-        # VERSI RESUME-ABLE: Melanjutkan pengerjaan jika terhenti
+    def workflow_preprocess(self, wait_timeout=3600, expected_clients=None):
+        # Tahap 2: Seleksi Laplacian (Sharpness) dan Alignment Wajah
+        tracker = None
+        energy_kwh = 0.0
         try:
-            self.logger.info("Memulai proses seleksi ketajaman dan pemotongan wajah (Resume-able Mode)...")
-            os.makedirs(PROCESSED_DATA, exist_ok=True)
+            from codecarbon import OfflineEmissionsTracker
+            tracker = OfflineEmissionsTracker(country_iso_code="IDN", measure_power_secs=15, log_level="error", save_to_file=False)
+            tracker.start()
+        except: pass
+
+        try:
+            if not os.path.exists(UPLOAD_DIR):
+                return {"status": "error", "message": "Dataset tidak ditemukan. Silakan impor data terlebih dahulu."}
             
-            # Pindai folder NRP yang diunggah
-            folders = sorted([f for f in os.listdir(UPLOAD_DIR) if os.path.isdir(os.path.join(UPLOAD_DIR, f))])
+            folders = [f for f in os.listdir(UPLOAD_DIR) if os.path.isdir(os.path.join(UPLOAD_DIR, f))]
             total_folders = len(folders)
             
+            if total_folders == 0:
+                return {"status": "error", "message": "Tidak ada data mahasiswa untuk diproses."}
+
+            self.logger.info(f"Memulai tahap preprocessing wajah untuk {total_folders} mahasiswa...")
+            
             for i, nrp_folder in enumerate(folders):
+                self.logger.info(f"[{i+1}/{total_folders}] Memproses: {nrp_folder}...")
                 src = os.path.join(UPLOAD_DIR, nrp_folder)
                 dst = os.path.join(PROCESSED_DATA, nrp_folder)
                 
-                # CEK APAKAH SUDAH SELESAI (Checkpoint): 
-                # Jika folder sudah ada dan berisi gambar yang cukup, skip.
-                if os.path.exists(dst) and len(os.listdir(dst)) >= 5:
-                    self.logger.info(f"  [SKIP] {nrp_folder} sudah diproses sebelumnya.")
-                    continue
-                
-                # Gunakan folder sementara agar tidak corrupt jika mati di tengah jalan
+                # Paksa proses ulang agar user bisa melihat log Laplace Variance
                 tmp_dst = dst + ".tmp"
                 if os.path.exists(tmp_dst): shutil.rmtree(tmp_dst)
                 os.makedirs(tmp_dst, exist_ok=True)
                 
                 top_images = face_handler.select_best_faces(src, n=50)
-                
-                if not top_images: continue
-                
-                msg = f"Memproses {len(top_images)} foto terbaik untuk {nrp_folder} ({i+1}/{total_folders})"
-                self.logger.info(msg)
+                if not top_images:
+                    self.logger.warn(f"  ! Skip: Tidak ada gambar valid di {nrp_folder}")
+                    continue
                 
                 for img_name in top_images:
-                    # 2. Deteksi & Alignment: Simpan ke folder .tmp
                     face_handler.detect_and_save(os.path.join(src, img_name), os.path.join(tmp_dst, img_name))
                 
-                # ATOMIC SWAP: Ganti folder .tmp menjadi folder final setelah SELESAI SEMUA
                 if os.path.exists(dst): shutil.rmtree(dst)
                 os.rename(tmp_dst, dst)
                 
-                # Optimasi RAM antar-user
-                import gc
-                gc.collect()
-                time.sleep(0.1)
-            
+                # RAM Management
+                if (i+1) % 5 == 0:
+                    import gc
+                    gc.collect()
+
+            if tracker:
+                try:
+                    energy_kwh = tracker.stop()
+                    if energy_kwh is None: energy_kwh = 0.0
+                    cl_manager.update_metrics({"compute_energy_kwh": cl_manager.metrics.get("compute_energy_kwh", 0) + energy_kwh})
+                except: pass
+
             self.logger.success("Preprocessing selesai. Seluruh wajah telah disejajarkan (Aligned).")
             return {"status": "success", "message": "Seleksi Laplacian dan Landmark Alignment selesai."}
         except Exception as e:
+            if tracker: tracker.stop()
             self.logger.error(f"Gagal melakukan preprocessing: {e}")
             return {"status": "error", "message": str(e)}
 
@@ -223,15 +226,16 @@ class TrainingController:
             except: pass
 
         try:
-            self.logger.info(f"Memulai pelatihan dengan augmentasi dinamis ({epochs} epoch)...")
+            from torchvision.transforms import InterpolationMode
             transform = transforms.Compose([
-                transforms.Resize((112, 96)),
+                transforms.Resize((112, 96), interpolation=InterpolationMode.BILINEAR),
                 transforms.RandomHorizontalFlip(),
-                transforms.RandomRotation(degrees=15),
-                transforms.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.4, hue=0.1), 
+                transforms.RandomRotation(degrees=20),
+                transforms.RandomPerspective(distortion_scale=0.2, p=0.3),
+                transforms.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.4, hue=0.1),
                 transforms.RandomGrayscale(p=0.2),
                 transforms.RandomAutocontrast(p=0.2),
-                transforms.RandomApply([transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0))], p=0.3),
+                transforms.RandomApply([transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0))], p=0.4),
                 transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.2),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.50196, 0.50196, 0.50196]),
@@ -260,7 +264,7 @@ class TrainingController:
             # Opsi: "none", "early", "backbone"
             set_model_freeze(model, freeze_mode="early")
             
-            metric_fc = ArcMarginProduct(128, num_classes).to(DEVICE)
+            metric_fc = ArcMarginProduct(128, num_classes, k=3).to(DEVICE)
             # Head selalu aktif
             for param in metric_fc.parameters():
                 param.requires_grad = True
@@ -345,7 +349,7 @@ class TrainingController:
                     with torch.no_grad():
                         # Gunakan output murni (cosine similarity * s) untuk metrik akurasi dashboard
                         # Ini konsisten dengan cara FL menghitung akurasi agar tidak terlihat 0% di awal.
-                        logits_for_acc = F.linear(F.normalize(features), F.normalize(metric_fc.weight)) * metric_fc.s
+                        logits_for_acc = metric_fc.get_logits(features)
                         _, pred = torch.max(logits_for_acc.data, 1)
                         total += label.size(0)
                         correct += (pred == label).sum().item()
@@ -370,7 +374,7 @@ class TrainingController:
                         features = torch.nn.functional.normalize(features_orig + features_flip, p=2, dim=1)
                         
                         # Hitung Logits Murni (Cosine Similarity * Scale) untuk Akurasi
-                        logits = F.linear(features, F.normalize(metric_fc.weight)) * metric_fc.s
+                        logits = metric_fc.get_logits(features)
                         
                         # Hitung Loss menggunakan ArcFace Margin (Hanya pada fitur asli untuk validasi loss)
                         output = metric_fc(features_orig, label)

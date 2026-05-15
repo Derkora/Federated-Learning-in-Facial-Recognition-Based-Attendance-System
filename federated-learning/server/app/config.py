@@ -19,12 +19,12 @@ SUBMISSIONS_DIR = os.path.join(DATA_ROOT, "submissions")
 TRAINING_PARAMS = {
     "total_rounds": 10,
     "epochs_per_round": 1,
-    "batch_size_per_client": 4,
+    "batch_size_per_client": 32,
     "mu": 0.05,
     "label_smoothing": 0.0,
     "lr_schedule": "cosine", # Diganti ke Cosine Annealing
-    "initial_lr": 0.01,
-    "min_lr": 5e-5,
+    "initial_lr": 0.05,
+    "min_lr": 1e-4,
     "swa_start_round": 8,     # SWA Snapshot mulai ronde 8 (Last 3 Rounds)
     "use_snapshot_averaging": True
 }

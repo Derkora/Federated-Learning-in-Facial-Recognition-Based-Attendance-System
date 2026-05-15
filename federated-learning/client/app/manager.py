@@ -142,7 +142,7 @@ class FLClientManager:
         self.is_camera_running = False
         
         # Ambang Batas Inferensi (Dinamis dari Server)
-        self.inference_threshold = 0.7
+        self.inference_threshold = 0.7 # Parity with CL
         
         # Inisialisasi Kontroler Absensi (FIX: Agar tidak error di run_camera_loop)
         self.attendance = AttendanceController(self)
@@ -381,7 +381,7 @@ class FLClientManager:
             if os.path.exists(self.save_path):
                 self.logger.info(f"Loading backbone from {self.save_path}...")
                 loaded = torch.load(self.save_path, map_location=self.device)
-                self._apply_backbone_weights(loaded, ignore_bn=True, target_model=new_backbone)
+                self._apply_backbone_weights(loaded, ignore_bn=False, target_model=new_backbone)
                 
                 # pFedFace FIX: Kalibrasi BN lokal alih-alih memuat statistik global yang tidak cocok
                 try:

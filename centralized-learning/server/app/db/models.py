@@ -60,6 +60,8 @@ class TrainingRound(Base):
     end_time = Column(DateTime, nullable=True)
     global_loss = Column(Float)
     global_accuracy = Column(Float)
+    val_loss = Column(Float, nullable=True)
+    val_accuracy = Column(Float, nullable=True)
     
     # Metrik Ekonomi & Operasional (NEW)
     training_duration_s = Column(Float, default=0.0)

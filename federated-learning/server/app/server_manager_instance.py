@@ -141,20 +141,23 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                     self.logger.info("Memulai agregasi dari model kosong (Seeding).")
                 
                 # Cek mode berdasarkan jumlah parameter
-                # Standard Backbone (tanpa BN/Head) biasanya ~50-60 keys (conv weights & biases)
-                # Full Backbone + BN biasanya 131 keys
+                # Full Backbone + BN (Parity) biasanya 173 keys (incl. running stats)
+                # Backbone Only (pFedFace Legacy) biasanya ~60 keys
                 all_keys = list(sd.keys())
                 conv_keys = [k for k in all_keys if not any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked'])]
                 
                 if len(params_np) == len(conv_keys):
-                    self.logger.info(f"Ronde {server_round}: Mode pFedFace (Backbone Only) terdeteksi.")
+                    self.logger.info(f"Ronde {server_round}: Mode pFedFace (Backbone Only) terdeteksi ({len(params_np)} params).")
                     target_keys = conv_keys
-                elif len(params_np) >= len(all_keys):
-                    self.logger.info(f"Ronde {server_round}: Mode Full Sync (Backbone + BN) terdeteksi.")
+                elif len(params_np) == len(all_keys):
+                    self.logger.info(f"Ronde {server_round}: Mode Full Sync (Backbone + BN) terdeteksi ({len(params_np)} params).")
+                    target_keys = all_keys
+                elif len(params_np) > len(all_keys):
+                    self.logger.info(f"Ronde {server_round}: Mode Full Sync + Head detected ({len(params_np)} params).")
                     target_keys = all_keys
                 else:
-                    self.logger.warn(f"Panjang parameter tidak dikenal ({len(params_np)}). Menggunakan fallback conv_keys.")
-                    target_keys = conv_keys[:len(params_np)]
+                    self.logger.warn(f"Panjang parameter tidak dikenal ({len(params_np)}). Mencoba pencocokan parsial...")
+                    target_keys = all_keys[:len(params_np)]
 
                 # 2. IDENTIFIKASI PARAMETER (Orderly Filtering)
                 bn_params = {}
@@ -355,7 +358,7 @@ class FLServerManager:
         
         # Inisialisasi Logger Terpusat (Global)
         self.log_path = "/app/data/server_training.log"
-        init_logger(self.log_path, tag="FL-SERVER")
+        init_logger(self.log_path, max_memory_logs=10000, tag="FL-SERVER")
         self.logger = get_logger()
         
         if CODECARBON_AVAILABLE:
@@ -369,8 +372,8 @@ class FLServerManager:
         self.default_rounds = 10
         self.default_epochs = 1
         self.default_min_clients = 2
-        self.default_batch_size = 4
-        self.default_lr = 0.03
+        self.default_batch_size = 32
+        self.default_lr = 0.05
         self.default_mu = 0.05
         self.default_lambda = 0.1
         self.registered_clients = {}
@@ -608,12 +611,24 @@ class FLServerManager:
         self.update_economics({})
 
     def update_economics(self, new_data):
-        # 1. Transmisi (Estimatif berdasarkan Ronde & Client yang terhubung)
+        # 1. Transmisi (Gunakan ukuran file asli jika tersedia, jika tidak gunakan estimasi)
         current_rounds = max(self.current_round, len(self.metrics.get("round_history", [])))
         num_clients = len(self.metrics.get("unique_client_ids", []))
+        
+        # Cek Ukuran File Asli
         bb_size = ECONOMICS["estimated_backbone_size_mb"]
         reg_size = ECONOMICS["estimated_registry_size_mb"]
         
+        # Lokasi file backbone (Shared Keys)
+        pure_bb_path = "data/backbone_pure.pth"
+        if os.path.exists(pure_bb_path):
+            bb_size = os.path.getsize(pure_bb_path) / (1024 * 1024)
+        
+        # Lokasi file registry
+        from .config import REGISTRY_PATH
+        if os.path.exists(REGISTRY_PATH):
+            reg_size = os.path.getsize(REGISTRY_PATH) / (1024 * 1024)
+
         # Total BB = Ronde * Client * 2 (Upload + Download) * Ukuran Model
         self.metrics["backbone_sync_mb"] = round(current_rounds * num_clients * 2 * bb_size, 2)
         self.metrics["registry_sync_mb"] = round(num_clients * reg_size, 2)
@@ -621,7 +636,7 @@ class FLServerManager:
         total_mb = self.metrics["backbone_sync_mb"] + self.metrics["registry_sync_mb"]
         self.metrics["transmission_cost_idr"] = round(total_mb * ECONOMICS["transmission_cost_per_mb"], 2)
         
-        # 2. Komputasi: Total = Server (Real/Est) + Clients (Est)
+        # 2. Komputasi: Total = Server (Real/Est) + Clients (Real/Est)
         duration_s = self.metrics.get("total_round_time_s", 0)
         if duration_s == 0:
             duration_s = current_rounds * 180
@@ -630,12 +645,24 @@ class FLServerManager:
         server_p = ECONOMICS["estimated_server_power_kw"]
         client_p = ECONOMICS["estimated_client_power_kw"]
 
-        # Ambil energi server (Gunakan data tracker jika ada, jika tidak gunakan estimasi)
+        # A. Energi Server (Real via Tracker if available)
         server_energy = self.metrics.get("server_energy_kwh", duration_h * server_p)
         
-        # Selalu tambahkan estimasi client (karena tracker hanya di sisi server)
-        client_energy_est = duration_h * (num_clients * client_p)
-        total_energy = server_energy + client_energy_est
+        # B. Energi Client (Agregasi Data Real dari fit_res jika ada)
+        client_energy_total = 0.0
+        has_real_client_energy = False
+        
+        for r in self.metrics.get("round_history", []):
+            for cid, cMetrics in r.get("clients", {}).items():
+                if "energy_kwh" in cMetrics and cMetrics["energy_kwh"] > 0:
+                    client_energy_total += cMetrics["energy_kwh"]
+                    has_real_client_energy = True
+        
+        # Jika belum ada data real dari client, gunakan estimasi berbasis durasi
+        if not has_real_client_energy:
+            client_energy_total = duration_h * (num_clients * client_p)
+            
+        total_energy = server_energy + client_energy_total
         
         self.metrics["compute_energy_kwh"] = round(total_energy, 6)
         
@@ -778,11 +805,11 @@ class FLServerManager:
                 model = MobileFaceNet()
                 loaded = torch.load(fallback_path, map_location="cpu")
                 match_count = 0
-                # Seeding harus konsisten dengan get_parameters (Hanya shared keys)
+                # Seeding harus konsisten dengan get_parameters (Full Sync untuk Parity)
                 current_sd = model.state_dict()
+                # Sertakan SEMUA parameter backbone (Weight, Bias, BN, Running Stats)
                 shared_keys = [k for k in current_sd.keys() if 
-                               not any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked'])
-                               and any(x in k.lower() for x in ['weight', 'bias'])]
+                               any(x in k.lower() for x in ['weight', 'bias', 'bn', 'running_', 'num_batches_tracked'])]
                 
                 # Pastikan yang disimpan ke DB adalah STATE_DICT, bukan list
                 final_sd = {}
@@ -835,9 +862,9 @@ class FLServerManager:
                 if isinstance(loaded, dict):
                     # Ekstrak params conv untuk Flower fit configuration
                     sd = loaded
+                    # Sertakan BN agar model antar-client identik (Full Parity)
                     shared_keys = [k for k in sd.keys() if 
-                                   not any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked'])
-                                   and any(x in k.lower() for x in ['weight', 'bias'])]
+                                   any(x in k.lower() for x in ['weight', 'bias', 'bn', 'running_', 'num_batches_tracked'])]
                     weights_np = [sd[k].cpu().numpy() for k in shared_keys]
                 else:
                     weights_np = loaded

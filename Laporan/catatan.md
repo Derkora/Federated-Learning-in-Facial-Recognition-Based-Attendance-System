@@ -31,8 +31,8 @@
 - **Justifikasi**: Mencegah "Catastrophic Forgetting" pada fitur wajah dasar yang sudah sangat baik dari model pretrained. Dengan fokus hanya pada lapisan akhir, model lebih stabil dalam mengenali identitas spesifik mahasiswa tanpa merusak ekstraktor fitur umum.
 
 ## 8. Adaptasi Lingkungan (Client-side BN Calibration)
-- **Update (Centralized)**: Menambahkan langkah kalibrasi BatchNorm pada client CL setelah download model global.
-- **Justifikasi**: Menghilangkan bias "Global BN" yang sering kali menyebabkan CL gagal pada pencahayaan yang berbeda dari distribusi training. Dengan kalibrasi lokal, model CL memiliki kemampuan adaptasi lingkungan yang setara dengan model pFedFace (FL).
+- **Update (Centralized)**: Menambahkan langkah kalibrasi BatchNorm pada client CL setelah download model global. Jika folder `raw_data` kosong, sistem otomatis menggunakan fallback ke folder `data/processed`.
+- **Justifikasi**: Menghilangkan bias "Global BN" yang sering kali menyebabkan CL gagal pada pencahayaan yang berbeda dari distribusi training. Dengan kalibrasi lokal, model CL memiliki kemampuan adaptasi lingkungan yang setara dengan model pFedFace (FL). Penggunaan data processed sebagai fallback memastikan kalibrasi selalu berhasil di lingkungan Docker.
 
 ## 9. Penyelarasan Total Iterasi & SWA
 - **Detail**: CL (10 Epoch) disetarakan dengan FL (10 Round x 1 Epoch). SWA pada CL (3 epoch terakhir: 8, 9, 10) disetarakan dengan Snapshot Averaging FL (3 ronde terakhir).
@@ -53,7 +53,7 @@
 | Perangkat | 3 Client | 2 Client | Fokus pada validasi orkestrasi & stabilitas jaringan. |
 | Model | Facenet | MobileFaceNet (Xiaomi) | Efisiensi parameter & kompatibilitas Mobile SDK. |
 | Dashboard | Streamlit | FastAPI + Vanilla JS | Latensi UI lebih rendah & kendali penuh atas request lifecycle. |
-| LR / Batch | 0.05 / 32 | 0.01 / 4-8 | Mengatasi osilasi gradient pada dataset kecil & RAM 1GB. |
+| LR / Batch | 0.05 / 32 | 0.05 / 32 | Menggunakan Batch Size lebih besar (32) untuk menstabilkan gradien dan LR 0.05 untuk konvergensi optimal. |
 
 ## 13. Metodologi Pengumpulan Data
 
@@ -94,8 +94,8 @@ Dalam pengujian, ditemukan bahwa Client 2 (tanpa data pendaftar) memiliki akuras
 - **Justifikasi**: Dataset asli (50 foto) diambil dalam kondisi cahaya yang seragam. Penambahan augmentasi ini memaksa model untuk mengenali fitur geometri wajah meskipun terdapat bayangan atau intensitas cahaya yang tidak merata (misal: cahaya dominan dari samping atau atas), sehingga lebih tangguh untuk penggunaan *real-world* di berbagai lokasi terminal.
 
 ## 17. Penurunan Learning Rate untuk Konvergensi Halus
-- **Update**: Menurunkan `initial_lr` dari 0.03/0.05 menjadi **0.01**.
-- **Justifikasi**: Penggunaan LR tinggi pada *batch size* kecil (4-8) menyebabkan *gradient oscillation* yang membuat akurasi tidak stabil. Penurunan ke 0.01 memastikan model belajar secara bertahap dan konvergen lebih stabil tanpa melompat jauh dari titik optimal.
+- **Update**: Meningkatkan `initial_lr` dari 0.01 menjadi **0.05** dan Batch Size ke **32**.
+- **Justifikasi**: Penggunaan Batch Size 32 memberikan estimasi gradien yang jauh lebih stabil. Dengan gradien yang stabil, penggunaan LR 0.05 memungkinkan model belajar lebih cepat tanpa risiko osilasi berlebih, menghasilkan akurasi yang lebih konsisten (80%+).
 ## 18. Pipa Augmentasi Premium untuk Robustness
 - **Update**: Menambahkan `RandomPerspective` (p=0.2), `GaussianBlur` (kernel=3), dan `RandomErasing` (p=0.1) ke dalam pipeline `trainer.py`.
 - **Justifikasi**: Menambah variasi geometris dan noise buatan untuk mensimulasikan kondisi kamera yang tidak fokus atau terhalang sebagian. Hal ini meningkatkan kemampuan generalisasi model terhadap kualitas gambar yang buruk di lapangan.
