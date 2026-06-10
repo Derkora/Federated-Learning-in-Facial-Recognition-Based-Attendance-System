@@ -303,7 +303,7 @@ class FLClientManager:
             if isinstance(loaded, list):
                 all_keys = list(new_sd.keys())
                 if ignore_bn:
-                    shared_keys = [k for k in all_keys if not any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked']) and any(x in k.lower() for x in ['weight', 'bias'])]
+                    shared_keys = [k for k in all_keys if not any(x in k.lower() for x in ['.bn.', '.conv.1.', '.conv.4.', '.conv.7.', 'running_', 'num_batches_tracked']) and any(x in k.lower() for x in ['weight', 'bias'])]
                 else:
                     shared_keys = all_keys
                 
@@ -317,8 +317,9 @@ class FLClientManager:
             # Jika input adalah DICT (State Dict dari .pth)
             else:
                 for k, v in loaded.items():
-                    if ignore_bn and any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked']):
-                        continue # SKIP: Biarkan statistik BN tetap lokal
+                    is_bn = any(x in k.lower() for x in ['.bn.', '.conv.1.', '.conv.4.', '.conv.7.', 'running_', 'num_batches_tracked'])
+                    if ignore_bn and is_bn:
+                        continue # SKIP: Biarkan statistik/parameter BN tetap lokal
                     if k in new_sd:
                         new_sd[k] = v.to(self.device)
             
@@ -360,7 +361,8 @@ class FLClientManager:
             if os.path.exists(self.save_path):
                 try:
                     loaded = torch.load(self.save_path, map_location=self.device)
-                    self._apply_backbone_weights(loaded, ignore_bn=True)
+                    # Selaraskan pemuatan seluruh bobot (termasuk BN) agar backbone tidak hancur saat training/eval
+                    self._apply_backbone_weights(loaded, ignore_bn=False)
                 except Exception as e:
                     self.logger.error(f"Ketidakcocokan berkas backbone: {e}. Menghapus file rusak.")
                     try:
@@ -908,12 +910,16 @@ class FLClientManager:
                 user_folder = os.path.join(processed_dir, user.user_id)
                 if not os.path.exists(user_folder): continue
                 
-                # Pilih gambar terbaik (sudah berupa face crop 96x112 dari tahap preprocessing)
-                selected_paths = image_processor.select_best_faces(user_folder, n=50)
+                # Ambil semua gambar wajah hasil preprocess secara langsung (maks 50)
+                # Tidak perlu seleksi Laplacian lagi karena data processed sudah difilter di tahap preprocess
+                selected_paths = sorted([
+                    f for f in os.listdir(user_folder)
+                    if f.lower().endswith(('.jpg', '.jpeg', '.png'))
+                ])[:50]
                 if not selected_paths:
                     self.logger.warn(f"User {user.user_id}: Tidak ada gambar tersedia.")
                     continue
-                self.logger.info(f"User {user.user_id}: Menyeleksi {len(selected_paths)} gambar terbaik.")
+                self.logger.info(f"User {user.user_id}: Menggunakan {len(selected_paths)} gambar wajah preprocess.")
 
                 # Citra di folder processed sudah berupa potongan wajah 96x112
                 # Tidak perlu memanggil deteksi MTCNN kembali.
@@ -938,15 +944,8 @@ class FLClientManager:
 
                 self.logger.success(f"User {user.user_id}: Memproses {len(tensors)} gambar terbaik secara batched.")
 
-                # Hitung rata-rata skor ketajaman untuk dokumentasi log
-                blur_scores = []
-                for p in valid_paths:
-                    try:
-                        blur_scores.append(image_processor.get_blur_score(p))
-                    except: pass
-                if blur_scores:
-                    avg_blur = sum(blur_scores) / len(blur_scores)
-                    self.logger.info(f"User {user.user_id}: Rata-rata skor ketajaman {avg_blur:.1f}")
+                # Rata-rata skor ketajaman tidak perlu dihitung ulang demi hemat CPU RPi
+                self.logger.info(f"User {user.user_id}: Selesai refresh embedding lokal.")
 
                 # Satukan seluruh tensor gambar menjadi satu batch besar
                 batch_tensor = torch.cat(tensors, dim=0).to(self.device)

@@ -85,26 +85,20 @@ class FaceDataset(Dataset):
             folder_path = os.path.join(data_root, nrp)
             idx = self.nrp_to_idx[nrp]
             
+            # Ambil semua file gambar di folder processed secara langsung
+            # Tidak perlu memanggil select_best_faces karena data processed sudah disortir & dicrop di tahap preprocess
+            all_images = sorted([
+                os.path.join(folder_path, f)
+                for f in os.listdir(folder_path)
+                if f.lower().endswith(('.jpg', '.jpeg', '.png'))
+            ]) if os.path.exists(folder_path) else []
+            
             if mode == "train":
-                selected_filenames = image_processor.select_best_faces(folder_path, n=50)
-                selected = [os.path.join(folder_path, f) for f in selected_filenames]
-                
-                split_idx = int(0.8 * len(selected))
-                selected = selected[:split_idx]
+                split_idx = int(0.8 * len(all_images))
+                selected = all_images[:split_idx]
             else:
-                all_paths = sorted([
-                    os.path.join(folder_path, f)
-                    for f in os.listdir(folder_path)
-                    if f.lower().endswith(('.jpg', '.jpeg', '.png'))
-                ]) if os.path.exists(folder_path) else []
-                
-                selected_train_filenames = image_processor.select_best_faces(folder_path, n=50)
-                selected_train = [os.path.join(folder_path, f) for f in selected_train_filenames]
-                selected = [p for p in all_paths if p not in selected_train]
-                
-                if not selected:
-                    split_idx = int(0.8 * len(selected_train))
-                    selected = selected_train[split_idx:]
+                split_idx = int(0.8 * len(all_images))
+                selected = all_images[split_idx:]
             
             if len(selected) == 0:
                 self.logger.warn(f"  [PERINGATAN] {nrp}: Tidak ditemukan gambar wajah yang valid.")
@@ -227,10 +221,17 @@ class LocalTrainer:
             return 0.0, 0.0, len(dataset), []
             
         # Penyesuaian dimensi output layer classification head
-        if dataset.num_classes > 0 and dataset.num_classes != self.head.weight.shape[0]:
+        # PENTING: head.weight.shape[0] = num_classes * k (sub-centers), bukan num_classes!
+        # Bandingkan dengan num_classes asli untuk menghindari false mismatch.
+        head_k = getattr(self.head, 'k', 1)
+        head_num_classes = self.head.weight.shape[0] // head_k
+        if dataset.num_classes > 0 and dataset.num_classes != head_num_classes:
             self.update_head(dataset.num_classes, dataset.nrp_to_idx)
         else:
             self.nrp_to_idx = dataset.nrp_to_idx
+        # Selalu anchor bobot head setiap awal training agar sinkron dengan backbone global baru
+        # (Sama persis dengan perilaku Centralized Learning yang selalu seed metric_fc)
+        self.anchor_head_weights()
 
         # Inisialisasi data loader pembagi batch
         dataloader = DataLoader(dataset, batch_size=32, shuffle=True, collate_fn=hybrid_collate, drop_last=True)
@@ -410,7 +411,7 @@ class LocalTrainer:
         return avg_loss, accuracy, total
 
     def update_head(self, new_num_classes, new_nrp_to_idx):
-        """Mengekspansi head klasifikasi sambil mempertahankan bobot yang sudah terlatih."""
+        """Mengekspansi head klasifikasi sambil mempertahankan bobot yang sudah terlatih dan mengaitkan (anchor) kelas baru dari database."""
         old_head = self.head
         old_nrp_to_idx = self.nrp_to_idx
         
@@ -420,25 +421,211 @@ class LocalTrainer:
             
         new_head = ArcMarginProduct(embedding_size, new_num_classes, k=3).to(self.device)
         
-        if old_head is None:
-            self.logger.info(f"Classification Head Baru Dibuat: {new_num_classes} kelas (inisialisasi awal)")
-            self.head = new_head
-            self.nrp_to_idx = new_nrp_to_idx
-            return new_head
-
+        # Penanganan penyalinan bobot terlatih dari head lama (jika ada)
         k = new_head.k
         copied_count = 0
-        with torch.no_grad():
-            for nrp, new_idx in new_nrp_to_idx.items():
-                if nrp in old_nrp_to_idx:
-                    old_idx = old_nrp_to_idx[nrp]
-                    new_head.weight[new_idx*k : (new_idx+1)*k] = old_head.weight[old_idx*k : (old_idx+1)*k]
-                    copied_count += 1
-        
-        self.logger.info(f"Classification Head Diperluas: {len(old_nrp_to_idx)} -> {new_num_classes} kelas ({copied_count} identitas dipertahankan)")
+        if old_head is not None:
+            with torch.no_grad():
+                for nrp, new_idx in new_nrp_to_idx.items():
+                    if nrp in old_nrp_to_idx:
+                        old_idx = old_nrp_to_idx[nrp]
+                        new_head.weight[new_idx*k : (new_idx+1)*k] = old_head.weight[old_idx*k : (old_idx+1)*k]
+                        copied_count += 1
+            self.logger.info(f"Classification Head Diperluas: {len(old_nrp_to_idx)} -> {new_num_classes} kelas ({copied_count} identitas dipertahankan)")
+        else:
+            self.logger.info(f"Classification Head Baru Dibuat: {new_num_classes} kelas (inisialisasi awal)")
+
+        # Anchored Head Embedding: Inisialisasi kelas baru (atau seluruh kelas pada inisialisasi awal)
+        # dengan menggunakan embedding pendaftaran (reference) dari database SQLite lokal
+        anchored_count = 0
+        try:
+            from app.db.db import SessionLocal
+            from app.db.models import EmbeddingLocal
+            from app.utils.security import encryptor
+        except ImportError:
+            SessionLocal = None
+            EmbeddingLocal = None
+            encryptor = None
+
+        if SessionLocal is not None and EmbeddingLocal is not None:
+            db = SessionLocal()
+            try:
+                with torch.no_grad():
+                    for nrp, new_idx in new_nrp_to_idx.items():
+                        # Anchor SEMUA kelas baru (yang belum ada di head lama)
+                        # Kelas yang disalin dari head lama tidak perlu di-anchor lagi di sini
+                        # karena anchor_head_weights() akan menanganinya setelah update_head selesai
+                        if old_head is not None and nrp in old_nrp_to_idx:
+                            continue
+                        
+                        emb_rec = db.query(EmbeddingLocal).filter_by(user_id=nrp).first()
+                        if emb_rec is not None:
+                            try:
+                                if emb_rec.is_global:
+                                    # Data embedding global (synced dari server) disimpan tanpa enkripsi
+                                    emb_np = np.frombuffer(emb_rec.embedding_data, dtype=np.float32).copy()
+                                else:
+                                    # Data embedding lokal dienkripsi
+                                    if encryptor is not None and emb_rec.iv:
+                                        emb_np = encryptor.decrypt_embedding(emb_rec.embedding_data, emb_rec.iv).copy()
+                                    else:
+                                        emb_np = np.frombuffer(emb_rec.embedding_data, dtype=np.float32).copy()
+                                
+                                ref_emb = torch.from_numpy(emb_np).to(self.device)
+                                # L2 normalisasi untuk memastikan unit vector
+                                ref_emb = torch.nn.functional.normalize(ref_emb.view(-1), p=2, dim=0)
+                                # Salin ke seluruh sub-centers (k=3) untuk kelas/identitas ini
+                                for sub_idx in range(k):
+                                    new_head.weight.data[new_idx * k + sub_idx] = ref_emb
+                                anchored_count += 1
+                            except Exception as e:
+                                self.logger.error(f"Gagal memuat/mendekripsi embedding untuk {nrp}: {e}")
+            except Exception as db_err:
+                self.logger.error(f"Gagal melakukan Anchored Head Embedding: {db_err}")
+            finally:
+                db.close()
+                
+        if anchored_count > 0:
+            self.logger.success(f"Berhasil mengaitkan (anchor) {anchored_count} kelas baru pada classifier head dari database.")
+
         self.head = new_head
         self.nrp_to_idx = new_nrp_to_idx
         return new_head
+
+    def anchor_head_weights(self):
+        if self.head is None or len(self.nrp_to_idx) == 0:
+            return
+            
+        k = getattr(self.head, 'k', 3)
+        total_classes = self.head.weight.shape[0] // k
+        anchored_from_db = 0
+        anchored_from_images = 0
+        
+        # Kumpulkan semua embedding yang berhasil di-anchor untuk fallback mean
+        anchored_embeddings = []
+        
+        try:
+            from app.db.db import SessionLocal
+            from app.db.models import EmbeddingLocal
+            from app.utils.security import encryptor
+        except ImportError:
+            SessionLocal = None
+            EmbeddingLocal = None
+            encryptor = None
+
+        # Anchor dari DB (local + global embeddings)
+        db_embs = {}  # nrp -> tensor
+        if SessionLocal is not None and EmbeddingLocal is not None:
+            db = SessionLocal()
+            try:
+                for nrp, idx in self.nrp_to_idx.items():
+                    emb_rec = db.query(EmbeddingLocal).filter_by(user_id=nrp).first()
+                    if emb_rec is not None:
+                        try:
+                            if emb_rec.is_global:
+                                emb_np = np.frombuffer(emb_rec.embedding_data, dtype=np.float32).copy()
+                            else:
+                                if encryptor is not None and emb_rec.iv:
+                                    emb_np = encryptor.decrypt_embedding(emb_rec.embedding_data, emb_rec.iv).copy()
+                                else:
+                                    emb_np = np.frombuffer(emb_rec.embedding_data, dtype=np.float32).copy()
+                            
+                            ref_emb = torch.from_numpy(emb_np).to(self.device)
+                            ref_emb = torch.nn.functional.normalize(ref_emb.view(-1), p=2, dim=0)
+                            db_embs[nrp] = ref_emb
+                        except Exception as e:
+                            self.logger.error(f"Gagal membaca embedding DB untuk {nrp}: {e}")
+            except Exception as db_err:
+                self.logger.error(f"Gagal query EmbeddingLocal: {db_err}")
+            finally:
+                db.close()
+
+        # Hitung on-the-fly dari gambar lokal untuk NRP yang tidak ada di DB
+        # (Identik dengan cara CL membuat reference_embeddings.pth dari processed/ sebelum training)
+        missing_nrps = [nrp for nrp in self.nrp_to_idx if nrp not in db_embs]
+        if missing_nrps and self.backbone is not None:
+            processed_root = self.data_path  # data_path sudah menunjuk ke folder processed/
+            self.backbone.eval()
+            with torch.no_grad():
+                for nrp in missing_nrps:
+                    nrp_folder = os.path.join(processed_root, nrp)
+                    if not os.path.exists(nrp_folder):
+                        continue
+                    img_files = sorted([
+                        f for f in os.listdir(nrp_folder)
+                        if f.lower().endswith(('.jpg', '.jpeg', '.png'))
+                    ])[:50]
+                    if not img_files:
+                        continue
+                    
+                    tensors = []
+                    for fname in img_files:
+                        try:
+                            img_pil = Image.open(os.path.join(nrp_folder, fname)).convert('RGB')
+                            if self.val_transform:
+                                t = self.val_transform(img_pil).unsqueeze(0)
+                            else:
+                                import torchvision.transforms as T
+                                t = T.Compose([
+                                    T.Resize((112, 96)),
+                                    T.ToTensor(),
+                                    T.Normalize([0.5, 0.5, 0.5], [0.50196, 0.50196, 0.50196])
+                                ])(img_pil).unsqueeze(0)
+                            tensors.append(t)
+                        except:
+                            continue
+                    
+                    if not tensors:
+                        continue
+                    
+                    try:
+                        batch = torch.cat(tensors, dim=0).to(self.device)
+                        # Flip trick seperti CL
+                        emb_orig = self.backbone(batch)
+                        emb_flip = self.backbone(torch.flip(batch, [3]))
+                        combined = F.normalize(emb_orig + emb_flip, p=2, dim=1)
+                        centroid = torch.mean(combined, dim=0)
+                        ref_emb = F.normalize(centroid.unsqueeze(0), p=2, dim=1).squeeze(0)
+                        db_embs[nrp] = ref_emb
+                        anchored_from_images += 1
+                    except Exception as e:
+                        self.logger.error(f"Gagal hitung embedding on-the-fly untuk {nrp}: {e}")
+                        continue
+
+        # Terapkan ke head weight + hitung mean fallback
+        with torch.no_grad():
+            for nrp, idx in self.nrp_to_idx.items():
+                if nrp in db_embs:
+                    ref_emb = db_embs[nrp]
+                    for sub_idx in range(k):
+                        self.head.weight.data[idx * k + sub_idx] = ref_emb
+                    anchored_embeddings.append(ref_emb)
+                    if nrp not in [n for n in self.nrp_to_idx if n in db_embs and db_embs.get(n) is not None]:
+                        anchored_from_db += 1
+            
+            # Hitung lebih akurat
+            anchored_from_db = len(db_embs) - anchored_from_images
+            
+            # Fallback mean untuk kelas yang benar-benar tidak ada data
+            # Daripada Xavier random (berbahaya), gunakan rata-rata embedding yang ada
+            if anchored_embeddings:
+                mean_emb = F.normalize(torch.stack(anchored_embeddings).mean(dim=0).unsqueeze(0), p=2, dim=1).squeeze(0)
+                fallback_count = 0
+                for nrp, idx in self.nrp_to_idx.items():
+                    if nrp not in db_embs:
+                        for sub_idx in range(k):
+                            self.head.weight.data[idx * k + sub_idx] = mean_emb
+                        fallback_count += 1
+                if fallback_count > 0:
+                    self.logger.info(f"Fallback mean-anchor untuk {fallback_count} kelas tanpa data lokal/global.")
+        
+        total_anchored = len(db_embs)
+        self.logger.success(
+            f"Head Anchoring selesai: {anchored_from_db} dari DB, "
+            f"{anchored_from_images} dari gambar lokal, "
+            f"{total_classes - total_anchored} fallback mean "
+            f"(total {total_classes} kelas)."
+        )
 
 
     def _is_shared_param(self, name):
@@ -466,7 +653,7 @@ class LocalTrainer:
         if self.backbone is None: return {}
         state_dict = self.backbone.state_dict()
         bn_keys = [k for k in state_dict.keys() if 
-                   any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked'])]
+                   any(x in k.lower() for x in ['.bn.', '.conv.1.', '.conv.4.', '.conv.7.', 'running_', 'num_batches_tracked'])]
         
         self.logger.info(f"Mengumpulkan {len(bn_keys)} parameter BN ke dalam state_dict.")
         return {k: state_dict[k].cpu().numpy().copy() for k in bn_keys}
