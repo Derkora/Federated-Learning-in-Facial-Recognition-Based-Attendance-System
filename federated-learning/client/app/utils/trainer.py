@@ -191,7 +191,7 @@ class LocalTrainer:
     def train(self, epochs=5, lr=0.0001, round_num=0, global_embeddings=None, label_map=None, mu=0.05, lam=0.1, status_callback=None):
         if self.backbone is None or self.head is None:
              self.logger.warn("Model belum terinisialisasi..")
-             return 0.0, 0.0, 0, []
+             return 0.0, 0.0, 0, [], 0.0
 
         epoch_history = []
         
@@ -210,7 +210,7 @@ class LocalTrainer:
                         self.logger.info(f"Melanjutkan dari checkpoint (Ronde {round_num}, Mulai Epoch {start_epoch+1})")
                     else:
                         self.logger.info(f"Checkpoint menunjukkan ronde {round_num} sudah selesai.")
-                        return 0.0, 0.0, 0, epoch_history
+                        return 0.0, 0.0, 0, epoch_history, 0.0
             except Exception as e:
                 self.logger.error(f"Gagal memuat checkpoint: {e}")
 
@@ -218,7 +218,7 @@ class LocalTrainer:
         dataset = FaceDataset(self.data_path, global_embeddings=global_embeddings, transform=self.transform, mode="train", label_map=label_map)
         if len(dataset) < 2:
             self.logger.warn(f"Data terlalu kecil ({len(dataset)}) untuk pelatihan. Melewati ronde.")
-            return 0.0, 0.0, len(dataset), []
+            return 0.0, 0.0, len(dataset), [], 0.0
             
         # Penyesuaian dimensi output layer classification head
         # PENTING: head.weight.shape[0] = num_classes * k (sub-centers), bukan num_classes!
@@ -277,6 +277,15 @@ class LocalTrainer:
         # Definisikan kriteria perhitungan loss fungsi
         criterion = nn.CrossEntropyLoss()
 
+        # Warm up dataloader/CPU dengan melakukan pre-fetch batch pertama sebelum timer mulai berjalan
+        try:
+            self.logger.info("Melakukan pre-fetching batch pertama untuk warm-up CPU...")
+            _ = next(iter(dataloader))
+        except Exception as warm_err:
+            self.logger.debug(f"Pre-fetching batch pertama dilewati: {warm_err}")
+
+        # Mulai pencatatan waktu latihan murni (exclude dataset init, head anchoring, dan warm-up)
+        start_train_time = time.time()
         self.logger.info(f"Ronde {round_num}: Melatih {len(dataset)} sampel data untuk {epochs} epoch")
         total_loss, correct, total = 0.0, 0, 0
         epoch_history = []
@@ -355,7 +364,8 @@ class LocalTrainer:
                 
         avg_loss = total_loss / (len(dataloader) * epochs) if len(dataloader) > 0 else 0.0
         accuracy = correct / total if total > 0 else 0.0
-        return avg_loss, accuracy, total, epoch_history
+        train_duration = time.time() - start_train_time
+        return avg_loss, accuracy, total, epoch_history, train_duration
 
     def evaluate(self, global_embeddings=None, label_map=None):
         if self.backbone is None or self.head is None:

@@ -1163,9 +1163,6 @@ class FLClientManager:
         
         has_data = any(len(os.listdir(os.path.join(processed_dir, sub))) > 0 for sub in os.listdir(processed_dir) if os.path.isdir(os.path.join(processed_dir, sub)))
         if has_data:
-            # Unduh backbone dan parameter BN global terbaru sebelum training dimulai
-            # Ini yang menjamin akurasi Ronde 1 bisa mencapai 0.9 karena model memulai 
-            # dari titik optimal (Global Lens).
             self.logger.info("Menyiapkan bekal training: Mengunduh Backbone & BN Global...")
             self.download_backbone()
             self.download_bn(max_wait=10)
@@ -1174,9 +1171,11 @@ class FLClientManager:
             gc.collect()
             if torch.cuda.is_available(): torch.cuda.empty_cache()
 
-            self.report_status("Siap Training")
+            # Lakukan penyegaran embedding lokal terlebih dahulu secara utuh sebelum menyatakan diri siap
+            self.report_status("Processing: Refreshing Local Embeddings...")
             self.refresh_local_embeddings()
             
+            self.report_status("Siap Training")
             try:
                 self._log_to_file(f"[PREPROCESS] Client {self.client_id} is READY for training.")
                 self._safe_request("POST", f"{self.server_api_url}{api_clients_ready}", json={"client_id": self.client_id})

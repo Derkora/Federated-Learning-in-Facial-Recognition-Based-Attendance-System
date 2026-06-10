@@ -102,6 +102,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
             self.trainer.nrp_to_idx = {nrp: idx for idx, nrp in enumerate(self.label_map)}
 
         loss, accuracy, num_samples, epoch_history = 0.0, 0.0, 0, []
+        train_duration = 0.0
         status = "Skipped"
 
         # Aktifkan pelacak konsumsi daya listrik perangkat edge (CodeCarbon)
@@ -121,7 +122,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
                 self.fl_manager.fl_round = rnd
                 self.fl_manager.fl_status = f"Pelatihan: Ronde {rnd}/{total_rounds}"
             
-            loss, accuracy, num_samples, epoch_history = self.trainer.train(
+            loss, accuracy, num_samples, epoch_history, train_duration = self.trainer.train(
                 epochs=epochs, lr=lr, round_num=rnd,
                 global_embeddings=global_embs,
                 label_map=self.label_map,
@@ -173,7 +174,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         del global_embs
         gc.collect()
             
-        fit_duration = time.time() - start_fit_time
+        fit_duration = train_duration
         if tracker:
             try:
                 energy_kwh = tracker.stop()

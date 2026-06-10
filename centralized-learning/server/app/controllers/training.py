@@ -357,6 +357,13 @@ class TrainingController:
                 {'params': head_no_decay, 'weight_decay': 0.0}
             ], lr=self._get_lr(0), momentum=0.9, nesterov=True)
             
+            # Warm up dataloader/CPU dengan melakukan pre-fetch batch pertama sebelum timer mulai berjalan
+            try:
+                self.logger.info("Melakukan pre-fetching batch pertama untuk warm-up CPU...")
+                _ = next(iter(train_loader))
+            except Exception as warm_err:
+                self.logger.debug(f"Pre-fetching batch pertama dilewati: {warm_err}")
+            
             epoch_history = []
             final_acc = 0
             start_time = time.time()
