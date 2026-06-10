@@ -62,9 +62,15 @@ class ImageProcessor:
         Urutan: Deteksi -> Alignment -> Crop -> Resize 112x96 (Resolusi Asli).
         """
         try:
-            # Gunakan resolusi asli untuk presensi real-life dan video
-            img_detect = img
-            scale = 1.0
+            # Batasi ukuran resolusi citra maksimal 640px untuk deteksi (MTCNN)
+            w, h = img.size
+            max_size = 640
+            if max(w, h) > max_size:
+                scale = max_size / max(w, h)
+                img_detect = img.resize((int(w * scale), int(h * scale)), Image.BILINEAR)
+            else:
+                img_detect = img
+                scale = 1.0
 
             # Deteksi kotak dan landmark
             boxes, probs, landmarks = self.mtcnn.detect(img_detect, landmarks=True)

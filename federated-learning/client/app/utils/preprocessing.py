@@ -57,9 +57,15 @@ class ImageProcessor:
     # Deteksi dan Alignment Wajah
     def detect_face(self, img, save_path=None, keep_all=False):
         try:
-            # Gunakan resolusi asli untuk presensi real-life dan video
-            img_detect = img
-            scale = 1.0
+            # Batasi ukuran resolusi citra maksimal 640px untuk deteksi (MTCNN)
+            w, h = img.size
+            max_size = 640
+            if max(w, h) > max_size:
+                scale = max_size / max(w, h)
+                img_detect = img.resize((int(w * scale), int(h * scale)), Image.BILINEAR)
+            else:
+                img_detect = img
+                scale = 1.0
 
             # Jalankan proses inferensi deteksi wajah menggunakan MTCNN
             boxes, probs, landmarks = self.mtcnn.detect(img_detect, landmarks=True)
@@ -69,7 +75,7 @@ class ImageProcessor:
                     return []
                 return None, None, 0.0
             
-            # Kembalikan koordinat jika terjadi penskalaan (dinonaktifkan untuk menjaga resolusi asli)
+            # Kembalikan koordinat jika terjadi penskalaan
             if scale != 1.0:
                 boxes = boxes / scale
                 if landmarks is not None:
