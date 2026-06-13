@@ -4,7 +4,7 @@
 <div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
     <h1 style="color: var(--accent); margin: 0; font-size: 1.8rem;">Pengaturan Sistem</h1>
     <p style="color: var(--text-muted); margin-top: 0.5rem;">Konfigurasi parameter pelatihan pusat dan ambang batas
-        inferensi (Centralized).</p>
+        inferensi (<i>Centralized</i>).</p>
 </div>
 
 <div class="layout-grid" style="grid-template-columns: 1fr 1fr;">
@@ -23,7 +23,7 @@
             <input type="number" id="batch_size" value="{{ status.default_batch_size }}" class="form-input">
         </div>
         <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 1rem;">
-            Parameter ini mengontrol intensitas pelatihan di server pusat.
+            Parameter ini mengontrol intensitas pelatihan di <i>server</i> pusat.
         </p>
         <button onclick="saveSettings()" class="btn btn-primary" style="width: 100%; margin-top: 1rem;">
             Simpan Parameter

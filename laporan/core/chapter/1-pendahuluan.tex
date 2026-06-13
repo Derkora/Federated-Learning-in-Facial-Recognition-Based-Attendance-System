@@ -1,0 +1,59 @@
+\chapter{Pendahuluan}
+\label{chap:pendahuluan}
+
+Penelitian tugas akhir ini membahas tentang penerapan \textit{Federated Learning} pada sistem kehadiran berbasis pengenalan wajah di lingkungan \textit{Edge Computing} untuk mengatasi isu privasi data biometrik dan efisiensi \textit{bandwidth}.
+
+\section{Latar Belakang}
+\label{sec:latar-belakang}
+
+Perkembangan kecerdasan buatan (AI) dalam beberapa tahun terakhir berlangsung sangat pesat dan memberikan dampak signifikan pada berbagai sektor seperti industri, pendidikan, kesehatan, dan transportasi. Kemampuan AI dalam mengolah data dalam jumlah besar serta menemukan pola tertentu membuat proses pengambilan keputusan menjadi lebih cepat dan akurat. Di saat yang sama, penggunaan perangkat \textit{Internet of Things} (IoT) juga semakin meluas sehingga menghasilkan lebih banyak data dari perangkat yang saling terhubung. Namun, perkembangan AI dan IoT ini menghadirkan tantangan baru, terutama terkait keamanan data, privasi pengguna, dan kompleksitas dalam pengelolaannya \parencite{Brecko2022}.
+
+Sebagian besar sistem AI masih menggunakan metode \textit{Centralized Learning}, di mana seluruh data dikumpulkan ke satu \textit{server} pusat untuk dilatih. Pendekatan ini memang efektif, tetapi kurang ideal karena berpotensi menimbulkan kebocoran data pribadi serta memerlukan \textit{bandwidth} yang besar, terutama ketika data mentah dikirim dari banyak perangkat IoT \parencite{Nandi2023}. Permasalahan ini menjadi semakin menonjol pada aplikasi yang memanfaatkan data biometrik, seperti pengenalan wajah, karena jenis data tersebut sangat sensitif dan tidak dapat diganti jika terjadi kebocoran.
+
+Pengenalan wajah merupakan salah satu teknologi yang banyak digunakan dalam sistem kehadiran karena mampu mengotomatiskan proses identifikasi dan mengurangi ketergantungan pada metode absensi manual. Namun, penggunaan citra wajah sebagai data biometrik menimbulkan persoalan penting terkait privasi, terutama ketika data perlu diproses atau disimpan di \textit{server} pusat. \textcite{Srinu2025} mengembangkan sistem kehadiran berbasis \textit{convolutional neural network} (CNN) yang dijalankan pada perangkat \textit{edge} seperti Raspberry Pi dan Jetson Nano, di mana proses inferensi dilakukan secara lokal untuk membatasi pergerakan data sensitif. Meskipun demikian, proses pelatihan model pada penelitian tersebut masih dilakukan secara terpusat sehingga data wajah tetap harus dikumpulkan ke \textit{server} ketika pembaruan model diperlukan. Hal ini menunjukkan bahwa isu privasi pada tahap pelatihan belum sepenuhnya teratasi.
+
+Untuk mengurangi ketergantungan pada pelatihan terpusat, \textit{Federated Learning} diperkenalkan sebagai pendekatan yang memungkinkan pelatihan model dilakukan langsung di perangkat pengguna. Dalam \textit{Federated Learning}, data mentah tidak perlu dikirim ke \textit{server} pusat, hanya parameter atau pembaruan model yang dikirim untuk digabungkan menjadi model global \parencite{Stano2025}. Dengan mekanisme tersebut, privasi data biometrik dapat lebih terjaga dan kebutuhan \textit{bandwidth} menjadi lebih rendah. Penelitian \textcite{Kim2021} juga menunjukkan bahwa \textit{Federated Learning} efektif untuk melatih model pengenalan wajah karena citra wajah pengguna tetap berada di perangkat masing-masing. Meskipun temuan tersebut menunjukkan potensi besar \textit{Federated Learning} untuk aplikasi biometrik, hingga saat ini belum terdapat penelitian yang menerapkan \textit{Federated Learning} pada sistem kehadiran berbasis pengenalan wajah di perangkat \textit{edge}, sehingga menyisakan celah penelitian yang masih perlu dieksplorasi.
+
+Berdasarkan permasalahan tersebut, penelitian tugas akhir ini mengusulkan penerapan \textit{Federated Learning} pada sistem kehadiran berbasis pengenalan wajah di lingkungan \textit{Edge Computing}. Dalam penelitian ini, model \textit{MobileFaceNet} akan dilatih secara lokal di perangkat \textit{client}, sehingga citra wajah tidak perlu dikirim ke \textit{server} pusat. Proses distribusi dan orkestrasi \textit{server} dan \textit{client} akan menggunakan \textit{Docker} agar sistem lebih mudah dijalankan dan direplikasi. Harapannya, kombinasi \textit{Federated Learning}, \textit{MobileFaceNet}, dan \textit{Edge Computing} dapat menghasilkan sistem kehadiran yang lebih aman, efisien, serta tetap menjaga privasi pengguna.
+
+\section{Rumusan Masalah}
+\label{sec:rumusan-masalah}
+
+Berdasarkan permasalahan tersebut, rumusan masalah yang diangkat pada penelitian adalah sebagai berikut:
+\begin{enumerate}[itemsep=1pt]
+    \item Bagaimana membangun sistem kehadiran berbasis pengenalan wajah dan memanfaatkan konsep \textit{Federated Learning} pada lingkungan \textit{Edge Computing}?
+    \item Bagaimana membandingkan performa model \textit{MobileFaceNet} antara \textit{Federated Learning} dan \textit{Centralized Learning}?
+\end{enumerate}
+
+\section{Batasan Masalah}
+\label{sec:batasan-masalah}
+
+Adapun batasan masalah dalam penelitian ini berdasarkan rumusan masalah adalah sebagai berikut:
+\begin{enumerate}[itemsep=1pt]
+    \item Penelitian berfokus pada implementasi arsitektur \textit{Federated Learning}, bukan pengembangan arsitektur model baru.
+    \item Model yang digunakan adalah \textit{MobileFaceNet} sebagai \textit{backbone} pengenalan wajah.
+    \item Sistem tidak mencakup fitur anti-\textit{spoofing} atau deteksi keaslian wajah.
+    \item Lingkungan pengujian menggunakan sebuah Raspberry Pi dan Jetson Nano sebagai \textit{perangkat edge} dan PC sebagai \textit{server}.
+    \item Implementasi sistem berbasis \textit{containerization} menggunakan \textit{Docker}.
+    \item Objek citra wajah yang digunakan dalam eksperimen dibatasi pada maksimal 30 subjek mahasiswa Departemen Teknologi Informasi.
+    \item Proses akuisisi citra wajah dan pengujian sistem dilakukan menggunakan perangkat \textit{webcam}.
+\end{enumerate}
+
+\section{Tujuan}
+\label{sec:tujuan}
+
+Merujuk pada rumusan masalah, tujuan yang ingin dicapai:
+\begin{enumerate}[itemsep=1pt]
+    \item Membangun sistem kehadiran berbasis pengenalan wajah dengan memanfaatkan konsep \textit{Federated Learning} yang memungkinkan pelatihan model dilakukan secara lokal pada perangkat \textit{edge}.
+    \item Membandingkan performa model \textit{MobileFaceNet} yang dilatih menggunakan \textit{Federated Learning} dengan \textit{Centralized Learning} untuk menilai efektivitas \textit{Federated Learning} dalam sistem kehadiran.
+\end{enumerate}
+
+\section{Manfaat}
+\label{sec:manfaat}
+
+Manfaat yang diharapkan dari penelitian ini adalah sebagai berikut:
+\begin{enumerate}[itemsep=1pt]
+    \item Mempermudah proses absensi dengan sistem pengenalan wajah.
+    \item Menjaga privasi pengguna karena citra wajah tidak dikirim ke \textit{server} pusat.
+    \item Mengurangi kebutuhan \textit{bandwidth} selama proses pelatihan model.
+\end{enumerate}

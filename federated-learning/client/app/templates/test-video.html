@@ -1,56 +1,81 @@
 {% extends "layout.html" %}
 
 {% block content %}
+<style>
+    .container {
+        max-width: 1200px !important;
+    }
+    /* Hide native fullscreen button on the video player */
+    video::-webkit-media-controls-fullscreen-button {
+        display: none !important;
+    }
+    video::-epub-media-controls-fullscreen-button {
+        display: none !important;
+    }
+    
+    /* Fullscreen styling for the player wrapper and video */
+    #html5-player-wrapper:fullscreen {
+        max-width: 100vw !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        border-radius: 0 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        background: #000 !important;
+        border: none !important;
+    }
+    #html5-player-wrapper:-webkit-full-screen {
+        max-width: 100vw !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        border-radius: 0 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        background: #000 !important;
+        border: none !important;
+    }
+    #html5-player-wrapper:fullscreen video {
+        max-height: 100vh !important;
+        max-width: 100vw !important;
+        width: auto !important;
+        height: auto !important;
+        margin: auto !important;
+    }
+    #html5-player-wrapper:-webkit-full-screen video {
+        max-height: 100vh !important;
+        max-width: 100vw !important;
+        width: auto !important;
+        height: auto !important;
+        margin: auto !important;
+    }
+</style>
 <div class="glass" style="padding: 2rem; margin-bottom: 2rem; text-align: left;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.8rem;">
         <h2 style="margin: 0; font-size: 1.6rem; font-weight: 800; background: linear-gradient(135deg, #a78bfa, #3b82f6); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Uji Model via File Video</h2>
     </div>
     
-    <!-- Tab Navigation for Dual Input Methods -->
-    <div id="input-tabs" style="display: flex; gap: 0.5rem; margin-bottom: 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 0.5rem;">
-        <button id="tab-upload-btn" class="tab-btn active" onclick="switchTab('upload')" style="background: none; border: none; padding: 8px 16px; border-radius: 8px; color: #f8fafc; font-weight: 600; cursor: pointer; font-size: 0.9rem; transition: all 0.2s;">Unggah File Video</button>
-        <button id="tab-path-btn" class="tab-btn" onclick="switchTab('path')" style="background: none; border: none; padding: 8px 16px; border-radius: 8px; color: var(--text-muted); font-weight: 600; cursor: pointer; font-size: 0.9rem; transition: all 0.2s;">Streaming Video Server</button>
-    </div>
-
-    <!-- Tab Content 1: Upload File Video -->
-    <div id="tab-upload" class="tab-content" style="display: block;">
-        <div id="upload-zone" style="border: 2px dashed rgba(255,255,255,0.15); border-radius: 12px; padding: 2.5rem 2rem; text-align: center; background: rgba(255,255,255,0.02); cursor: pointer; transition: all 0.2s;">
-            <div style="font-size: 2.5rem; margin-bottom: 0.8rem;">[UPLOAD]</div>
-            <h3 style="margin: 0 0 0.5rem 0; font-size: 1.15rem;">Pilih atau Seret File Video</h3>
-            <p style="color: var(--text-muted); font-size: 0.85rem; margin: 0 0 1.2rem 0;">Mendukung format MP4, AVI, atau MOV</p>
-            <input type="file" id="video-file-input" accept="video/*" style="display: none;">
-            <button class="btn" onclick="document.getElementById('video-file-input').click()" style="background: linear-gradient(135deg, #8b5cf6, #6d28d9);">Pilih File Video</button>
-        </div>
-    </div>
-
     <!-- Tab Content 2: Streaming Video Server -->
-    <div id="tab-path" class="tab-content" style="display: none;">
+    <div id="tab-path" class="tab-content" style="display: block;">
         <div style="border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 2rem; background: rgba(255,255,255,0.01);">
-            <div style="display: flex; gap: 0.8rem; align-items: center; margin-bottom: 1rem;">
-                <div style="font-size: 1.8rem;">[CLOUD]</div>
-                <div>
-                    <h4 style="margin: 0; font-size: 1.05rem;">Solusi Cloud Streaming Bebas Memori Edge</h4>
-                    <p style="margin: 0.2rem 0 0 0; color: var(--text-muted); font-size: 0.82rem; line-height: 1.4;">
-                        Menyimpan file video 8GB langsung di Server Pusat. Client edge melakukan streaming dengan Byte-Range, menggunakan koordinat deteksi wajah yang di-cache di server untuk menghemat komputasi.
-                    </p>
-                </div>
-            </div>
-            
-            <div style="display: flex; flex-direction: column; gap: 1rem; margin-top: 1.5rem;">
-                <div style="display: flex; flex-direction: column; gap: 0.4rem;">
-                    <label for="server-video-select" style="font-size: 0.85rem; color: var(--text-muted); font-weight: 600;">Pilih Berkas Video di Server:</label>
-                    <div style="display: flex; gap: 0.8rem; align-items: center; width: 100%;">
-                        <select id="server-video-select" onchange="updateCacheStatus()" style="padding: 0.8rem 1rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.12); background: rgba(0,0,0,0.3); color: #f8fafc; font-family: 'JetBrains Mono', monospace; font-size: 0.88rem; outline: none; flex-grow: 1;">
-                            <option value="">-- Sedang memuat video dari server... --</option>
-                        </select>
-                        <button class="btn" onclick="deleteServerVideo()" style="background: linear-gradient(135deg, #ef4444, #dc2626); color: white; padding: 0.8rem 1.2rem; font-weight: bold; border-radius: 8px; font-size: 0.85rem; flex-shrink: 0; transition: all 0.2s;">Hapus Berkas</button>
-                    </div>
-                    <div id="cache-status-info" style="font-size: 0.85rem; font-weight: 500; min-height: 18px; margin-top: 0.3rem;"></div>
-                </div>
-                
-                <div style="display: flex; gap: 0.8rem; margin-top: 0.5rem;">
-                    <button class="btn" onclick="startStreamingWithCache()" style="background: linear-gradient(135deg, #10b981, #059669); font-weight: bold; flex: 1;">Tonton & Deteksi (Cache AI)</button>
-                    <button class="btn" onclick="generateAICacheOnEdge()" style="background: linear-gradient(135deg, #3b82f6, #1d4ed8); font-weight: bold; flex: 1;">Buat Cache AI Baru di Edge</button>
+            <div style="display: flex; flex-direction: column; gap: 1rem;">
+                <div style="overflow-x: auto; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08);">
+                    <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.88rem; background: rgba(0, 0, 0, 0.2);">
+                        <thead>
+                            <tr style="border-bottom: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.03);">
+                                <th style="padding: 1rem;">Nama Video</th>
+                                <th style="padding: 1rem;">Durasi Proses (Detik)</th>
+                                <th style="padding: 1rem;">Status Cache</th>
+                                <th style="padding: 1rem; text-align: right;">Aksi</th>
+                            </tr>
+                        </thead>
+                        <tbody id="video-table-body">
+                            <tr>
+                                <td colspan="4" style="padding: 2rem; text-align: center; color: var(--text-muted);">Sedang memuat daftar video...</td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>
@@ -88,13 +113,18 @@
         <div id="html5-stream-container" style="display: none; flex-direction: column; gap: 1rem; margin-bottom: 2rem;">
             <div style="display: flex; gap: 1.5rem; flex-wrap: wrap;">
                 <!-- Player Column -->
-                <div style="width: 100%; position: relative; border-radius: 16px; overflow: hidden; background: #000; box-shadow: 0 10px 30px rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.08); height: fit-content;">
-                    <video id="html5-video" controls style="width: 100%; height: auto; display: block; transform: none !important;"></video>
+                <div id="html5-player-wrapper" style="max-width: 960px; margin: 0 auto; width: 100%; position: relative; border-radius: 16px; overflow: hidden; background: #000; box-shadow: 0 10px 30px rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.08); height: fit-content;">
+                    <video id="html5-video" controls style="width: 100%; max-width: 100% !important; height: auto; display: block; transform: none !important;"></video>
                     <canvas id="html5-canvas" style="position: absolute; top: 0; left: 0; pointer-events: none; width: 100%; height: 100%;"></canvas>
                     <div id="html5-badge" style="position: absolute; top: 16px; left: 16px; background: rgba(16, 185, 129, 0.25); backdrop-filter: blur(8px); padding: 6px 14px; border-radius: 8px; font-size: 0.8rem; border: 1px solid rgba(16, 185, 129, 0.5); font-weight: bold; color: #10b981; display: flex; align-items: center; gap: 6px; z-index: 10;">
                         <span style="width: 8px; height: 8px; background: #10b981; border-radius: 50%; display: inline-block;"></span>
-                        HTML5 CLOUD STREAM (AI CACHE CACHED)
+                        HTML5 CLOUD STREAM (CACHE AI AKTIF)
                     </div>
+                    <button id="btn-html5-fullscreen" type="button" style="position: absolute; top: 16px; right: 16px; background: rgba(15, 23, 42, 0.65); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.15); padding: 8px; border-radius: 8px; cursor: pointer; transition: all 0.2s; z-index: 10; display: flex; align-items: center; justify-content: center;">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f8fafc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+                        </svg>
+                    </button>
                 </div>
             </div>
         </div>
@@ -108,7 +138,7 @@
         </div>
         
         <button id="btn-reset" class="btn" style="width: 100%; margin-top: 1.5rem; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: #f8fafc; font-weight: bold; border-radius: 12px; height: 50px;">
-            Unggah/Pilih Video Lain
+            Pilih Video Lain
         </button>
     </div>
 </div>
@@ -197,167 +227,106 @@
     document.getElementById('nav-live').style.background = 'rgba(255,255,255,0.02)';
     document.getElementById('nav-live').style.borderColor = 'rgba(255,255,255,0.05)';
 
-    const uploadZone = document.getElementById('upload-zone');
     const processZone = document.getElementById('process-zone');
-    const fileInput = document.getElementById('video-file-input');
     const processedStream = document.getElementById('processed-video-stream');
     const terminalLog = document.getElementById('terminal-log');
     const btnReset = document.getElementById('btn-reset');
     
     let eventPollingInterval = null;
 
-    // Drag & Drop Handlers
-    uploadZone.ondragover = (e) => { e.preventDefault(); };
-    uploadZone.ondrop = (e) => {
-        e.preventDefault();
-        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-            handleVideoUpload(e.dataTransfer.files[0]);
-        }
-    };
-    
-    fileInput.onchange = () => {
-        if (fileInput.files && fileInput.files[0]) {
-            handleVideoUpload(fileInput.files[0]);
-        }
-    };
-
-    // Fungsi Upload Video File ke API
-    // Fungsi Upload Video File ke API dengan Real-Time Progress Bar
-    function handleVideoUpload(file) {
-        // Tampilkan terminal logs untuk feedback instan
-        processZone.style.display = 'block';
-        terminalLog.innerHTML = `<div style="color: #60a5fa;">[SYSTEM] Mempersiapkan pengiriman berkas "${file.name}"...</div>`;
-        
-        uploadZone.innerHTML = `
-            <div style="font-size: 3rem; margin-bottom: 1rem; animation: pulse 1s infinite;">[WAIT]</div>
-            <h3 style="margin: 0 0 0.5rem 0; font-size: 1.2rem;">Mengunggah File Video...</h3>
-            <p id="upload-status-pct" style="color: var(--text-muted); font-size: 0.85rem; margin: 0 0 1rem 0;">Mengirim "${file.name}" (0%)</p>
-            <div style="width: 100%; max-width: 400px; height: 8px; background: rgba(255,255,255,0.05); border-radius: 4px; margin: 0 auto; overflow: hidden; border: 1px solid rgba(255,255,255,0.1);">
-                <div id="upload-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #10b981, #3b82f6); transition: width 0.1s ease; border-radius: 4px;"></div>
-            </div>
-        `;
-
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', '/api/test-video/upload', true);
-        xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-
-        xhr.upload.onprogress = (e) => {
-            if (e.lengthComputable) {
-                const percent = Math.round((e.loaded / e.total) * 100);
-                const bar = document.getElementById('upload-progress-bar');
-                const text = document.getElementById('upload-status-pct');
-                if (bar) bar.style.width = percent + '%';
-                if (text) text.innerText = `Mengirim "${file.name}" (${percent}%)`;
-                
-                // Tambahkan log ke terminal
-                if (percent % 25 === 0 || percent === 10) {
-                    const logLine = document.createElement('div');
-                    logLine.style.color = '#38bdf8';
-                    logLine.innerText = `[SYSTEM] Mengunggah file biner... ${percent}%`;
-                    terminalLog.appendChild(logLine);
-                    terminalLog.scrollTop = terminalLog.scrollHeight;
-                }
-            }
-        };
-
-        xhr.onload = () => {
-            if (xhr.status === 200) {
-                try {
-                    const data = JSON.parse(xhr.responseText);
-                    if (data.status === 'success') {
-                        const logLine = document.createElement('div');
-                        logLine.style.color = '#10b981';
-                        logLine.innerText = `[SYSTEM] Unggah selesai! Video disimpan ke flashdisk. Memulai analisis...`;
-                        terminalLog.appendChild(logLine);
-                        terminalLog.scrollTop = terminalLog.scrollHeight;
-                        
-                        startVideoProcessing();
-                    } else {
-                        alert('Gagal mengunggah video: ' + data.message);
-                        resetPage();
-                    }
-                } catch (err) {
-                    alert('Gagal membaca respon server: ' + err);
-                    resetPage();
-                }
-            } else {
-                alert('Gagal mengunggah video. Status: ' + xhr.status);
-                resetPage();
-            }
-        };
-
-        xhr.onerror = () => {
-            alert('Terjadi kesalahan jaringan saat mengunggah video.');
-            resetPage();
-        };
-
-        xhr.send(file);
-    }
-
     // --- SINKRONISASI & STREAMING SERVER PUSAT ---
-    async function updateCacheStatus() {
-        const selectEl = document.getElementById('server-video-select');
-        const statusEl = document.getElementById('cache-status-info');
-        const videoName = selectEl.value;
-        
-        if (!videoName) {
-            statusEl.innerHTML = '';
-            return;
-        }
-        
-        statusEl.innerHTML = '<span style="color: #94a3b8;">Memeriksa status cache...</span>';
-        try {
-            const res = await fetch(`/api/video/cache/${videoName}`);
-            const data = await res.json();
-            if (data.status === 'success' && data.cached) {
-                statusEl.innerHTML = `Status Cache AI: <span style="color: #10b981; font-weight: bold;">Tersedia (Siap Tonton)</span>`;
-            } else {
-                statusEl.innerHTML = `Status Cache AI: <span style="color: #f59e0b; font-weight: bold;">Belum Tersedia (Perlu diproses terlebih dahulu)</span>`;
-            }
-        } catch (e) {
-            statusEl.innerHTML = `<span style="color: #ef4444;">Gagal memuat status cache: ${e.message}</span>`;
-        }
-    }
-
+    // --- SINKRONISASI & STREAMING SERVER PUSAT ---
     async function loadServerVideos() {
-        const selectEl = document.getElementById('server-video-select');
+        const tableBody = document.getElementById('video-table-body');
         try {
-            selectEl.innerHTML = '<option value="">-- Sedang memuat video dari server... --</option>';
+            tableBody.innerHTML = '<tr><td colspan="4" style="padding: 2rem; text-align: center; color: var(--text-muted);">Sedang memuat video dari server...</td></tr>';
             const res = await fetch('/api/video/list');
             const data = await res.json();
             if (data.status === 'success' && data.videos && data.videos.length > 0) {
-                selectEl.innerHTML = '';
-                data.videos.forEach(v => {
-                    const opt = document.createElement('option');
-                    opt.value = v;
-                    opt.textContent = v;
-                    selectEl.appendChild(opt);
+                tableBody.innerHTML = '';
+                
+                // Ambil status cache untuk setiap video secara paralel
+                const statusPromises = data.videos.map(async (v) => {
+                    try {
+                        const cacheRes = await fetch(`/api/video/cache/${v}`);
+                        const cacheData = await cacheRes.json();
+                        return { video: v, cache: cacheData };
+                    } catch (err) {
+                        return { video: v, cache: { status: 'error', cached: false } };
+                    }
                 });
-                updateCacheStatus();
+                
+                const results = await Promise.all(statusPromises);
+                
+                results.forEach(({ video, cache }) => {
+                    let client = '-';
+                    let duration = '-';
+                    let statusLabel = '<span style="color: #94a3b8; font-weight: bold;">Belum Ada</span>';
+                    let actionsHtml = '';
+                    
+                    let isComplete = false;
+                    let hasCache = false;
+                    
+                    if (cache.status === 'success' && cache.cached) {
+                        hasCache = true;
+                        const cacheContent = cache.data;
+                        if (Array.isArray(cacheContent)) {
+                            // Format list lama (dianggap selesai)
+                            client = 'unknown';
+                            duration = '0,00';
+                            statusLabel = '<span style="color: #10b981; font-weight: bold;">Selesai (Legacy)</span>';
+                            isComplete = true;
+                        } else {
+                            const metadata = cacheContent.metadata || {};
+                            client = metadata.processed_by || 'unknown';
+                            duration = parseFloat(metadata.processing_duration_s || 0).toFixed(2).replace('.', ',');
+                            isComplete = metadata.is_complete || false;
+                            
+                            if (isComplete) {
+                                statusLabel = '<span style="color: #10b981; font-weight: bold;">Selesai</span>';
+                            } else {
+                                statusLabel = `<span style="color: #f59e0b; font-weight: bold;">Sebagian (F${metadata.last_frame || 0})</span>`;
+                            }
+                        }
+                    }
+                    
+                    if (hasCache) {
+                        actionsHtml += `<button class="btn" onclick="startStreamingWithCache('${video}')" style="background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 0.4rem 0.8rem; font-size: 0.78rem; border-radius: 6px; font-weight: bold; margin-right: 0.4rem; cursor: pointer; transition: all 0.2s;">Tonton</button>`;
+                        
+                        if (isComplete) {
+                            actionsHtml += `<button class="btn" onclick="viewFullLogs('${video}')" style="background: linear-gradient(135deg, #8b5cf6, #6d28d9); color: white; padding: 0.4rem 0.8rem; font-size: 0.78rem; border-radius: 6px; font-weight: bold; margin-right: 0.4rem; cursor: pointer; transition: all 0.2s;">Lihat Log</button>`;
+                        }
+                        
+                        if (!isComplete) {
+                            actionsHtml += `<button class="btn" onclick="generateAICacheOnEdge('${video}', true)" style="background: linear-gradient(135deg, #06b6d4, #0891b2); color: white; padding: 0.4rem 0.8rem; font-size: 0.78rem; border-radius: 6px; font-weight: bold; margin-right: 0.4rem; cursor: pointer; transition: all 0.2s;">Lanjutkan</button>`;
+                        }
+                        
+                        actionsHtml += `<button class="btn" onclick="deleteAICache('${video}')" style="background: linear-gradient(135deg, #f97316, #ea580c); color: white; padding: 0.4rem 0.8rem; font-size: 0.78rem; border-radius: 6px; font-weight: bold; margin-right: 0.4rem; cursor: pointer; transition: all 0.2s;">Hapus Cache</button>`;
+                    } else {
+                        actionsHtml += `<button class="btn" onclick="generateAICacheOnEdge('${video}', false)" style="background: linear-gradient(135deg, #3b82f6, #1d4ed8); color: white; padding: 0.4rem 0.8rem; font-size: 0.78rem; border-radius: 6px; font-weight: bold; margin-right: 0.4rem; cursor: pointer; transition: all 0.2s;">Proses Deteksi</button>`;
+                    }
+                    
+
+                    
+                    const tr = document.createElement('tr');
+                    tr.style.borderBottom = '1px solid rgba(255,255,255,0.06)';
+                    tr.innerHTML = `
+                        <td style="padding: 0.8rem 1rem; font-family: 'JetBrains Mono', monospace; font-weight: 500; color: #e2e8f0;">${video}</td>
+                        <td style="padding: 0.8rem 1rem; color: #cbd5e1;">${duration}</td>
+                        <td style="padding: 0.8rem 1rem;">${statusLabel}</td>
+                        <td style="padding: 0.8rem 1rem; text-align: right; white-space: nowrap;">${actionsHtml}</td>
+                    `;
+                    tableBody.appendChild(tr);
+                });
             } else {
-                selectEl.innerHTML = '<option value="">-- Tidak ada video di server. Silakan unggah terlebih dahulu --</option>';
-                updateCacheStatus();
+                tableBody.innerHTML = '<tr><td colspan="4" style="padding: 2rem; text-align: center; color: var(--text-muted);">Tidak ada video di server. Silakan unggah terlebih dahulu.</td></tr>';
             }
         } catch (e) {
-            selectEl.innerHTML = '<option value="">-- Gagal memuat video: ' + e.message + ' --</option>';
-            updateCacheStatus();
+            tableBody.innerHTML = `<tr><td colspan="4" style="padding: 2rem; text-align: center; color: #ef4444;">Gagal memuat video: ${e.message}</td></tr>`;
         }
     }
 
-    // Panggil saat tab di-switch ke "path" (Streaming Video Server)
-    function switchTab(tabType) {
-        document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(content => content.style.display = 'none');
-        
-        if (tabType === 'upload') {
-            document.getElementById('tab-upload-btn').classList.add('active');
-            document.getElementById('tab-upload').style.display = 'block';
-        } else {
-            document.getElementById('tab-path-btn').classList.add('active');
-            document.getElementById('tab-path').style.display = 'block';
-            loadServerVideos();
-        }
-    }
+
 
     let activeVideoCache = null;
     let canvasAnimFrame = null;
@@ -366,29 +335,93 @@
     let lastPlaybackTime = 0;
     const html5Video = document.getElementById('html5-video');
     const html5Canvas = document.getElementById('html5-canvas');
-    const html5Ctx = html5Canvas.getContext('2d');
-
-    // Hapus Berkas Video dan Cache AI-nya Permanen dari Server
-    async function deleteServerVideo() {
-        const videoName = document.getElementById('server-video-select').value;
+    const html5Ctx = html5Canvas.getContext('2d');    async function viewFullLogs(videoName) {
         if (!videoName) {
-            alert('Pilih video yang ingin dihapus terlebih dahulu.');
+            alert('Pilih video terlebih dahulu.');
             return;
         }
-        if (!confirm(`Apakah Anda yakin ingin menghapus berkas video "${videoName}" beserta seluruh data cache AI deteksinya secara permanen dari server?\nTindakan ini akan mengosongkan memori penyimpanan server.`)) {
+
+        const inputTabs = document.getElementById('input-tabs');
+        if (inputTabs) inputTabs.style.display = 'none';
+        const tabUpload = document.getElementById('tab-upload');
+        if (tabUpload) tabUpload.style.display = 'none';
+        const tabPath = document.getElementById('tab-path');
+        if (tabPath) tabPath.style.display = 'none';
+        processZone.style.display = 'block';
+        
+        document.getElementById('legacy-stream-container').style.display = 'none';
+        document.getElementById('html5-stream-container').style.display = 'none';
+        
+        // Ubah tinggi log terminal agar lapang (550px)
+        terminalLog.style.height = '550px';
+        
+        // Sesuaikan tombol agar menjadi tombol 'Kembali' rata kanan
+        const btnReset = document.getElementById('btn-reset');
+        if (btnReset) {
+            btnReset.innerText = 'Kembali';
+            btnReset.style.width = '200px';
+            btnReset.style.margin = '1.5rem 0 0 auto';
+            btnReset.style.display = 'block';
+        }
+        
+        terminalLog.innerHTML = `<div style="color: #60a5fa;">[SYSTEM] Menghubungi server untuk memuat seluruh log AI untuk "${videoName}"...</div>`;
+
+        try {
+            const cacheRes = await fetch(`/api/video/cache/${videoName}`);
+            const cacheData = await cacheRes.json();
+            
+            if (cacheData.status === 'success' && cacheData.cached) {
+                const cacheContent = cacheData.data;
+                let detections = [];
+                if (Array.isArray(cacheContent)) {
+                    detections = cacheContent;
+                } else {
+                    detections = cacheContent.detections || [];
+                }
+                
+                if (detections.length === 0) {
+                    terminalLog.innerHTML = `<div style="color: #ef4444;">[SYSTEM] Tidak ada riwayat deteksi wajah dalam cache AI untuk video ini.</div>`;
+                    return;
+                }
+                
+                detections.sort((a, b) => a.seconds - b.seconds);
+                
+                let logHTML = `<div style="color: #c084fc; font-weight: bold; border-bottom: 1px dashed rgba(255,255,255,0.1); padding-bottom: 0.5rem; margin-bottom: 0.5rem;">[SYSTEM] MENAMPILKAN SELURUH LOG DETEKSI KESELURUHAN (Total: ${detections.length} Deteksi)</div>`;
+                
+                detections.forEach(entry => {
+                    const timeStr = `${formatTime(entry.seconds)} (F${entry.frame})`;
+                    const isUnknown = entry.label.startsWith("Unknown") || entry.label === "Rejected";
+                    const color = isUnknown ? "#ef4444" : "#10b981";
+                    const badge = isUnknown ? "[REJECTED]" : "[CONFIRMED]";
+                    const cleanLabel = entry.label.replace(/:\s*\d+\.\d+/, '');
+                    
+                    logHTML += `<div style="color: ${color}; font-family: 'JetBrains Mono', monospace;">[${timeStr}] ${badge} ${cleanLabel} Terdeteksi (Similarity: ${parseFloat(entry.confidence).toFixed(2).replace('.', ',')})</div>`;
+                });
+                
+                terminalLog.innerHTML = logHTML;
+                terminalLog.scrollTop = 0;
+            } else {
+                terminalLog.innerHTML = `<div style="color: #ef4444;">[SYSTEM] Cache deteksi wajah belum ada di server untuk video ini.</div>`;
+            }
+        } catch (e) {
+            terminalLog.innerHTML = `<div style="color: #ef4444;">[SYSTEM] Gagal memuat log: ${e.message}</div>`;
+        }
+    }
+    async function deleteAICache(videoName) {
+        if (!confirm(`Apakah Anda yakin ingin menghapus data cache AI untuk "${videoName}"?`)) {
             return;
         }
         try {
-            const res = await fetch(`/api/video/delete/${videoName}`, { method: 'DELETE' });
+            const res = await fetch(`/api/video/cache/${videoName}`, { method: 'DELETE' });
             const data = await res.json();
             if (data.status === 'success') {
-                alert('Berkas video dan cache AI berhasil dihapus secara permanen.');
+                alert('Cache AI berhasil dihapus.');
                 loadServerVideos();
             } else {
-                alert('Gagal menghapus berkas: ' + data.message);
+                alert('Gagal menghapus cache: ' + data.message);
             }
         } catch (e) {
-            alert('Gagal menghubungi server untuk menghapus video: ' + e.message);
+            alert('Gagal menghubungi server: ' + e.message);
         }
     }
 
@@ -436,7 +469,7 @@
                 <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
                     <span style="font-weight: 800; color: #3b82f6;">Waktu: ${formatTime(entry.seconds)}</span>
                     <span class="badge" style="background: ${bgBadge}; color: ${colorBadge}; border: 1px solid ${colorBadge}33; font-size: 0.75rem; padding: 1px 6px;">
-                        ${(entry.confidence * 100).toFixed(0)}% Conf
+                        Sim: ${parseFloat(entry.confidence).toFixed(2).replace('.', ',')}
                     </span>
                 </div>
                 <div style="font-weight: bold; font-size: 0.85rem; color: #f8fafc; margin-top: 2px;">
@@ -488,16 +521,18 @@
     };
 
     // Tonton Video Menggunakan AI Cache Server
-    async function startStreamingWithCache() {
-        const videoName = document.getElementById('server-video-select').value;
+    async function startStreamingWithCache(videoName) {
         if (!videoName) {
             alert('Pilih video terlebih dahulu.');
             return;
         }
 
-        document.getElementById('input-tabs').style.display = 'none';
-        document.getElementById('tab-upload').style.display = 'none';
-        document.getElementById('tab-path').style.display = 'none';
+        const inputTabs = document.getElementById('input-tabs');
+        if (inputTabs) inputTabs.style.display = 'none';
+        const tabUpload = document.getElementById('tab-upload');
+        if (tabUpload) tabUpload.style.display = 'none';
+        const tabPath = document.getElementById('tab-path');
+        if (tabPath) tabPath.style.display = 'none';
         processZone.style.display = 'block';
         
         terminalLog.innerHTML = `<div style="color: #60a5fa;">[SYSTEM] Menghubungi server untuk memuat cache AI untuk "${videoName}"...</div>`;
@@ -507,13 +542,17 @@
             const cacheData = await cacheRes.json();
             
             if (cacheData.status === 'success' && cacheData.cached) {
-                activeVideoCache = cacheData.data;
+                const cacheContent = cacheData.data;
+                if (Array.isArray(cacheContent)) {
+                    activeVideoCache = cacheContent;
+                } else {
+                    activeVideoCache = cacheContent.detections || [];
+                }
                 printedLogs = [];
                 lastPlaybackTime = 0;
                 lastLoggedFrame = -1;
-                terminalLog.innerHTML = `<div style="color: #10b981;">[SYSTEM] Cache AI Wajah Ditemukan! Memulai Cloud Streaming bebas AI computation...</div>`;
+                terminalLog.innerHTML = `<div style="color: #10b981;">[SYSTEM] Cache AI Wajah Ditemukan! Memulai Cloud Streaming tanpa komputasi AI tambahan...</div>`;
                 
-
                 // Tampilkan HTML5 Player, Sembunyikan Legacy Player
                 document.getElementById('legacy-stream-container').style.display = 'none';
                 const html5Container = document.getElementById('html5-stream-container');
@@ -529,7 +568,6 @@
                 startCanvasOverlayLoop();
             } else {
                 terminalLog.innerHTML = `<div style="color: #ef4444;">[SYSTEM] Cache deteksi wajah belum ada di server untuk video ini.</div>`;
-                terminalLog.innerHTML += `<div style="color: #64748b;">Silakan pilih opsi "Buat Cache AI Baru di Edge" terlebih dahulu agar model edge memindai video sekali saja.</div>`;
                 alert('Cache deteksi wajah tidak ditemukan. Silakan jalankan pemrosesan AI Edge baru untuk video ini terlebih dahulu.');
                 resetPage();
             }
@@ -542,7 +580,7 @@
     // Helper untuk merender log terminal secara bersih dan berurutan
     function renderTerminalLogs() {
         const recentLogs = printedLogs.slice(-15);
-        let html = `<div style="color: #10b981;">[SYSTEM] Cache AI Wajah Ditemukan! Memulai Cloud Streaming bebas AI computation...</div>`;
+        let html = `<div style="color: #10b981;">[SYSTEM] Cache AI Wajah Ditemukan! Memulai Cloud Streaming tanpa komputasi AI tambahan...</div>`;
         recentLogs.forEach(log => {
             html += log.html;
         });
@@ -561,9 +599,19 @@
             }
             
             // Samakan ukuran resolusi canvas dengan element displayed size secara presisi
-            if (html5Canvas.width !== html5Video.clientWidth || html5Canvas.height !== html5Video.clientHeight) {
-                html5Canvas.width = html5Video.clientWidth;
-                html5Canvas.height = html5Video.clientHeight;
+            const curW = html5Video.clientWidth;
+            const curH = html5Video.clientHeight;
+            const curL = html5Video.offsetLeft;
+            const curT = html5Video.offsetTop;
+            
+            if (html5Canvas.width !== curW || html5Canvas.height !== curH ||
+                html5Canvas.style.left !== curL + 'px' || html5Canvas.style.top !== curT + 'px') {
+                html5Canvas.width = curW;
+                html5Canvas.height = curH;
+                html5Canvas.style.width = curW + 'px';
+                html5Canvas.style.height = curH + 'px';
+                html5Canvas.style.left = curL + 'px';
+                html5Canvas.style.top = curT + 'px';
             }
             
             html5Ctx.clearRect(0, 0, html5Canvas.width, html5Canvas.height);
@@ -585,74 +633,83 @@
             
             // Cari entry cache terdekat (toleransi maksimal 0.4 detik)
             if (activeVideoCache && activeVideoCache.length > 0) {
-                let closest = null;
-                let minDist = 0.4;
+                let minDelta = 0.4;
+                let targetFrame = -1;
                 
                 activeVideoCache.forEach(entry => {
                     const dist = Math.abs(entry.seconds - curTime);
-                    if (dist < minDist) {
-                        minDist = dist;
-                        closest = entry;
+                    if (dist < minDelta) {
+                        minDelta = dist;
+                        targetFrame = entry.frame;
                     }
                 });
                 
-                if (closest && closest.frame !== lastLoggedFrame) {
-                    lastLoggedFrame = closest.frame;
-                    const timeStr = `${formatTime(closest.seconds)} (F${closest.frame})`;
-                    const isUnknown = closest.label.startsWith("Unknown") || closest.label === "Rejected";
-                    const color = isUnknown ? "#ef4444" : "#10b981";
-                    const badge = isUnknown ? "[REJECTED]" : "[CONFIRMED]";
-                    const cleanLabel = closest.label.replace(/:\s*\d+\.\d+/, '');
-                    
-                    const logMsg = `<div style="color: ${color};">[${timeStr}] ${badge} ${cleanLabel} Terdeteksi (Similarity: ${closest.confidence.toFixed(2)})</div>`;
-                    
-                    // Hindari duplikasi log pada frame yang sama
-                    if (!printedLogs.some(log => log.frame === closest.frame)) {
-                        printedLogs.push({ frame: closest.frame, seconds: closest.seconds, html: logMsg });
+                const closestEntries = targetFrame !== -1 ? activeVideoCache.filter(entry => entry.frame === targetFrame) : [];
+                
+                if (closestEntries.length > 0 && targetFrame !== lastLoggedFrame) {
+                    lastLoggedFrame = targetFrame;
+                    let logsAdded = false;
+                    closestEntries.forEach(entry => {
+                        const timeStr = `${formatTime(entry.seconds)} (F${entry.frame})`;
+                        const isUnknown = entry.label.startsWith("Unknown") || entry.label === "Rejected";
+                        const color = isUnknown ? "#ef4444" : "#10b981";
+                        const badge = isUnknown ? "[REJECTED]" : "[CONFIRMED]";
+                        const cleanLabel = entry.label.replace(/:\s*\d+\.\d+/, '');
+                        
+                        const logMsg = `<div style="color: ${color};">[${timeStr}] ${badge} ${cleanLabel} Terdeteksi (Similarity: ${parseFloat(entry.confidence).toFixed(2).replace('.', ',')})</div>`;
+                        
+                        if (!printedLogs.some(log => log.frame === entry.frame && log.label === entry.label)) {
+                             printedLogs.push({ frame: entry.frame, seconds: entry.seconds, label: entry.label, html: logMsg });
+                             logsAdded = true;
+                        }
+                    });
+                    if (logsAdded) {
                         printedLogs.sort((a, b) => a.seconds - b.seconds);
                         renderTerminalLogs();
                     }
                 }
                 
-                if (closest && closest.box) {
-                    // Petakan koordinat box asli ke displayed size canvas
-                    const vidW = html5Video.videoWidth || 640;
-                    const vidH = html5Video.videoHeight || 480;
-                    
-                    const scaleX = html5Canvas.width / vidW;
-                    const scaleY = html5Canvas.height / vidH;
-                    
-                    const x1 = closest.box[0] * scaleX;
-                    const y1 = closest.box[1] * scaleY;
-                    const x2 = closest.box[2] * scaleX;
-                    const y2 = closest.box[3] * scaleY;
-                    
-                    const w = x2 - x1;
-                    const h = y2 - y1;
-                    
-                    // Gambar Bounding Box
-                    const isRejected = closest.label === "Rejected" || closest.label.startsWith("Unknown");
-                    const color = isRejected ? "#ef4444" : "#10b981";
-                    
-                    html5Ctx.strokeStyle = color;
-                    html5Ctx.lineWidth = 3;
-                    html5Ctx.lineJoin = "round";
-                    html5Ctx.strokeRect(x1, y1, w, h);
-                    
-                    // Gambar Tag Label
-                    html5Ctx.fillStyle = color;
-                    html5Ctx.font = "bold 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
-                    const cleanLabel = closest.label.replace(/:\s*\d+\.\d+/, '');
-                    const labelText = `${cleanLabel} (${(closest.confidence * 100).toFixed(0)}%)`;
-                    const textW = html5Ctx.measureText(labelText).width;
-                    
-                    // Background label
-                    html5Ctx.fillRect(x1 - 1, y1 - 22, textW + 12, 22);
-                    
-                    // Teks label
-                    html5Ctx.fillStyle = "#ffffff";
-                    html5Ctx.fillText(labelText, x1 + 6, y1 - 6);
-                }
+                closestEntries.forEach(entry => {
+                    if (entry.box) {
+                        // Petakan koordinat box asli ke displayed size canvas
+                        const vidW = html5Video.videoWidth || 640;
+                        const vidH = html5Video.videoHeight || 480;
+                        
+                        const scaleX = html5Canvas.width / vidW;
+                        const scaleY = html5Canvas.height / vidH;
+                        
+                        const x1 = entry.box[0] * scaleX;
+                        const y1 = entry.box[1] * scaleY;
+                        const x2 = entry.box[2] * scaleX;
+                        const y2 = entry.box[3] * scaleY;
+                        
+                        const w = x2 - x1;
+                        const h = y2 - y1;
+                        
+                        // Gambar Bounding Box
+                        const isRejected = entry.label === "Rejected" || entry.label.startsWith("Unknown");
+                        const color = isRejected ? "#ef4444" : "#10b981";
+                        
+                        html5Ctx.strokeStyle = color;
+                        html5Ctx.lineWidth = 3;
+                        html5Ctx.lineJoin = "round";
+                        html5Ctx.strokeRect(x1, y1, w, h);
+                        
+                        // Gambar Tag Label
+                        html5Ctx.fillStyle = color;
+                        html5Ctx.font = "bold 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+                        const cleanLabel = entry.label.replace(/:\s*\d+\.\d+/, '');
+                        const labelText = `${cleanLabel} (${parseFloat(entry.confidence).toFixed(2).replace('.', ',')})`;
+                        const textW = html5Ctx.measureText(labelText).width;
+                        
+                        // Background label
+                        html5Ctx.fillRect(x1 - 1, y1 - 22, textW + 12, 22);
+                        
+                        // Teks label
+                        html5Ctx.fillStyle = "#ffffff";
+                        html5Ctx.fillText(labelText, x1 + 5, y1 - 6);
+                    }
+                });
             }
             
             canvasAnimFrame = requestAnimationFrame(render);
@@ -662,23 +719,26 @@
     }
 
     // Jalankan Model AI di Edge Secara Latar Belakang & Buat Cache
-    async function generateAICacheOnEdge() {
-        const videoName = document.getElementById('server-video-select').value;
+    async function generateAICacheOnEdge(videoName, resume = false) {
         if (!videoName) {
             alert('Pilih video terlebih dahulu.');
             return;
         }
 
-        document.getElementById('input-tabs').style.display = 'none';
-        document.getElementById('tab-upload').style.display = 'none';
-        document.getElementById('tab-path').style.display = 'none';
+        const inputTabs = document.getElementById('input-tabs');
+        if (inputTabs) inputTabs.style.display = 'none';
+        const tabUpload = document.getElementById('tab-upload');
+        if (tabUpload) tabUpload.style.display = 'none';
+        const tabPath = document.getElementById('tab-path');
+        if (tabPath) tabPath.style.display = 'none';
         processZone.style.display = 'block';
         
-        terminalLog.innerHTML = `<div style="color: #eab308;">[EDGE] Memulai pemrosesan model AI edge (MTCNN dan MobileFaceNet)...</div>`;
+        const modeText = resume ? 'Melanjutkan' : 'Memulai';
+        terminalLog.innerHTML = `<div style="color: #eab308;">[EDGE] ${modeText} pemrosesan model AI edge (MTCNN dan MobileFaceNet)...</div>`;
         terminalLog.innerHTML += `<div style="color: #64748b;">[EDGE] Terapkan: Frame Skipping (1 dari 5 frame) untuk hemat daya.</div>`;
 
         try {
-            const startRes = await fetch(`/api/video/process-and-cache/${videoName}`, { method: 'POST' });
+            const startRes = await fetch(`/api/video/process-and-cache/${videoName}?resume=${resume}`, { method: 'POST' });
             const startData = await startRes.json();
             
             if (startData.status === 'success') {
@@ -696,26 +756,47 @@
                         statusDiv.style.color = '#94a3b8';
                         terminalLog.appendChild(statusDiv);
                     }
-                    statusDiv.textContent = `[EDGE] Sedang memproses video dan mendeteksi wajah frame-by-frame... (Detik polling: ${secondsElapsed}s)`;
-                    terminalLog.scrollTop = terminalLog.scrollHeight;
                     
+                    // Ambil status cache terbaru untuk menampilkan progress
                     const checkRes = await fetch(`/api/video/cache/${videoName}`);
                     const checkData = await checkRes.json();
                     
+                    let isComplete = false;
+                    let lastFrame = 0;
+                    let duration = 0;
+                    
                     if (checkData.status === 'success' && checkData.cached) {
+                        const cacheContent = checkData.data;
+                        if (!Array.isArray(cacheContent)) {
+                            const metadata = cacheContent.metadata || {};
+                            isComplete = metadata.is_complete || false;
+                            lastFrame = metadata.last_frame || 0;
+                            duration = metadata.processing_duration_s || 0;
+                        } else {
+                            isComplete = true; // Legacy complete format
+                        }
+                    }
+                    
+                    if (isComplete) {
                         clearInterval(pollInterval);
                         if (statusDiv) statusDiv.remove();
                         terminalLog.innerHTML += `<div style="color: #10b981; font-weight: bold;">[SUCCESS] Cache sukses dibuat di server! Membuka Cloud Player...</div>`;
                         terminalLog.scrollTop = terminalLog.scrollHeight;
-                        setTimeout(startStreamingWithCache, 1500);
+                        setTimeout(() => startStreamingWithCache(videoName), 1500);
+                    } else {
+                        statusDiv.innerHTML = `[EDGE] Sedang memproses... Frame terakhir: <strong>${lastFrame}</strong> | Durasi: <strong>${parseFloat(duration).toFixed(2).replace('.', ',')} detik</strong> (Detik polling: ${secondsElapsed} detik)`;
+                        terminalLog.scrollTop = terminalLog.scrollHeight;
                     }
                     
-                    if (secondsElapsed > 10800) { // Limit 3 jam (10800 detik)
+                    if (secondsElapsed > 10800) { // Limit 3 jam
                         clearInterval(pollInterval);
-                        alert('Waktu pemrosesan AI edge habis. Periksa log Docker untuk informasi detail.');
+                        alert('Waktu pemrosesan AI edge habis.');
                         resetPage();
                     }
                 }, 2000);
+            } else {
+                alert('Gagal memicu pemrosesan AI Edge: ' + startData.message);
+                resetPage();
             }
         } catch (e) {
             alert('Gagal memicu pemrosesan AI Edge: ' + e.message);
@@ -743,9 +824,12 @@
 
     // Mulai Pemrosesan Video & Stream Real-Time (Legacy untuk upload)
     async function startVideoProcessing() {
-        document.getElementById('input-tabs').style.display = 'none';
-        document.getElementById('tab-upload').style.display = 'none';
-        document.getElementById('tab-path').style.display = 'none';
+        const inputTabs = document.getElementById('input-tabs');
+        if (inputTabs) inputTabs.style.display = 'none';
+        const tabUpload = document.getElementById('tab-upload');
+        if (tabUpload) tabUpload.style.display = 'none';
+        const tabPath = document.getElementById('tab-path');
+        if (tabPath) tabPath.style.display = 'none';
         processZone.style.display = 'block';
         
         document.getElementById('legacy-stream-container').style.display = 'flex';
@@ -761,7 +845,7 @@
                 videoDuration = meta.duration;
                 seekbar.max = videoDuration;
                 totalTimeDisplay.innerText = formatTime(videoDuration);
-                terminalLog.innerHTML += `<div style="color: #10b981;">[SYSTEM] Durasi video terdeteksi: ${formatTime(videoDuration)} (${videoDuration.toFixed(1)} detik)</div>`;
+                terminalLog.innerHTML += `<div style="color: #10b981;">[SYSTEM] Durasi video terdeteksi: ${formatTime(videoDuration)} (${videoDuration.toFixed(2).replace('.', ',')} detik)</div>`;
             }
         } catch (e) {
             console.error("Gagal memuat metadata video:", e);
@@ -872,7 +956,6 @@
         html5Video.src = "";
         
         processedStream.src = "";
-        fileInput.value = "";
         
         currentSecond = 0;
         seekbar.value = 0;
@@ -888,21 +971,107 @@
             await fetch('/api/test-video/delete', { method: 'POST' });
         } catch (e) {}
 
-        // Pengalihan tab dinamis kembali berdasarkan mode stream aktif sebelumnya
-        const wasHTML5CloudStream = (document.getElementById('html5-stream-container').style.display === 'block');
+        // Kembalikan tinggi log terminal ke semula
+        if (terminalLog) {
+            terminalLog.style.height = '200px';
+        }
         
-        document.getElementById('input-tabs').style.display = 'flex';
+        // Kembalikan teks dan gaya tombol ke semula
+        const btnReset = document.getElementById('btn-reset');
+        if (btnReset) {
+            btnReset.innerText = 'Pilih Video Lain';
+            btnReset.style.width = '100%';
+            btnReset.style.margin = '1.5rem 0 0 0';
+            btnReset.style.display = 'block';
+        }
+
         processZone.style.display = 'none';
         document.getElementById('legacy-stream-container').style.display = 'flex';
         document.getElementById('html5-stream-container').style.display = 'none';
         
-        if (wasHTML5CloudStream) {
-            switchTab('path');
-        } else {
-            switchTab('upload');
-        }
+        const tabPath = document.getElementById('tab-path');
+        if (tabPath) tabPath.style.display = 'block';
+        const inputTabs = document.getElementById('input-tabs');
+        if (inputTabs) inputTabs.style.display = 'block';
+        const tabUpload = document.getElementById('tab-upload');
+        if (tabUpload) tabUpload.style.display = 'block';
+        
+        loadServerVideos();
     }
 
+    // Pengendali Mode Layar Penuh (Fullscreen)
+    const btnFullscreen = document.getElementById('btn-html5-fullscreen');
+    const playerWrapper = document.getElementById('html5-player-wrapper');
+    
+    function toggleFullscreen() {
+        if (!document.fullscreenElement) {
+            if (playerWrapper.requestFullscreen) {
+                playerWrapper.requestFullscreen();
+            } else if (playerWrapper.webkitRequestFullscreen) {
+                playerWrapper.webkitRequestFullscreen();
+            } else if (playerWrapper.mozRequestFullScreen) {
+                playerWrapper.mozRequestFullScreen();
+            } else if (playerWrapper.msRequestFullscreen) {
+                playerWrapper.msRequestFullscreen();
+            }
+        } else {
+            if (document.exitFullscreen) {
+                document.exitFullscreen();
+            } else if (document.webkitExitFullscreen) {
+                document.webkitExitFullscreen();
+            }
+        }
+    }
+    
+    if (btnFullscreen) {
+        btnFullscreen.addEventListener('click', toggleFullscreen);
+    }
+    
+    if (html5Video) {
+        html5Video.addEventListener('dblclick', (e) => {
+            e.preventDefault();
+            toggleFullscreen();
+        });
+    }
+    
+    document.addEventListener('fullscreenchange', () => {
+        const isFS = !!document.fullscreenElement;
+        if (btnFullscreen) {
+            if (isFS) {
+                btnFullscreen.innerHTML = `
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f8fafc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M4 14h6v6m10-6h-6v6M4 10h6V4m10 6h-6V4"/>
+                    </svg>
+                `;
+            } else {
+                btnFullscreen.innerHTML = `
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f8fafc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+                    </svg>
+                `;
+            }
+        }
+        
+        // Paksa kalibrasi ulang batas-batas kanvas secara instan
+        if (html5Canvas && html5Video) {
+            setTimeout(() => {
+                const curW = html5Video.clientWidth;
+                const curH = html5Video.clientHeight;
+                const curL = html5Video.offsetLeft;
+                const curT = html5Video.offsetTop;
+                html5Canvas.width = curW;
+                html5Canvas.height = curH;
+                html5Canvas.style.width = curW + 'px';
+                html5Canvas.style.height = curH + 'px';
+                html5Canvas.style.left = curL + 'px';
+                html5Canvas.style.top = curT + 'px';
+            }, 100);
+        }
+    });
+
     btnReset.onclick = resetPage;
+
+    // Load server videos initially on page load
+    loadServerVideos();
 </script>
 {% endblock %}

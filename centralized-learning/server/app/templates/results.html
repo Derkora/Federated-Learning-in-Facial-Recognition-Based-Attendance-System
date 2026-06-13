@@ -19,11 +19,10 @@
             <thead>
                 <tr>
                     <th>Ronde</th>
-                    <th>Waktu</th>
-                    <th>Loss</th>
-                    <th>Accuracy (%)</th>
-                    <th>Val Loss</th>
-                    <th>Val Accuracy (%)</th>
+                    <th><i>Loss</i></th>
+                    <th><i>Accuracy (%)</i></th>
+                    <th><i>Validation Loss</i></th>
+                    <th><i>Validation Accuracy (%)</i></th>
                     <th>Durasi (detik)</th>
                 </tr>
             </thead>
@@ -32,11 +31,10 @@
                 {% for h in status.metrics.epoch_history %}
                 <tr>
                     <td>{{ h.epoch }}</td>
-                    <td style="color: #9ca3af;">{{ h.timestamp if h.timestamp is defined else "-" }}</td>
                     <td>{{ "%.4f"|format(h.loss|float)|replace('.', ',') }}</td>
-                    <td>{{ "%.2f"|format(h.accuracy|float)|replace('.', ',') }}%</td>
+                    <td>{{ "%.2f"|format(h.accuracy|float)|replace('.', ',') }}</td>
                     <td>{{ "%.4f"|format(h.val_loss|float)|replace('.', ',') if h.val_loss is not none else "-" }}</td>
-                    <td>{{ "%.2f"|format(h.val_accuracy|float)|replace('.', ',') if h.val_accuracy is not none else "-" }}%</td>
+                    <td>{{ "%.2f"|format(h.val_accuracy|float)|replace('.', ',') if h.val_accuracy is not none else "-" }}</td>
                     <td style="color: #38bdf8;">{{ "%.2f"|format(h.duration_s|float)|replace('.', ',') if h.duration_s is defined and h.duration_s is not none else "-" }}</td>
                 </tr>
 
@@ -82,7 +80,7 @@
                 </tr>
                 <tr>
                     <td>Durasi Pelatihan (detik)</td>
-                    <td>{{ (status.metrics.training_duration_s|string)|replace('.', ',') }}</td>
+                    <td>{{ "%.2f"|format(status.metrics.training_duration_s|float)|replace('.', ',') }}</td>
                 </tr>
             </tbody>
         </table>

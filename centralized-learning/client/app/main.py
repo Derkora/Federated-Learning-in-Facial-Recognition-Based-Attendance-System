@@ -15,6 +15,7 @@ from fastapi import FastAPI, Request, UploadFile, File, BackgroundTasks, Body
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from datetime import datetime
 
 from app.client_manager_instance import cl_client
 from app.utils.preprocessing import image_processor
@@ -162,7 +163,8 @@ async def proxy_list_videos():
 @app.get(api_video_cache)
 async def proxy_get_video_cache(video_name: str):
     try:
-        res = requests.get(f"{cl_client.server_url}{api_video_cache.format(video_name=video_name)}", timeout=5)
+        cache_key = f"{cl_client.client_id}_{video_name}"
+        res = requests.get(f"{cl_client.server_url}{api_video_cache.format(video_name=cache_key)}", timeout=5)
         return JSONResponse(res.json(), status_code=res.status_code)
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
@@ -204,9 +206,10 @@ def proxy_video_stream(video_name: str, request: Request):
         return JSONResponse({"status": "error", "message": f"Gagal melakukan streaming dari server: {e}"}, status_code=500)
 
 @app.post(api_video_cache)
-async def proxy_save_video_cache(video_name: str, data: list = Body(...)):
+async def proxy_save_video_cache(video_name: str, data: dict = Body(...)):
     try:
-        res = requests.post(f"{cl_client.server_url}{api_video_cache.format(video_name=video_name)}", json=data, timeout=10800)
+        cache_key = f"{cl_client.client_id}_{video_name}"
+        res = requests.post(f"{cl_client.server_url}{api_video_cache.format(video_name=cache_key)}", json=data, timeout=10800)
         return JSONResponse(res.json(), status_code=res.status_code)
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
@@ -214,7 +217,8 @@ async def proxy_save_video_cache(video_name: str, data: list = Body(...)):
 @app.delete(api_video_cache)
 async def proxy_delete_video_cache(video_name: str):
     try:
-        res = requests.delete(f"{cl_client.server_url}{api_video_cache.format(video_name=video_name)}", timeout=5)
+        cache_key = f"{cl_client.client_id}_{video_name}"
+        res = requests.delete(f"{cl_client.server_url}{api_video_cache.format(video_name=cache_key)}", timeout=5)
         return JSONResponse(res.json(), status_code=res.status_code)
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
@@ -228,23 +232,51 @@ async def proxy_delete_video(video_name: str):
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 @app.post(api_video_process)
-async def process_and_cache_video(video_name: str, background_tasks: BackgroundTasks):
+async def process_and_cache_video(video_name: str, background_tasks: BackgroundTasks, resume: bool = False):
     """
     Menjalankan pemrosesan AI di Edge secara asinkron (background) pada aliran video stream server,
     menggunakan Frame Skipping, lalu mengirimkan hasilnya ke server untuk di-cache.
     """
-    # Hapus cache lama di server agar polling mendeteksi cache kosong dan tidak langsung lompat sukses
-    try:
-        requests.delete(f"{cl_client.server_url}{api_video_cache.format(video_name=video_name)}", timeout=5)
-    except Exception as e:
-        cl_client.logger.warning(f"Gagal menghapus cache lama di server: {e}")
+    cache_key = f"{cl_client.client_id}_{video_name}"
+    if not resume:
+        # Hapus cache lama di server agar polling mendeteksi cache kosong dan tidak langsung lompat sukses
+        try:
+            requests.delete(f"{cl_client.server_url}{api_video_cache.format(video_name=cache_key)}", timeout=5)
+        except Exception as e:
+            cl_client.logger.warning(f"Gagal menghapus cache lama di server: {e}")
         
-    background_tasks.add_task(run_offline_detection_and_cache, video_name)
+    background_tasks.add_task(run_offline_detection_and_cache, video_name, resume)
     return {"status": "success", "message": "Pemrosesan video dimulai di latar belakang perangkat edge."}
 
-def run_offline_detection_and_cache(video_name: str):
-    cl_client.logger.info(f"[EDGE PROCESS] Memulai pemrosesan model AI edge untuk video: {video_name}")
+def run_offline_detection_and_cache(video_name: str, resume: bool = False):
+    cl_client.logger.info(f"[EDGE PROCESS] Memulai pemrosesan model AI edge untuk video: {video_name} (Resume: {resume})")
+    cache_key = f"{cl_client.client_id}_{video_name}"
     
+    existing_detections = []
+    accumulated_time = 0.0
+    start_frame = 0
+    
+    if resume:
+        try:
+            res = requests.get(f"{cl_client.server_url}{api_video_cache.format(video_name=cache_key)}", timeout=5)
+            if res.status_code == 200:
+                res_data = res.json()
+                if res_data.get("status") == "success" and res_data.get("cached"):
+                    cache_content = res_data.get("data", {})
+                    if isinstance(cache_content, list):
+                        existing_detections = cache_content
+                        accumulated_time = 0.0
+                    else:
+                        existing_detections = cache_content.get("detections", [])
+                        metadata = cache_content.get("metadata", {})
+                        accumulated_time = metadata.get("processing_duration_s", 0.0)
+                    
+                    if existing_detections:
+                        start_frame = max(d["frame"] for d in existing_detections)
+                        cl_client.logger.info(f"[EDGE PROCESS] Melanjutkan dari frame {start_frame}, akumulasi durasi: {accumulated_time}s")
+        except Exception as e:
+            cl_client.logger.warning(f"Gagal memuat cache untuk resume: {e}. Memulai dari awal.")
+            
     stream_url = f"{cl_client.server_url}{api_video_stream.format(video_name=video_name)}"
     
     # Unduh berkas video secara lokal untuk menghindari batasan aliran http OpenCV di dalam container
@@ -273,6 +305,7 @@ def run_offline_detection_and_cache(video_name: str):
             except: pass
         return
         
+    start_processing_time = time.time()
     try:
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps <= 0: fps = 30
@@ -280,12 +313,16 @@ def run_offline_detection_and_cache(video_name: str):
         DEVICE = torch.device("cpu")
         threshold = cl_client.threshold
         
-        detection_cache = []
+        detection_cache = list(existing_detections)
         frame_idx = 0
         SKIP_FRAMES = 5
         
-        prediction_buffer = deque(maxlen=5)
-        last_face_frame = -100
+        if start_frame > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            frame_idx = start_frame
+            
+        face_buffers = {}
+        next_track_id = 0
         
         while cap.isOpened():
             ret, frame = cap.read()
@@ -303,74 +340,159 @@ def run_offline_detection_and_cache(video_name: str):
             img_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
             img_pil = Image.fromarray(img_rgb)
             
-            face_tensor, box, prob = image_processor.detect_face(img_pil)
-            if face_tensor is not None and box is not None:
-                x1, y1, x2, y2 = [int(b / scale) for b in box]
+            # Deteksi seluruh wajah di dalam frame (Multi-Face)
+            detected_faces = image_processor.detect_face(img_pil, keep_all=True)
+            if isinstance(detected_faces, list):
+                detected_faces.sort(key=lambda x: x[2], reverse=True)
+                detected_faces = detected_faces[:3]
+            else:
+                detected_faces = []
                 
-                if frame_idx - last_face_frame > 10:
-                    prediction_buffer.clear()
-                last_face_frame = frame_idx
+            if detected_faces:
+                current_face_centers = []
+                for face_tensor, box, prob in detected_faces:
+                    x1, y1, x2, y2 = [int(b / scale) for b in box]
+                    center = ((x1 + x2) // 2, (y1 + y2) // 2)
+                    current_face_centers.append((face_tensor, box, prob, center))
                 
-                face_tensor_ready = image_processor.prepare_for_model(face_tensor)
-                with torch.no_grad():
-                    if cl_client.model is not None:
-                        cl_client.model.eval()
-                        emb_orig = cl_client.model(face_tensor_ready)
-                        face_flipped = torch.flip(face_tensor_ready, dims=[3])
-                        emb_mirror = cl_client.model(face_flipped)
-                        query_emb_tensor = F.normalize((emb_orig + emb_mirror) / 2, p=2, dim=1).view(1, -1)
-                        prediction_buffer.append(query_emb_tensor)
-                        
-                        mean_emb_tensor = torch.stack(list(prediction_buffer)).mean(0).view(1, -1)
-                        mean_emb_tensor = F.normalize(mean_emb_tensor, p=2, dim=1)
-                        
-                        user_ids = list(cl_client.reference_embeddings.keys())
-                        ref_list = []
-                        for nrp in user_ids:
-                            ref = cl_client.reference_embeddings[nrp]
-                            ref = torch.tensor(ref).to(DEVICE).view(-1)
-                            ref_list.append(ref)
-                        
-                        best_match = "Unknown"
-                        max_sim = 0.0
-                        best_candidate = "None"
-                        
-                        if ref_list:
-                            ref_tensor = torch.stack(ref_list) # Shape: (num_users, 128)
-                            ref_tensor = F.normalize(ref_tensor, p=2, dim=1)
-                            similarities = torch.mm(mean_emb_tensor, ref_tensor.t()).cpu().numpy()[0]
-                            max_idx = np.argmax(similarities)
-                            max_sim = float(similarities[max_idx])
-                            best_candidate = user_ids[max_idx]
-                            if max_sim >= threshold:
-                                best_match = best_candidate
-                                
-                        cand_nrp = best_candidate.split("_")[0] if "_" in best_candidate else best_candidate
-                        
-                        if max_sim >= threshold:
-                            label = best_match.split("_")[0] if "_" in best_match else best_match
-                            cl_client.logger.success(f"[EDGE PROCESS] Frame {frame_idx}: Berhasil mengidentifikasi {label} (Sim: {max_sim:.4f})")
-                        else:
-                            if best_candidate != "None":
-                                label = f"Unknown ({cand_nrp})"
-                                cl_client.logger.info(f"[EDGE PROCESS] Frame {frame_idx}: Terdeteksi mirip {cand_nrp} (Sim: {max_sim:.4f}), di bawah threshold {threshold:.2f} (Ditandai sebagai {label})")
-                            else:
-                                label = "Unknown"
-                                cl_client.logger.info(f"[EDGE PROCESS] Frame {frame_idx}: Tidak ada kemiripan terdeteksi.")
+                # Asosiasikan wajah saat ini dengan tracking buffer sebelumnya (Threshold: 120px)
+                matched_faces = []
+                temp_buffers = {}
+                
+                for face_tensor, box, prob, center in current_face_centers:
+                    best_id = None
+                    min_dist = 120.0
+                    
+                    for track_id, info in face_buffers.items():
+                        dist = np.sqrt((center[0] - info["center"][0])**2 + (center[1] - info["center"][1])**2)
+                        if dist < min_dist:
+                            min_dist = dist
+                            best_id = track_id
                             
-                        detection_cache.append({
-                            "frame": frame_idx,
-                            "seconds": round(frame_idx / fps, 2),
-                            "box": [x1, y1, x2, y2],
-                            "label": label,
-                            "confidence": float(max_sim)
-                        })
+                    if best_id is not None:
+                        track_id = best_id
+                        p_buffer = face_buffers[track_id]["buffer"]
+                        last_pred = face_buffers[track_id].get("last_pred", None)
+                    else:
+                        track_id = next_track_id
+                        next_track_id += 1
+                        p_buffer = deque(maxlen=5)
+                        last_pred = None
+                        
+                    temp_buffers[track_id] = {
+                        "center": center,
+                        "buffer": p_buffer,
+                        "last_seen": frame_idx,
+                        "last_pred": last_pred
+                    }
+                    matched_faces.append((face_tensor, box, prob, track_id))
+                    
+                # Pertahankan wajah lama yang hilang sementara (hang-time maks 5 frame)
+                for track_id, info in face_buffers.items():
+                    if track_id not in temp_buffers and frame_idx - info["last_seen"] < 5:
+                        temp_buffers[track_id] = info
+                        
+                face_buffers = temp_buffers
+                
+                # Hapus deteksi frame_idx lama sebelum menulis yang baru
+                detection_cache = [d for d in detection_cache if d["frame"] != frame_idx]
+                
+                for face_tensor, box, prob, track_id in matched_faces:
+                    x1, y1, x2, y2 = [int(b / scale) for b in box]
+                    
+                    face_tensor_ready = image_processor.prepare_for_model(face_tensor)
+                    with torch.no_grad():
+                        if cl_client.model is not None:
+                            cl_client.model.eval()
+                            emb_orig = cl_client.model(face_tensor_ready)
+                            face_flipped = torch.flip(face_tensor_ready, dims=[3])
+                            emb_mirror = cl_client.model(face_flipped)
+                            query_emb_tensor = F.normalize((emb_orig + emb_mirror) / 2, p=2, dim=1).view(1, -1)
+                            
+                            p_buffer = face_buffers[track_id]["buffer"]
+                            p_buffer.append(query_emb_tensor)
+                            
+                            mean_emb_tensor = torch.stack(list(p_buffer)).mean(0).view(1, -1)
+                            mean_emb_tensor = F.normalize(mean_emb_tensor, p=2, dim=1)
+                            
+                            user_ids = list(cl_client.reference_embeddings.keys())
+                            ref_list = []
+                            for nrp in user_ids:
+                                ref = cl_client.reference_embeddings[nrp]
+                                if not isinstance(ref, torch.Tensor):
+                                    ref = torch.tensor(ref).to(DEVICE)
+                                ref_list.append(ref.view(1, -1))
+                            
+                            best_match = "Unknown"
+                            max_sim = 0.0
+                            best_candidate = "None"
+                            
+                            if ref_list:
+                                ref_matrix = torch.cat(ref_list, dim=0)
+                                ref_matrix = F.normalize(ref_matrix, p=2, dim=1)
+                                similarities = torch.mm(mean_emb_tensor, ref_matrix.t()).cpu().numpy()[0]
+                                max_idx = np.argmax(similarities)
+                                max_sim = float(similarities[max_idx])
+                                best_candidate = user_ids[max_idx]
+                                if max_sim >= threshold:
+                                    best_match = best_candidate
+                                    
+                            cand_nrp = best_candidate.split("_")[0] if "_" in best_candidate else best_candidate
+                            
+                            if max_sim >= threshold:
+                                label = best_match.split("_")[0] if "_" in best_match else best_match
+                                cl_client.logger.success(f"[EDGE PROCESS] Frame {frame_idx}: Berhasil mengidentifikasi {label} (Sim: {max_sim:.4f})")
+                            else:
+                                if best_candidate != "None":
+                                    label = f"Unknown ({cand_nrp})"
+                                    cl_client.logger.info(f"[EDGE PROCESS] Frame {frame_idx}: Terdeteksi mirip {cand_nrp} (Sim: {max_sim:.4f}), di bawah threshold {threshold:.2f} (Ditandai sebagai {label})")
+                                else:
+                                    label = "Unknown"
+                                    cl_client.logger.info(f"[EDGE PROCESS] Frame {frame_idx}: Tidak ada kemiripan terdeteksi.")
+                                
+                            detection_cache.append({
+                                "frame": frame_idx,
+                                "seconds": round(frame_idx / fps, 2),
+                                "box": [x1, y1, x2, y2],
+                                "label": label,
+                                "confidence": float(max_sim)
+                            })
+            
+            # Setiap 100 frame, unggah kemajuan (partial cache) ke server
+            if frame_idx % 100 == 0:
+                current_dur = accumulated_time + (time.time() - start_processing_time)
+                payload = {
+                    "metadata": {
+                        "processing_duration_s": round(current_dur, 2),
+                        "processed_by": cl_client.client_id,
+                        "processed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "is_complete": False,
+                        "last_frame": frame_idx
+                    },
+                    "detections": detection_cache
+                }
+                try:
+                    requests.post(f"{cl_client.server_url}{api_video_cache.format(video_name=cache_key)}", json=payload, timeout=10)
+                except Exception as e:
+                    cl_client.logger.warning(f"Gagal mengirim partial cache: {e}")
         
         cap.release()
-        cl_client.logger.info(f"[EDGE PROCESS] Selesai mendeteksi video {video_name}. Mengirim {len(detection_cache)} data ke cache server...")
+        total_duration = accumulated_time + (time.time() - start_processing_time)
+        cl_client.logger.info(f"[EDGE PROCESS] Selesai mendeteksi video {video_name}. Durasi total: {total_duration:.2f} detik. Mengirim {len(detection_cache)} data ke cache server...")
+        
+        payload = {
+            "metadata": {
+                "processing_duration_s": round(total_duration, 2),
+                "processed_by": cl_client.client_id,
+                "processed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "is_complete": True,
+                "last_frame": frame_idx
+            },
+            "detections": detection_cache
+        }
         
         try:
-            res = requests.post(f"{cl_client.server_url}{api_video_cache.format(video_name=video_name)}", json=detection_cache, timeout=10800)
+            res = requests.post(f"{cl_client.server_url}{api_video_cache.format(video_name=cache_key)}", json=payload, timeout=10800)
             if res.status_code == 200:
                 cl_client.logger.success(f"[EDGE PROCESS SUCCESS] Cache deteksi berhasil disimpan untuk {video_name}!")
             else:
@@ -539,6 +661,11 @@ async def stream_processed_video(start_second: float = 0.0):
                     
                     # Deteksi seluruh wajah di dalam frame (Multi-Face)
                     detected_faces = image_processor.detect_face(img_pil, keep_all=True)
+                    if isinstance(detected_faces, list):
+                        detected_faces.sort(key=lambda x: x[2], reverse=True)
+                        detected_faces = detected_faces[:3]
+                    else:
+                        detected_faces = []
                     
                     current_face_centers = []
                     for face_tensor, box, prob in detected_faces:

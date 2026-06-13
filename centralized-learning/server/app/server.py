@@ -1,6 +1,7 @@
 import os
 import time
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
@@ -12,11 +13,11 @@ from .config import ECONOMICS, TRAINING_PARAMS
 from .utils.logging import init_logger, get_logger
 
 class CentralizedServerManager:
-# ... (rest of class)
     # Manajer Utama Dashboard Server Terpusat
     # Melacak status pelatihan, fase aktif, dan metrik performa model global.
     
     def __init__(self):
+        self.lock = threading.RLock()
         self.is_running = False
         self.current_phase = "Standby"
         self.upload_requested = False
@@ -161,55 +162,60 @@ class CentralizedServerManager:
                 self.logger.error(f"Gagal memuat pengaturan: {e}")
 
     def save_settings(self, new_settings: dict):
-        try:
-            self.default_epochs = int(new_settings.get("epochs", self.default_epochs))
-            self.default_batch_size = int(new_settings.get("batch_size", self.default_batch_size))
-            self.inference_threshold = float(new_settings.get("threshold", self.inference_threshold))
-            
-            os.makedirs(os.path.dirname(self.settings_path), exist_ok=True)
-            with open(self.settings_path, 'w') as f:
-                json.dump({
-                    "epochs": self.default_epochs,
-                    "batch_size": self.default_batch_size,
-                    "threshold": self.inference_threshold
-                }, f)
-            self.update_logs("[OK] Pengaturan sistem berhasil diperbarui.")
-            return True
-        except Exception as e:
-            self.update_logs(f"[ERROR] Gagal menyimpan pengaturan: {e}")
-            return False
+        with self.lock:
+            try:
+                self.default_epochs = int(new_settings.get("epochs", self.default_epochs))
+                self.default_batch_size = int(new_settings.get("batch_size", self.default_batch_size))
+                self.inference_threshold = float(new_settings.get("threshold", self.inference_threshold))
+                
+                os.makedirs(os.path.dirname(self.settings_path), exist_ok=True)
+                with open(self.settings_path, 'w') as f:
+                    json.dump({
+                        "epochs": self.default_epochs,
+                        "batch_size": self.default_batch_size,
+                        "threshold": self.inference_threshold
+                    }, f)
+                self.update_logs("[OK] Pengaturan sistem berhasil diperbarui.")
+                return True
+            except Exception as e:
+                self.update_logs(f"[ERROR] Gagal menyimpan pengaturan: {e}")
+                return False
 
     def save_inference_logs(self):
         """Menyimpan log inferensi ke file JSON agar persisten."""
-        try:
-            logs = self.metrics.get("inference_logs", [])
-            os.makedirs(os.path.dirname(self.inference_logs_path), exist_ok=True)
-            with open(self.inference_logs_path, "w") as f:
-                json.dump(logs, f, indent=4)
-        except Exception as e:
-            self.logger.error(f"Gagal menyimpan log inferensi: {e}")
+        with self.lock:
+            try:
+                logs = self.metrics.get("inference_logs", [])
+                os.makedirs(os.path.dirname(self.inference_logs_path), exist_ok=True)
+                with open(self.inference_logs_path, "w") as f:
+                    json.dump(logs, f, indent=4)
+            except Exception as e:
+                self.logger.error(f"Gagal menyimpan log inferensi: {e}")
 
     def load_inference_logs(self):
         """Memuat log inferensi dari file JSON saat startup."""
-        if os.path.exists(self.inference_logs_path):
-            try:
-                with open(self.inference_logs_path, "r") as f:
-                    self.metrics["inference_logs"] = json.load(f)
-                self.logger.info(f"Berhasil memulihkan {len(self.metrics['inference_logs'])} log inferensi.")
-            except Exception as e:
-                self.logger.error(f"Gagal memuat log inferensi: {e}")
+        with self.lock:
+            if os.path.exists(self.inference_logs_path):
+                try:
+                    with open(self.inference_logs_path, "r") as f:
+                        self.metrics["inference_logs"] = json.load(f)
+                    self.logger.info(f"Berhasil memulihkan {len(self.metrics['inference_logs'])} log inferensi.")
+                except Exception as e:
+                    self.logger.error(f"Gagal memuat log inferensi: {e}")
 
     def start_phase(self, phase_name):
         # Menandai awal dari fase alur kerja penelitian
-        self.is_running = True
-        self.current_phase = phase_name
-        if phase_name == "Import Data": self.start_time = time.time()
-        self.update_logs(f"Fase {phase_name} dimulai.")
+        with self.lock:
+            self.is_running = True
+            self.current_phase = phase_name
+            if phase_name == "Import Data": self.start_time = time.time()
+            self.update_logs(f"Fase {phase_name} dimulai.")
 
     def end_phase(self):
         # Mengembalikan status ke Standby setelah fase selesai
-        self.is_running = False
-        self.current_phase = "Standby"
+        with self.lock:
+            self.is_running = False
+            self.current_phase = "Standby"
 
     def update_logs(self, msg):
         """Menambahkan log baru ke memori dan file persisten (Wrapper ke Logger)."""
@@ -222,58 +228,62 @@ class CentralizedServerManager:
 
     def update_received_data(self, upload_dir):
         # Mendata NRP mahasiswa yang datanya berhasil diterima dari terminal
-        if os.path.exists(upload_dir):
-            self.received_data = [d for d in os.listdir(upload_dir) if os.path.isdir(os.path.join(upload_dir, d))]
+        with self.lock:
+            if os.path.exists(upload_dir):
+                self.received_data = [d for d in os.listdir(upload_dir) if os.path.isdir(os.path.join(upload_dir, d))]
 
     def register_upload(self, edge_id, nrp_list):
         # Mencatat siapa yang mengunggah data apa untuk atribusi yang akurat
-        for nrp in nrp_list:
-            self.uploader_map[nrp] = edge_id
+        with self.lock:
+            for nrp in nrp_list:
+                self.uploader_map[nrp] = edge_id
 
     def increment_version(self, dbs: Session):
         # Sinkronisasi versi model dari database untuk keakuratan dashboard
-        try:
-            version_count = dbs.query(models.ModelVersion).count()
-            self.model_version = version_count
-            self.update_logs(f"Versi Model Global naik ke v{self.model_version}")
-        except Exception as e:
-            self.model_version += 1
-            self.update_logs(f"Gagal sinkronisasi DB, fallback increment: v{self.model_version}")
+        with self.lock:
+            try:
+                version_count = dbs.query(models.ModelVersion).count()
+                self.model_version = version_count
+                self.update_logs(f"Versi Model Global naik ke v{self.model_version}")
+            except Exception as e:
+                self.model_version += 1
+                self.update_logs(f"Gagal sinkronisasi DB, fallback increment: v{self.model_version}")
 
     def update_metrics(self, new_data):
         # Memperbarui metrik performa dan estimasi biaya
         # Penggabungan riwayat epoch tanpa menimpa data yang lama
-        if "epoch_history" in new_data:
-            new_history = new_data.pop("epoch_history")
-            existing_epochs = [h["epoch"] for h in self.metrics["epoch_history"]]
-            for h in new_history:
-                if h["epoch"] not in existing_epochs:
-                    self.metrics["epoch_history"].append(h)
-        
-        self.metrics.update(new_data)
-        
-        # Transmisi: Upload + Download
-        upload_mb = self.metrics.get("upload_volume_mb", 0)
-        download_mb = self.metrics.get("download_volume_mb", 0)
-        total_mb = upload_mb + download_mb
-        
-        # Hitung biaya berdasarkan per-MB (Rp 3,25 / MB)
-        self.metrics["transmission_cost_idr"] = round(total_mb * 3.25, 2)
-        
-        # Komputasi: kWh -> IDR
-        energy_kwh = self.metrics.get("compute_energy_kwh", 0)
-        if energy_kwh == 0:
-            duration_s = self.metrics.get("training_duration_s", 0)
-            if duration_s == 0:
-                duration_s = self.metrics.get("total_round_time_s", 0)
+        with self.lock:
+            if "epoch_history" in new_data:
+                new_history = new_data.pop("epoch_history")
+                existing_epochs = [h["epoch"] for h in self.metrics["epoch_history"]]
+                for h in new_history:
+                    if h["epoch"] not in existing_epochs:
+                        self.metrics["epoch_history"].append(h)
             
-            duration_h = duration_s / 3600
-            power_kw = ECONOMICS["estimated_server_power_kw"]
-            energy_kwh = duration_h * power_kw
-            self.metrics["compute_energy_kwh"] = round(energy_kwh, 6)
+            self.metrics.update(new_data)
             
-        cost_per_kwh = ECONOMICS["compute_cost_per_kwh"] # Rp 1.444,70
-        self.metrics["compute_cost_idr"] = round(energy_kwh * cost_per_kwh, 2)
+            # Transmisi: Upload + Download
+            upload_mb = self.metrics.get("upload_volume_mb", 0)
+            download_mb = self.metrics.get("download_volume_mb", 0)
+            total_mb = upload_mb + download_mb
+            
+            # Hitung biaya berdasarkan per-MB (Rp 3,25 / MB)
+            self.metrics["transmission_cost_idr"] = round(total_mb * 3.25, 2)
+            
+            # Komputasi: kWh -> IDR
+            energy_kwh = self.metrics.get("compute_energy_kwh", 0)
+            if energy_kwh == 0:
+                duration_s = self.metrics.get("training_duration_s", 0)
+                if duration_s == 0:
+                    duration_s = self.metrics.get("total_round_time_s", 0)
+                
+                duration_h = duration_s / 3600
+                power_kw = ECONOMICS["estimated_server_power_kw"]
+                energy_kwh = duration_h * power_kw
+                self.metrics["compute_energy_kwh"] = round(energy_kwh, 6)
+                
+            cost_per_kwh = ECONOMICS["compute_cost_per_kwh"] # Rp 1.444,70
+            self.metrics["compute_cost_idr"] = round(energy_kwh * cost_per_kwh, 2)
 
     def save_training_round(self, db, round_num, loss, accuracy, val_loss=None, val_accuracy=None, duration=0, energy=0, upload=0, download=0, start_time=None):
         # Menyimpan hasil ronde ke Database Postgres
@@ -299,67 +309,68 @@ class CentralizedServerManager:
 
     def get_status(self, db=None):
         # Mengembalikan status lengkap server untuk dashboard UI
-        active_clients = []
-        if db:
-            clients = db.query(models.Client).all()
-            
-            now_wib = datetime.now(timezone(timedelta(hours=7)))
-            db_needs_commit = False
-            
-            for c in clients:
-                status = "offline"
-                wib_time_str = "-"
+        with self.lock:
+            active_clients = []
+            if db:
+                clients = db.query(models.Client).all()
                 
-                if c.last_seen:
-                    # Konversi waktu database naive (disimpan dalam UTC) ke WIB
-                    dt = c.last_seen
-                    if dt.tzinfo is None:
-                        wib_dt = dt.replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=7)))
-                    else:
-                        wib_dt = dt.astimezone(timezone(timedelta(hours=7)))
-                    wib_time_str = wib_dt.strftime("%Y-%m-%d %H:%M:%S WIB")
+                now_wib = datetime.now(timezone(timedelta(hours=7)))
+                db_needs_commit = False
+                
+                for c in clients:
+                    status = "offline"
+                    wib_time_str = "-"
                     
-                    # Jika detak jantung (heartbeat) dikirim dalam 20 detik terakhir, terminal dinyatakan online
-                    if (now_wib - wib_dt).total_seconds() <= 20:
-                        status = "online"
-                
-                # Perbarui status di database jika terjadi perubahan
-                if c.status != status:
-                    c.status = status
-                    db.add(c)
-                    db_needs_commit = True
-                
-                active_clients.append({
-                    "id": c.edge_id,
-                    "ip": c.ip_address,
-                    "status": status.upper(),
-                    "last_seen": wib_time_str
-                })
-                
-            if db_needs_commit:
+                    if c.last_seen:
+                        # Konversi waktu database naive (disimpan dalam UTC) ke WIB
+                        dt = c.last_seen
+                        if dt.tzinfo is None:
+                            wib_dt = dt.replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=7)))
+                        else:
+                            wib_dt = dt.astimezone(timezone(timedelta(hours=7)))
+                        wib_time_str = wib_dt.strftime("%Y-%m-%d %H:%M:%S WIB")
+                        
+                        # Jika detak jantung (heartbeat) dikirim dalam 20 detik terakhir, terminal dinyatakan online
+                        if (now_wib - wib_dt).total_seconds() <= 20:
+                            status = "online"
+                    
+                    # Perbarui status di database jika terjadi perubahan
+                    if c.status != status:
+                        c.status = status
+                        db.add(c)
+                        db_needs_commit = True
+                    
+                    active_clients.append({
+                        "id": c.edge_id,
+                        "ip": c.ip_address,
+                        "status": status.upper(),
+                        "last_seen": wib_time_str
+                    })
+                    
+                if db_needs_commit:
+                    try:
+                        db.commit()
+                    except Exception as e:
+                        db.rollback()
+                        self.logger.error(f"Gagal commit status client terupdate: {e}")
+                        
                 try:
-                    db.commit()
-                except Exception as e:
-                    db.rollback()
-                    self.logger.error(f"Gagal commit status client terupdate: {e}")
-                    
-            try:
-                # Sinkronkan versi model dengan database
-                self.model_version = db.query(models.ModelVersion).count()
-            except: pass
+                    # Sinkronkan versi model dengan database
+                    self.model_version = db.query(models.ModelVersion).count()
+                except: pass
 
-        return {
-            "is_running": self.is_running,
-            "current_phase": self.current_phase,
-            "upload_requested": self.upload_requested,
-            "metrics": self.metrics,
-            "current_logs": self.current_logs,
-            "received_data": self.received_data,
-            "model_version": self.model_version,
-            "default_epochs": self.default_epochs,
-            "default_batch_size": self.default_batch_size,
-            "inference_threshold": self.inference_threshold,
-            "uptime": int(time.time() - self.start_time) if self.start_time > 0 else 0,
-            "active_clients": active_clients,
-            "inference_logs": self.metrics.get("inference_logs", [])
-        }
+            return {
+                "is_running": self.is_running,
+                "current_phase": self.current_phase,
+                "upload_requested": self.upload_requested,
+                "metrics": self.metrics,
+                "current_logs": self.current_logs,
+                "received_data": self.received_data,
+                "model_version": self.model_version,
+                "default_epochs": self.default_epochs,
+                "default_batch_size": self.default_batch_size,
+                "inference_threshold": self.inference_threshold,
+                "uptime": int(time.time() - self.start_time) if self.start_time > 0 else 0,
+                "active_clients": active_clients,
+                "inference_logs": self.metrics.get("inference_logs", [])
+            }

@@ -192,7 +192,7 @@ async def receive_inference_log(data: dict):
         "client_id": client_id,
         "user_id": user_id,
         "confidence": f"{confidence:.4f}",
-        "latency": f"{latency}ms",
+        "latency": latency,
         "status": status
     }
     
@@ -637,13 +637,26 @@ async def get_video_cache(video_name: str):
     video_name = "".join(c for c in video_name if c.isalnum() or c in "._-").strip()
     cache_path = os.path.join(VIDEO_CACHES_DIR, f"{video_name}.json")
     if os.path.exists(cache_path):
-        with open(cache_path, "r") as f:
-            data = json.load(f)
-        return {"status": "success", "cached": True, "data": data}
-    return {"status": "success", "cached": False, "data": []}
+        try:
+            with open(cache_path, "r") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                data = {
+                    "metadata": {
+                        "processing_duration_s": 0.0,
+                        "processed_by": "unknown",
+                        "is_complete": True,
+                        "processed_at": ""
+                    },
+                    "detections": data
+                }
+            return {"status": "success", "cached": True, "data": data}
+        except Exception as e:
+            return {"status": "error", "message": f"Gagal membaca cache: {e}"}
+    return {"status": "success", "cached": False, "data": {"metadata": {"is_complete": False}, "detections": []}}
 
 @app.post(api_video_cache)
-async def save_video_cache(video_name: str, cache_data: list = Body(...)):
+async def save_video_cache(video_name: str, cache_data: dict = Body(...)):
     """Menyimpan metadata koordinat wajah (bounding boxes) ke server cache."""
     video_name = "".join(c for c in video_name if c.isalnum() or c in "._-").strip()
     cache_path = os.path.join(VIDEO_CACHES_DIR, f"{video_name}.json")
@@ -667,6 +680,39 @@ async def delete_video_cache(video_name: str):
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
+@app.get("/api/video/caches")
+async def list_video_caches():
+    """Mengembalikan daftar semua berkas cache video yang tersedia beserta metadata singkat."""
+    caches = []
+    if os.path.exists(VIDEO_CACHES_DIR):
+        for f in os.listdir(VIDEO_CACHES_DIR):
+            if f.endswith(".json"):
+                cache_path = os.path.join(VIDEO_CACHES_DIR, f)
+                try:
+                    with open(cache_path, "r") as file:
+                        data = json.load(file)
+                    
+                    if isinstance(data, list):
+                        caches.append({
+                            "cache_name": f[:-5],
+                            "processed_by": "unknown",
+                            "processing_duration_s": 0.0,
+                            "is_complete": True,
+                            "last_frame": 0
+                        })
+                    else:
+                        metadata = data.get("metadata", {})
+                        caches.append({
+                            "cache_name": f[:-5],
+                            "processed_by": metadata.get("processed_by", "unknown"),
+                            "processing_duration_s": metadata.get("processing_duration_s", 0.0),
+                            "is_complete": metadata.get("is_complete", False),
+                            "last_frame": metadata.get("last_frame", 0)
+                        })
+                except Exception:
+                    pass
+    return {"status": "success", "caches": caches}
+
 @app.delete(api_video_delete)
 async def delete_video(video_name: str):
     """Menghapus file video dan file cache koordinat wajah dari disk server."""
@@ -674,8 +720,6 @@ async def delete_video(video_name: str):
     
     # Path video (.mp4)
     video_path = os.path.join(STORED_VIDEOS_DIR, video_name)
-    # Path cache (.json)
-    cache_path = os.path.join(VIDEO_CACHES_DIR, f"{video_name}.json")
     
     deleted_files = []
     try:
@@ -683,9 +727,14 @@ async def delete_video(video_name: str):
             os.remove(video_path)
             deleted_files.append(video_path)
         
-        if os.path.exists(cache_path):
-            os.remove(cache_path)
-            deleted_files.append(cache_path)
+        # Hapus semua file cache yang berhubungan dengan video ini (misal: client-1_video.mp4.json atau video.mp4.json)
+        if os.path.exists(VIDEO_CACHES_DIR):
+            for f in os.listdir(VIDEO_CACHES_DIR):
+                if f.endswith(".json"):
+                    if f == f"{video_name}.json" or f.endswith(f"_{video_name}.json"):
+                        cache_path = os.path.join(VIDEO_CACHES_DIR, f)
+                        os.remove(cache_path)
+                        deleted_files.append(cache_path)
             
         gc.collect()
         

@@ -8,6 +8,7 @@ import copy
 import tempfile
 import shutil
 import numpy as np
+import threading
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from app.db.db import SessionLocal
@@ -344,6 +345,7 @@ class FLServerManager:
     # Menyimpan informasi status pelatihan, metrik performa, dan log aktivitas.
     
     def __init__(self):
+        self.lock = threading.RLock()
         self.session_id = None
         self.is_running = False
         self.current_phase = "idle"
@@ -423,53 +425,57 @@ class FLServerManager:
 
     def load_settings(self):
         """Memuat pengaturan server dari file JSON."""
-        if os.path.exists(self.settings_path):
-            try:
-                with open(self.settings_path, "r") as f:
-                    settings = json.load(f)
-                    self.inference_threshold = 0.7
-                    self.default_batch_size = settings.get("batch_size", 32)
-                    self.default_rounds = settings.get("rounds", 10)
-                    self.default_epochs = settings.get("epochs", 1)
-                    self.default_min_clients = settings.get("min_clients", 2)
-                self.logger.info(f"Pengaturan dimuat dari {self.settings_path} (Threshold dipaksa ke 0.7)")
-                self.save_settings()
-            except Exception as e:
-                self.logger.error(f"Gagal memuat pengaturan: {e}")
+        with self.lock:
+            if os.path.exists(self.settings_path):
+                try:
+                    with open(self.settings_path, "r") as f:
+                        settings = json.load(f)
+                        self.inference_threshold = 0.7
+                        self.default_batch_size = settings.get("batch_size", 32)
+                        self.default_rounds = settings.get("rounds", 10)
+                        self.default_epochs = settings.get("epochs", 1)
+                        self.default_min_clients = settings.get("min_clients", 2)
+                    self.logger.info(f"Pengaturan dimuat dari {self.settings_path} (Threshold dipaksa ke 0.7)")
+                    self.save_settings()
+                except Exception as e:
+                    self.logger.error(f"Gagal memuat pengaturan: {e}")
 
     def save_inference_logs(self):
         """Menyimpan log inferensi ke file JSON agar persisten."""
-        try:
-            logs = self.metrics.get("inference_logs", [])
-            with open(self.inference_logs_path, "w") as f:
-                json.dump(logs, f, indent=4)
-        except Exception as e:
-            self.logger.error(f"Gagal menyimpan log inferensi: {e}")
+        with self.lock:
+            try:
+                logs = self.metrics.get("inference_logs", [])
+                with open(self.inference_logs_path, "w") as f:
+                    json.dump(logs, f, indent=4)
+            except Exception as e:
+                self.logger.error(f"Gagal menyimpan log inferensi: {e}")
 
     def load_inference_logs(self):
         """Memuat log inferensi dari file JSON saat startup."""
-        if os.path.exists(self.inference_logs_path):
-            try:
-                with open(self.inference_logs_path, "r") as f:
-                    self.metrics["inference_logs"] = json.load(f)
-                self.logger.info(f"Berhasil memulihkan {len(self.metrics['inference_logs'])} log inferensi.")
-            except Exception as e:
-                self.logger.error(f"Gagal memuat log inferensi: {e}")
+        with self.lock:
+            if os.path.exists(self.inference_logs_path):
+                try:
+                    with open(self.inference_logs_path, "r") as f:
+                        self.metrics["inference_logs"] = json.load(f)
+                    self.logger.info(f"Berhasil memulihkan {len(self.metrics['inference_logs'])} log inferensi.")
+                except Exception as e:
+                    self.logger.error(f"Gagal memuat log inferensi: {e}")
 
     def save_settings(self):
         """Menyimpan pengaturan server ke file JSON."""
-        try:
-            settings = {
-                "inference_threshold": self.inference_threshold,
-                "batch_size": getattr(self, 'default_batch_size', 32),
-                "rounds": getattr(self, 'default_rounds', 10),
-                "epochs": getattr(self, 'default_epochs', 1),
-                "min_clients": getattr(self, 'default_min_clients', 2)
-            }
-            with open(self.settings_path, "w") as f:
-                json.dump(settings, f, indent=4)
-        except Exception as e:
-            self.logger.error(f"Gagal menyimpan pengaturan: {e}")
+        with self.lock:
+            try:
+                settings = {
+                    "inference_threshold": self.inference_threshold,
+                    "batch_size": getattr(self, 'default_batch_size', 32),
+                    "rounds": getattr(self, 'default_rounds', 10),
+                    "epochs": getattr(self, 'default_epochs', 1),
+                    "min_clients": getattr(self, 'default_min_clients', 2)
+                }
+                with open(self.settings_path, "w") as f:
+                    json.dump(settings, f, indent=4)
+            except Exception as e:
+                self.logger.error(f"Gagal menyimpan pengaturan: {e}")
 
     def _load_log_from_file(self):
         # Log sudah ditangani oleh class Logger
@@ -477,150 +483,155 @@ class FLServerManager:
 
     def _load_persistence(self):
         """Memuat ulang status dari database dengan logika retry dan logging yang sangat detail."""
-        self.logger.info("Memulai pemulihan status server Federated...")
-        
-        max_retries = 10
-        retry_delay = 5
-        
-        for i in range(max_retries):
-            db = SessionLocal()
-            try:
-                # Muat Versi Model Terbaru
-                latest_model = db.query(GlobalModel).order_by(GlobalModel.last_updated.desc()).first()
-                if latest_model:
-                    self.model_version = latest_model.version
-                    self.logger.info(f"Database terhubung. Versi Model saat ini: v{self.model_version}")
+        with self.lock:
+            self.logger.info("Memulai pemulihan status server Federated...")
+            
+            max_retries = 10
+            retry_delay = 5
+            
+            for i in range(max_retries):
+                db = SessionLocal()
+                try:
+                    # Muat Versi Model Terbaru
+                    latest_model = db.query(GlobalModel).order_by(GlobalModel.last_updated.desc()).first()
+                    if latest_model:
+                        self.model_version = latest_model.version
+                        self.logger.info(f"Database terhubung. Versi Model saat ini: v{self.model_version}")
 
-                # Muat riwayat ronde (Hanya sesi terbaru agar tidak duplikat)
-                latest_round = db.query(FLRound).order_by(FLRound.timestamp.desc()).first()
-                if latest_round:
-                    latest_session_id = latest_round.session_id
-                    rounds = db.query(FLRound).filter_by(session_id=latest_session_id).order_by(FLRound.round_number.asc()).all()
-                    self.logger.info(f"Menemukan {len(rounds)} ronde federated dari sesi {latest_session_id}.")
-                else:
-                    rounds = []
-                    self.logger.info("Tidak ada riwayat ronde di database.")
-                
-                if rounds:
-                    history = []
-                    total_energy = 0
-                    total_duration = 0
+                    # Muat riwayat ronde (Hanya sesi terbaru agar tidak duplikat)
+                    latest_round = db.query(FLRound).order_by(FLRound.timestamp.desc()).first()
+                    if latest_round:
+                        latest_session_id = latest_round.session_id
+                        rounds = db.query(FLRound).filter_by(session_id=latest_session_id).order_by(FLRound.round_number.asc()).all()
+                        self.logger.info(f"Menemukan {len(rounds)} ronde federated dari sesi {latest_session_id}.")
+                    else:
+                        rounds = []
+                        self.logger.info("Tidak ada riwayat ronde di database.")
                     
-                    for r in rounds:
-                        try:
-                            m = json.loads(r.metrics) if r.metrics else {}
-                            clients = m.get("clients", {})
-                            # Ensure epoch_history in each client is parsed if it's a string
-                            for cid, c_data in clients.items():
-                                if "epoch_history" in c_data and isinstance(c_data["epoch_history"], str):
-                                    try:
-                                        c_data["epoch_history"] = json.loads(c_data["epoch_history"])
-                                    except:
-                                        pass
+                    if rounds:
+                        history = []
+                        total_energy = 0
+                        total_duration = 0
+                        
+                        for r in rounds:
+                            try:
+                                m = json.loads(r.metrics) if r.metrics else {}
+                                clients = m.get("clients", {})
+                                # Ensure epoch_history in each client is parsed if it's a string
+                                for cid, c_data in clients.items():
+                                    if "epoch_history" in c_data and isinstance(c_data["epoch_history"], str):
+                                        try:
+                                            c_data["epoch_history"] = json.loads(c_data["epoch_history"])
+                                        except:
+                                            pass
 
-                            history.append({
-                                "round": r.round_number if r.round_number is not None else 0,
-                                "timestamp": r.timestamp.strftime("%H:%M:%S") if r.timestamp else "-",
-                                "server": m,
-                                "clients": clients
-                            })
-                            # Update global metrics
-                            self.metrics["accuracy"] = float(m.get("accuracy", 0))
-                            self.metrics["loss"] = float(m.get("loss", 0))
-                            
-                            # Agregasi Ekonomi (NEW)
-                            s_energy = m.get("compute_energy_kwh", 0)
-                            if s_energy > total_energy:
-                                total_energy = s_energy
-                            total_duration += m.get("total_round_time_s", 0)
-                        except Exception as e:
-                            self.logger.warn(f"Gagal mengurai data ronde {r.round_number}: {e}")
+                                history.append({
+                                    "round": r.round_number if r.round_number is not None else 0,
+                                    "timestamp": r.timestamp.strftime("%H:%M:%S") if r.timestamp else "-",
+                                    "server": m,
+                                    "clients": clients
+                                })
+                                # Update global metrics
+                                self.metrics["accuracy"] = float(m.get("accuracy", 0))
+                                self.metrics["loss"] = float(m.get("loss", 0))
+                                
+                                # Agregasi Ekonomi (NEW)
+                                s_energy = m.get("compute_energy_kwh", 0)
+                                if s_energy > total_energy:
+                                    total_energy = s_energy
+                                total_duration += m.get("total_round_time_s", 0)
+                            except Exception as e:
+                                self.logger.warn(f"Gagal mengurai data ronde {r.round_number}: {e}")
 
-                    self.metrics["round_history"] = history
-                    self.metrics["compute_energy_kwh"] = total_energy
-                    self.metrics["total_round_time_s"] = total_duration
+                        self.metrics["round_history"] = history
+                        self.metrics["compute_energy_kwh"] = total_energy
+                        self.metrics["total_round_time_s"] = total_duration
+                        
+                        # Pemulihan data penggunaan bandwidth
+                        total_backbone = 0
+                        total_registry = 0
+                        for r in history:
+                            s = r.get("server", {})
+                            total_backbone += s.get("backbone_sync_mb", 0)
+                            total_registry += s.get("registry_sync_mb", 0)
+                        
+                        self.metrics["backbone_sync_mb"] = total_backbone
+                        self.metrics["registry_sync_mb"] = total_registry
+                        
+                        # Pemulihan client id unik dari riwayat
+                        unique_ids = set()
+                        for r in history:
+                            if "clients" in r:
+                                unique_ids.update(r["clients"].keys())
+                        self.metrics["unique_client_ids"] = list(unique_ids)
+                        
+                        # Update estimasi biaya/transmisi berdasarkan history yang dimuat
+                        self.update_metrics({})
+                        self.logger.info(f"Berhasil memulihkan {len(history)} ronde ke dashboard FL.")
+                        self.logger.info(f"Ditemukan {len(unique_ids)} client aktif dari riwayat: {list(unique_ids)}")
                     
-                    # Pemulihan data penggunaan bandwidth
-                    total_backbone = 0
-                    total_registry = 0
-                    for r in history:
-                        s = r.get("server", {})
-                        total_backbone += s.get("backbone_sync_mb", 0)
-                        total_registry += s.get("registry_sync_mb", 0)
+                    # Muat log inferensi dari file
+                    self.load_inference_logs()
                     
-                    self.metrics["backbone_sync_mb"] = total_backbone
-                    self.metrics["registry_sync_mb"] = total_registry
-                    
-                    # Pemulihan client id unik dari riwayat
-                    unique_ids = set()
-                    for r in history:
-                        if "clients" in r:
-                            unique_ids.update(r["clients"].keys())
-                    self.metrics["unique_client_ids"] = list(unique_ids)
-                    
-                    # Update estimasi biaya/transmisi berdasarkan history yang dimuat
-                    self.update_metrics({})
-                    self.logger.info(f"Berhasil memulihkan {len(history)} ronde ke dashboard FL.")
-                    self.logger.info(f"Ditemukan {len(unique_ids)} client aktif dari riwayat: {list(unique_ids)}")
-                
-                # Muat log inferensi dari file
-                self.load_inference_logs()
-                
-                db.close()
-                return # Berhasil
-            except Exception as e:
-                self.logger.warn(f"Percobaan {i+1}/{max_retries} gagal: {e}")
-                db.close()
-                if i < max_retries - 1:
-                    time.sleep(retry_delay)
-                else:
-                    self.logger.error("Gagal total memulihkan status FL. Dashboard mungkin akan kosong.")
+                    db.close()
+                    return # Berhasil
+                except Exception as e:
+                    self.logger.warn(f"Percobaan {i+1}/{max_retries} gagal: {e}")
+                    db.close()
+                    if i < max_retries - 1:
+                        time.sleep(retry_delay)
+                    else:
+                        self.logger.error("Gagal total memulihkan status FL. Dashboard mungkin akan kosong.")
 
     def increment_version(self):
-        self.model_version += 1
-        
-        # Persistensi ke Database
-        db = SessionLocal()
-        try:
-            global_model = db.query(GlobalModel).first()
-            if global_model:
-                global_model.version = self.model_version
-                global_model.last_updated = datetime.utcnow()
-                db.commit()
-                self.logger.success(f"Database GlobalModel diperbarui ke v{self.model_version}")
-        except Exception as e:
-            self.logger.error(f"Gagal menyimpan kenaikan versi model: {e}")
-            db.rollback()
-        finally:
-            db.close()
+        with self.lock:
+            self.model_version += 1
+            
+            # Persistensi ke Database
+            db = SessionLocal()
+            try:
+                global_model = db.query(GlobalModel).first()
+                if global_model:
+                    global_model.version = self.model_version
+                    global_model.last_updated = datetime.utcnow()
+                    db.commit()
+                    self.logger.success(f"Database GlobalModel diperbarui ke v{self.model_version}")
+            except Exception as e:
+                self.logger.error(f"Gagal menyimpan kenaikan versi model: {e}")
+                db.rollback()
+            finally:
+                db.close()
 
-        self.update_logs(f"Versi Model Global naik ke v{self.model_version}")
-        self.discovery_clients = set() 
-        self.received_data = [] 
+            self.update_logs(f"Versi Model Global naik ke v{self.model_version}")
+            self.discovery_clients = set() 
+            self.received_data = [] 
 
     def start_phase(self, phase_name):
-        self.is_running = True
-        self.current_phase = phase_name.lower().replace(" ", "_")
-        if self.current_phase == "data_prep": self.start_time = datetime.now().timestamp()
-        self.update_logs(f"Fase {phase_name} dimulai.")
+        with self.lock:
+            self.is_running = True
+            self.current_phase = phase_name.lower().replace(" ", "_")
+            if self.current_phase == "data_prep": self.start_time = datetime.now().timestamp()
+            self.update_logs(f"Fase {phase_name} dimulai.")
 
     def end_phase(self, phase_name=None):
-        if phase_name: self.update_logs(f"Fase {phase_name} selesai.")
-        self.is_running = False
-        self.current_phase = "idle"
+        with self.lock:
+            if phase_name: self.update_logs(f"Fase {phase_name} selesai.")
+            self.is_running = False
+            self.current_phase = "idle"
 
     def update_metrics(self, new_data):
         # Memperbarui metrik performa dan estimasi biaya
         # Penggabungan riwayat ronde tanpa menimpa data yang lama
-        if "round_history" in new_data:
-            new_history = new_data.pop("round_history")
-            existing_rounds = [h["round"] for h in self.metrics["round_history"]]
-            for h in new_history:
-                if h["round"] not in existing_rounds:
-                    self.metrics["round_history"].append(h)
+        with self.lock:
+            if "round_history" in new_data:
+                new_history = new_data.pop("round_history")
+                existing_rounds = [h["round"] for h in self.metrics["round_history"]]
+                for h in new_history:
+                    if h["round"] not in existing_rounds:
+                        self.metrics["round_history"].append(h)
 
-        self.metrics.update(new_data)
-        self.update_economics({})
+            self.metrics.update(new_data)
+            self.update_economics({})
 
     # Perhitungan Nilai Ekonomi
     def update_economics(self, new_data):
@@ -703,50 +714,49 @@ class FLServerManager:
 
     # Evaluasi & Konsolidasi Metrik Pelatihan (Akurasi & Loss)
     def record_round_data(self, round_num, server_metrics, client_metrics, db=None):
-        # Mencegah redundansi jika fungsi ini dipanggil ulang untuk ronde yang sama
-        existing_rounds = [h["round"] for h in self.metrics["round_history"]]
-        if round_num in existing_rounds:
-            self.logger.info(f"Ronde {round_num} sudah ada di history, memperbarui data...")
-            for h in self.metrics["round_history"]:
-                if h["round"] == round_num:
-                    h["server"] = server_metrics
-                    h["clients"] = client_metrics
-            return
+        with self.lock:
+            # Mencegah redundansi jika fungsi ini dipanggil ulang untuk ronde yang sama
+            existing_rounds = [h["round"] for h in self.metrics["round_history"]]
+            if round_num in existing_rounds:
+                self.logger.info(f"Ronde {round_num} sudah ada di history, memperbarui data...")
+                for h in self.metrics["round_history"]:
+                    if h["round"] == round_num:
+                        h["server"] = server_metrics
+                        h["clients"] = client_metrics
+                return
 
-        self.logger.info(f"Mencatat data ronde {round_num} dengan {len(client_metrics)} klien...")
-        entry = {
-            "round": round_num,
-            "timestamp": datetime.now(timezone(timedelta(hours=7))).strftime("%H:%M:%S"),
-            "server": server_metrics,
-            "clients": client_metrics
-        }
-        self.metrics["round_history"].append(entry)
-        
-        # Update unique_client_ids dari rekaman data aktual
-        new_cid = None
-        for cid in client_metrics.keys():
-            is_uuid = len(cid) >= 32 and cid.isalnum()
-            if not is_uuid:
-                new_cid = cid
+            self.logger.info(f"Mencatat data ronde {round_num} dengan {len(client_metrics)} klien...")
+            entry = {
+                "round": round_num,
+                "timestamp": datetime.now(timezone(timedelta(hours=7))).strftime("%H:%M:%S"),
+                "server": server_metrics,
+                "clients": client_metrics
+            }
+            self.metrics["round_history"].append(entry)
             
-            if cid not in self.metrics["unique_client_ids"]:
-                self.metrics["unique_client_ids"].append(cid)
-                self.logger.info(f"Klien {cid} berhasil ditambahkan ke daftar unik klien")
+            # Update unique_client_ids dari rekaman data aktual
+            new_cid = None
+            for cid in client_metrics.keys():
+                is_uuid = len(cid) >= 32 and cid.isalnum()
+                if not is_uuid:
+                    new_cid = cid
+                
+                if cid not in self.metrics["unique_client_ids"]:
+                    self.metrics["unique_client_ids"].append(cid)
+                    self.logger.info(f"Klien {cid} berhasil ditambahkan ke daftar unik klien")
 
-        # Pembersihan berkala: Hanya simpan ID yang beneran ada di round_history
-        all_active_ids = set()
-        for r in self.metrics["round_history"]:
-            all_active_ids.update(r["clients"].keys())
-        
-        # Sinkronkan unique_client_ids agar tidak ada ID sampah
-        self.metrics["unique_client_ids"] = [cid for cid in self.metrics["unique_client_ids"] if cid in all_active_ids]
-        
-        pass
-        
-        # Sinkronkan data ekonomi
-        for cid in client_metrics.keys():
-            if cid not in self.metrics["unique_client_ids"]:
-                self.metrics["unique_client_ids"].append(cid)
+            # Pembersihan berkala: Hanya simpan ID yang beneran ada di round_history
+            all_active_ids = set()
+            for r in self.metrics["round_history"]:
+                all_active_ids.update(r["clients"].keys())
+            
+            # Sinkronkan unique_client_ids agar tidak ada ID sampah
+            self.metrics["unique_client_ids"] = [cid for cid in self.metrics["unique_client_ids"] if cid in all_active_ids]
+            
+            # Sinkronkan data ekonomi
+            for cid in client_metrics.keys():
+                if cid not in self.metrics["unique_client_ids"]:
+                    self.metrics["unique_client_ids"].append(cid)
 
     def _get_lr_for_round(self, server_round):
         # LR Schedule (Cosine vs Step)
@@ -775,69 +785,70 @@ class FLServerManager:
 
     def get_status(self, db=None):
         # self.logger.info(f"get_status called. round_history len: {len(self.metrics.get('round_history', []))}")
-        attendance_count = 0
-        active_clients = []
-        if db:
-            attendance_count = db.query(AttendanceRecap).count()
-            clients = db.query(Client).all()
-            
-            now_wib = datetime.now(timezone(timedelta(hours=7)))
-            db_needs_commit = False
-            
-            for c in clients:
-                status = "offline"
-                wib_time_str = "-"
+        with self.lock:
+            attendance_count = 0
+            active_clients = []
+            if db:
+                attendance_count = db.query(AttendanceRecap).count()
+                clients = db.query(Client).all()
                 
-                if c.last_seen:
-                    # Konversi waktu database naive (disimpan dalam UTC) ke WIB
-                    dt = c.last_seen
-                    if dt.tzinfo is None:
-                        wib_dt = dt.replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=7)))
-                    else:
-                        wib_dt = dt.astimezone(timezone(timedelta(hours=7)))
-                    wib_time_str = wib_dt.strftime("%Y-%m-%d %H:%M:%S WIB")
+                now_wib = datetime.now(timezone(timedelta(hours=7)))
+                db_needs_commit = False
+                
+                for c in clients:
+                    status = "offline"
+                    wib_time_str = "-"
                     
-                    # Jika detak jantung (heartbeat) dikirim dalam 20 detik terakhir, terminal dinyatakan online
-                    if (now_wib - wib_dt).total_seconds() <= 20:
-                        status = "online"
+                    if c.last_seen:
+                        # Konversi waktu database naive (disimpan dalam UTC) ke WIB
+                        dt = c.last_seen
+                        if dt.tzinfo is None:
+                            wib_dt = dt.replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=7)))
+                        else:
+                            wib_dt = dt.astimezone(timezone(timedelta(hours=7)))
+                        wib_time_str = wib_dt.strftime("%Y-%m-%d %H:%M:%S WIB")
+                        
+                        # Jika detak jantung (heartbeat) dikirim dalam 20 detik terakhir, terminal dinyatakan online
+                        if (now_wib - wib_dt).total_seconds() <= 20:
+                            status = "online"
+                    
+                    # Perbarui status di database jika terjadi perubahan
+                    if c.status != status:
+                        c.status = status
+                        db.add(c)
+                        db_needs_commit = True
+                    
+                    active_clients.append({
+                        "id": c.edge_id,
+                        "ip": c.ip_address,
+                        "status": status.upper(),
+                        "last_seen": wib_time_str
+                    })
+                    
+                if db_needs_commit:
+                    try:
+                        db.commit()
+                    except Exception as e:
+                        db.rollback()
+                        self.logger.error(f"Gagal commit status client terupdate: {e}")
                 
-                # Perbarui status di database jika terjadi perubahan
-                if c.status != status:
-                    c.status = status
-                    db.add(c)
-                    db_needs_commit = True
-                
-                active_clients.append({
-                    "id": c.edge_id,
-                    "ip": c.ip_address,
-                    "status": status.upper(),
-                    "last_seen": wib_time_str
-                })
-                
-            if db_needs_commit:
-                try:
-                    db.commit()
-                except Exception as e:
-                    db.rollback()
-                    self.logger.error(f"Gagal commit status client terupdate: {e}")
-            
-        return {
-            "is_running": self.is_running,
-            "phase": self.current_phase,
-            "session_id": self.session_id,
-            "metrics": self.metrics,
-            "current_logs": self.current_logs,
-            "received_data": self.received_data,
-            "model_version": self.model_version,
-            "default_rounds": self.default_rounds,
-            "default_epochs": self.default_epochs,
-            "default_min_clients": self.default_min_clients,
-            "inference_threshold": self.inference_threshold,
-            "attendance_count": attendance_count,
-            "uptime": int(datetime.now().timestamp() - self.start_time) if self.start_time > 0 else 0,
-            "active_clients": active_clients,
-            "inference_logs": self.metrics.get("inference_logs", [])
-        }
+            return {
+                "is_running": self.is_running,
+                "phase": self.current_phase,
+                "session_id": self.session_id,
+                "metrics": self.metrics,
+                "current_logs": self.current_logs,
+                "received_data": self.received_data,
+                "model_version": self.model_version,
+                "default_rounds": self.default_rounds,
+                "default_epochs": self.default_epochs,
+                "default_min_clients": self.default_min_clients,
+                "inference_threshold": self.inference_threshold,
+                "attendance_count": attendance_count,
+                "uptime": int(datetime.now().timestamp() - self.start_time) if self.start_time > 0 else 0,
+                "active_clients": active_clients,
+                "inference_logs": self.metrics.get("inference_logs", [])
+            }
 
     def ensure_model_seeded(self, db):
         # Memastikan tabel GlobalModel memiliki bobot awal (Seeding)
@@ -890,62 +901,63 @@ class FLServerManager:
             db.close()
 
     def start_training(self, session_id: str, rounds: int = 10, min_clients: int = 2):
-        self.session_id = session_id
-        self.is_running = True
-        self.default_rounds = rounds  # Track ronde untuk triggering increment versi
-        self.start_phase("Training")
-        self.update_logs(f"Pelatihan Federated dimulai: {rounds} ronde, {min_clients} client.")
-        
-        initial_parameters = None
-        db = SessionLocal()
-        try:
-            self.ensure_model_seeded(db)
-            latest_model = db.query(GlobalModel).order_by(GlobalModel.last_updated.desc()).first()
-            if latest_model and latest_model.weights:
-                loaded = torch.load(io.BytesIO(latest_model.weights), map_location="cpu")
-                
-                # Konversi state_dict kembali ke ndarrays jika perlu
-                if isinstance(loaded, dict):
-                    # Ekstrak params conv untuk Flower fit configuration
-                    sd = loaded
-                    # Sertakan BN agar model antar-client identik (Full Parity)
-                    shared_keys = [k for k in sd.keys() if 
-                                   any(x in k.lower() for x in ['weight', 'bias', 'bn', 'running_', 'num_batches_tracked'])]
-                    weights_np = [sd[k].cpu().numpy() for k in shared_keys]
-                else:
-                    weights_np = loaded
-                
-                initial_parameters = fl.common.ndarrays_to_parameters(weights_np)
-        except Exception as e:
-            self.logger.error(f"Gagal memuat parameter awal: {e}")
-        finally:
-            db.close()
+        with self.lock:
+            self.session_id = session_id
+            self.is_running = True
+            self.default_rounds = rounds  # Track ronde untuk triggering increment versi
+            self.start_phase("Training")
+            self.update_logs(f"Pelatihan Federated dimulai: {rounds} ronde, {min_clients} client.")
+            
+            initial_parameters = None
+            db = SessionLocal()
+            try:
+                self.ensure_model_seeded(db)
+                latest_model = db.query(GlobalModel).order_by(GlobalModel.last_updated.desc()).first()
+                if latest_model and latest_model.weights:
+                    loaded = torch.load(io.BytesIO(latest_model.weights), map_location="cpu")
+                    
+                    # Konversi state_dict kembali ke ndarrays jika perlu
+                    if isinstance(loaded, dict):
+                        # Ekstrak params conv untuk Flower fit configuration
+                        sd = loaded
+                        # Sertakan BN agar model antar-client identik (Full Parity)
+                        shared_keys = [k for k in sd.keys() if 
+                                       any(x in k.lower() for x in ['weight', 'bias', 'bn', 'running_', 'num_batches_tracked'])]
+                        weights_np = [sd[k].cpu().numpy() for k in shared_keys]
+                    else:
+                        weights_np = loaded
+                    
+                    initial_parameters = fl.common.ndarrays_to_parameters(weights_np)
+            except Exception as e:
+                self.logger.error(f"Gagal memuat parameter awal: {e}")
+            finally:
+                db.close()
 
-        # Tentukan versi target untuk sesi ini (Stabilitas Versi: v15 -> v1)
-        target_version = self.model_version + 1
+            # Tentukan versi target untuk sesi ini (Stabilitas Versi: v15 -> v1)
+            target_version = self.model_version + 1
 
-        # Strategi pelatihan FedAvg dengan konfigurasi dinamis (mu=0.05 untuk stabilitas)
-        strategy = SaveModelStrategy(
-            session_id=session_id,
-            manager=self,
-            target_version=target_version,
-            initial_parameters=initial_parameters,
-            fraction_fit=1.0,
-            min_fit_clients=max(1, min_clients // 2),
-            min_available_clients=min_clients,
-            min_evaluate_clients=max(1, min_clients // 2),
-            fit_metrics_aggregation_fn=weighted_average,
-            evaluate_metrics_aggregation_fn=weighted_average,
-            on_fit_config_fn=lambda server_round: {
-                "round": server_round,
-                "total_rounds": rounds,
-                "local_epochs": self.default_epochs,
-                "lr": self._get_lr_for_round(server_round),
-                "mu": 0.05, 
-                "lambda": self.default_lambda,
-                "label_map": json.dumps(self.get_label_map_from_db())
-            },
-        )
+            # Strategi pelatihan FedAvg dengan konfigurasi dinamis (mu=0.05 untuk stabilitas)
+            strategy = SaveModelStrategy(
+                session_id=session_id,
+                manager=self,
+                target_version=target_version,
+                initial_parameters=initial_parameters,
+                fraction_fit=1.0,
+                min_fit_clients=max(1, min_clients // 2),
+                min_available_clients=min_clients,
+                min_evaluate_clients=max(1, min_clients // 2),
+                fit_metrics_aggregation_fn=weighted_average,
+                evaluate_metrics_aggregation_fn=weighted_average,
+                on_fit_config_fn=lambda server_round: {
+                    "round": server_round,
+                    "total_rounds": rounds,
+                    "local_epochs": self.default_epochs,
+                    "lr": self._get_lr_for_round(server_round),
+                    "mu": 0.05, 
+                    "lambda": self.default_lambda,
+                    "label_map": json.dumps(self.get_label_map_from_db())
+                },
+            )
 
         try:
             fl.server.start_server(
@@ -954,10 +966,12 @@ class FLServerManager:
                 strategy=strategy,
             )
             
-            self.update_logs(f"Pelatihan Federated ronde terakhir selesai.")
+            with self.lock:
+                self.update_logs(f"Pelatihan Federated ronde terakhir selesai.")
         finally:
-            self.is_running = False
-            self.end_phase("Training")
+            with self.lock:
+                self.is_running = False
+                self.end_phase("Training")
 
 
 # Instansi Global

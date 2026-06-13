@@ -1,0 +1,28 @@
+\chapter{Kesimpulan dan Saran}
+\label{chap:kesimpulan-saran}
+
+\section{Kesimpulan}
+\label{sec:kesimpulan}
+
+Berdasarkan hasil perancangan, implementasi, dan pengujian yang telah dilakukan, sistem kehadiran berbasis pengenalan wajah menggunakan konsep \textit{Federated Learning} pada lingkungan \textit{Edge Computing} telah berhasil dibangun. Sistem ini diimplementasikan menggunakan model \textit{MobileFaceNet} di dalam \textit{container Docker} pada perangkat Jetson Nano (\textit{Client} 1) dan Raspberry Pi (\textit{Client} 2), dengan \textit{server} agregator terpusat. Melalui sistem ini, keamanan privasi data biometrik mahasiswa terjaga karena seluruh citra wajah mentah disimpan secara lokal di masing-masing perangkat \textit{client}, tanpa perlu dikirim ke \textit{server}.
+
+Adapun hasil perbandingan performa model antara metode \textit{Federated Learning} dan \textit{Centralized Learning} adalah sebagai berikut:
+\begin{enumerate}[itemsep=1pt]
+    \item Kecerdasan model global pada \textit{Federated Learning} mampu menyeimbangi \textit{Centralized Learning} dengan hasil akurasi sebesar 98,16\% dan \textit{validation loss} 0,3599, sedangkan \textit{Centralized Learning} menghasilkan akurasi sebesar 96,93\% dan \textit{validation loss} 0,5457.
+    \item Durasi pelatihan keseluruhan pada \textit{Federated Learning} berjalan jauh lebih lambat yaitu selama 5034,13 detik dibandingkan \textit{Centralized Learning} yang hanya membutuhkan waktu 439,99 detik, akibat adanya waktu tunggu sinkronisasi parameter antar-perangkat.
+    \item Kecepatan pelatihan lokal pada tingkat \textit{client} dipengaruhi oleh spesifikasi RAM, di mana Raspberry Pi (RAM 1 GB) membutuhkan waktu latih rata-rata 334 hingga 384 detik per ronde, sedangkan Jetson Nano (RAM 4 GB) jauh lebih cepat dengan durasi 113 hingga 114 detik per ronde.
+    \item Penggunaan \textit{bandwidth} jaringan pada \textit{Federated Learning} jauh lebih efisien sebesar 159,46 MB dibandingkan \textit{Centralized Learning} yang menghabiskan 1152,34 MB karena harus mengunggah seluruh citra mentah ke \textit{server}.
+    \item Konsumsi energi listrik pada \textit{Federated Learning} lebih besar mencapai 0,089481 kWh akibat durasi pelatihan yang lama pada seluruh perangkat, sedangkan \textit{Centralized Learning} lebih hemat yaitu sebesar 0,012222 kWh karena pemrosesan terpusat selesai secara cepat di tingkat \textit{server}.
+    \item Performa inferensi secara nyata (\textit{real-life}) pada kedua metode menghasilkan tingkat keberhasilan fungsionalitas 100\% pada jarak pemindaian 0,5 meter hingga 3 meter pada kondisi cahaya cukup dan minim dengan tingkat keberhasilan klasifikasi stabil di atas 90\% pada ambang batas kepercayaan 0,7. Latensi inferensi lokal pada Jetson Nano berjalan cepat ($\sim$700 ms) sedangkan pada Raspberry Pi berjalan lambat ($\sim$3100 ms).
+\end{enumerate}
+
+\section{Saran}
+\label{sec:saran}
+
+Berdasarkan keterbatasan sistem serta hasil evaluasi yang diperoleh sepanjang pelaksanaan penelitian ini, beberapa saran yang dapat diajukan untuk pengembangan penelitian selanjutnya adalah sebagai berikut:
+\begin{enumerate}[itemsep=1pt]
+    \item Menggunakan arsitektur model pengenalan wajah alternatif yang lebih modern selain \textit{MobileFaceNet} guna menganalisis perbandingan akurasi dan latensi inferensinya.
+    \item Menerapkan metode deteksi keaktifan wajah (\textit{anti-spoofing}) untuk memperkuat keamanan sistem dari ancaman pemalsuan identitas menggunakan foto atau video.
+    \item Menggunakan perangkat keras \textit{edge} dengan spesifikasi komputasi dan kapasitas RAM yang lebih tinggi (seperti \textit{Jetson Orin Nano} atau perangkat keras sejenis dengan kapasitas RAM di atas 4 GB) agar proses pelatihan terdistribusi dapat berjalan lebih cepat serta mampu menampung skala data latih yang lebih besar (lebih dari 30 subjek).
+    \item Mengekspansi skala pengujian dengan melibatkan lebih dari 30 subjek mahasiswa untuk mengevaluasi keandalan serta skalabilitas model global hasil agregasi secara lebih luas.
+\end{enumerate}

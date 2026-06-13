@@ -8,10 +8,10 @@ __pycache__/
 
 # Distribution / packaging
 .Python
-*.pdf
+#*.pdf
 centralized-learning/docker-log-cl.md
 federated-learning/docker-log-fl.md
-gambar/
+#gambar/
 gambar-ruangan/
 pre/preprocessing.ipynb
 xiaoccer/
