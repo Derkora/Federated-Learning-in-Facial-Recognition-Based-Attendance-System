@@ -192,7 +192,7 @@ async def receive_inference_log(data: dict):
         "client_id": client_id,
         "user_id": user_id,
         "confidence": f"{confidence:.4f}",
-        "latency": f"{latency}ms",
+        "latency": latency,
         "status": status
     }
     

@@ -15,7 +15,7 @@
                 <th style="padding: 12px;">Nama</th>
                 <th style="padding: 12px;">Status</th>
                 <th style="padding: 12px;">Terakhir Terlihat (Hari Ini)</th>
-                <th style="padding: 12px;">Confidence</th>
+                <th style="padding: 12px;">Cosine Similarity</th>
                 <th style="padding: 12px;">Client Asal</th>
             </tr>
         </thead>
@@ -82,7 +82,7 @@
                                 </span>
                             </td>
                             <td>${a.time}</td>
-                            <td>${parseFloat(a.confidence).toFixed(2)}</td>
+                            <td>${parseFloat(a.confidence).toFixed(4).replace('.', ',')}</td>
                             <td><span class="badge" style="background: rgba(79, 70, 229, 0.1); color: #818cf8;">${a.registered_edge_id}</span></td>
                         </tr>
                     `;

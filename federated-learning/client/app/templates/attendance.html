@@ -114,11 +114,11 @@
 
         if (data.matched && data.matched !== "Standby") {
             if (data.matched === "Unknown") {
-                statusCard.innerHTML = `<span style="color: #ef4444;">Unknown (Ditolak)</span> <br><small>${(data.confidence * 100).toFixed(1)}% | ${data.latency_ms}ms</small>`;
+                statusCard.innerHTML = `<span style="color: #ef4444;">Unknown (Ditolak)</span> <br><small>Cosine Similarity: ${parseFloat(data.confidence).toFixed(4).replace('.', ',')} | Latensi: ${data.latency_ms} ms</small>`;
             } else if (data.matched.includes("Error")) {
                 statusCard.innerHTML = `<span style="color: #ef4444;">Error: ${data.message || 'Gagal'}</span>`;
             } else {
-                statusCard.innerHTML = `<span style="color: #10b981;">Diterima: ${data.matched}</span> <br><small>${(data.confidence * 100).toFixed(1)}% | ${data.latency_ms}ms</small>`;
+                statusCard.innerHTML = `<span style="color: #10b981;">Diterima: ${data.matched}</span> <br><small>Cosine Similarity: ${parseFloat(data.confidence).toFixed(4).replace('.', ',')} | Latensi: ${data.latency_ms} ms</small>`;
             }
         }
     }

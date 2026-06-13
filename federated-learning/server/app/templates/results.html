@@ -19,11 +19,10 @@
             <thead>
                 <tr>
                     <th>Ronde</th>
-                    <th>Waktu</th>
                     <th>Loss Global</th>
-                    <th>Acc Global (%)</th>
-                    <th>Val Loss Global</th>
-                    <th>Val Acc Global (%)</th>
+                    <th>Accuracy Global (%)</th>
+                    <th>Validation Loss Global</th>
+                    <th>Validation Accuracy Global (%)</th>
                     <th>Durasi (detik)</th>
                 </tr>
             </thead>
@@ -32,11 +31,10 @@
                 {% for r in status.metrics.round_history %}
                 <tr>
                     <td>{{ r.round }}</td>
-                    <td style="color: #9ca3af;">{{ r.timestamp if r.timestamp is defined else "-" }}</td>
                     <td>{{ "%.4f"|format(r.server.loss)|replace('.', ',') if r.server.loss is defined and r.server.loss is not none else "-" }}</td>
-                    <td>{{ "%.2f"|format(r.server.accuracy * 100)|replace('.', ',') if r.server.accuracy is defined and r.server.accuracy is not none else "-" }}%</td>
+                    <td>{{ "%.2f"|format(r.server.accuracy * 100)|replace('.', ',') if r.server.accuracy is defined and r.server.accuracy is not none else "-" }}</td>
                     <td>{{ "%.4f"|format(r.server.val_loss)|replace('.', ',') if r.server.val_loss is defined and r.server.val_loss is not none else "-" }}</td>
-                    <td>{{ "%.2f"|format(r.server.val_accuracy * 100)|replace('.', ',') if r.server.val_accuracy is defined and r.server.val_accuracy is not none else "-" }}%</td>
+                    <td>{{ "%.2f"|format(r.server.val_accuracy * 100)|replace('.', ',') if r.server.val_accuracy is defined and r.server.val_accuracy is not none else "-" }}</td>
                     <td style="color: #38bdf8;">{{ "%.2f"|format(r.server.total_round_time_s|float)|replace('.', ',') if r.server.total_round_time_s is defined and r.server.total_round_time_s is not none else "-" }}</td>
                 </tr>
 
@@ -64,12 +62,11 @@
                 <thead>
                     <tr>
                         <th>Ronde</th>
-                        <th>Waktu</th>
                         <th>Samples</th>
                         <th>Loss Lokal</th>
-                        <th>Acc Lokal (%)</th>
-                        <th>Val Loss Lokal</th>
-                        <th>Val Acc Lokal (%)</th>
+                        <th>Accuracy Lokal (%)</th>
+                        <th>Validation Loss Lokal</th>
+                        <th>Validation Accuracy Lokal (%)</th>
                         <th>Durasi (detik)</th>
                         <th>Riwayat Epoch (Loss / Acc)</th>
                     </tr>
@@ -80,12 +77,11 @@
                     {% set c = r.clients[cid] %}
                     <tr>
                         <td>{{ r.round }}</td>
-                        <td style="color: #9ca3af;">{{ r.timestamp if r.timestamp is defined else "-" }}</td>
                         <td>{{ c.num_samples }}</td>
                         <td>{{ "%.4f"|format(c.loss)|replace('.', ',') }}</td>
-                        <td>{{ "%.2f"|format(c.accuracy * 100)|replace('.', ',') }}%</td>
+                        <td>{{ "%.2f"|format(c.accuracy * 100)|replace('.', ',') }}</td>
                         <td>{{ "%.4f"|format(c.val_loss)|replace('.', ',') if c.val_loss is defined and c.val_loss is not none else "-" }}</td>
-                        <td>{{ "%.2f"|format(c.val_accuracy * 100)|replace('.', ',') if c.val_accuracy is defined and c.val_accuracy is not none else "-" }}%</td>
+                        <td>{{ "%.2f"|format(c.val_accuracy * 100)|replace('.', ',') if c.val_accuracy is defined and c.val_accuracy is not none else "-" }}</td>
                         <td style="text-align: center; color: #38bdf8;">{{ "%.2f"|format(c.duration_s)|replace('.', ',') if c.duration_s is defined and c.duration_s is not none else "-" }}</td>
 
 

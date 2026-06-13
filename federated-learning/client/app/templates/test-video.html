@@ -436,7 +436,7 @@
                 <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
                     <span style="font-weight: 800; color: #3b82f6;">Waktu: ${formatTime(entry.seconds)}</span>
                     <span class="badge" style="background: ${bgBadge}; color: ${colorBadge}; border: 1px solid ${colorBadge}33; font-size: 0.75rem; padding: 1px 6px;">
-                        ${(entry.confidence * 100).toFixed(0)}% Conf
+                        Sim: ${parseFloat(entry.confidence).toFixed(4).replace('.', ',')}
                     </span>
                 </div>
                 <div style="font-weight: bold; font-size: 0.85rem; color: #f8fafc; margin-top: 2px;">
@@ -604,13 +604,13 @@
                     const badge = isUnknown ? "[REJECTED]" : "[CONFIRMED]";
                     const cleanLabel = closest.label.replace(/:\s*\d+\.\d+/, '');
                     
-                    const logMsg = `<div style="color: ${color};">[${timeStr}] ${badge} ${cleanLabel} Terdeteksi (Similarity: ${closest.confidence.toFixed(2)})</div>`;
+                    const logMsg = `<div style="color: ${color};">[${timeStr}] ${badge} ${cleanLabel} Terdeteksi (Similarity: ${parseFloat(closest.confidence).toFixed(4).replace('.', ',')})</div>`;
                     
                     // Hindari duplikasi log pada frame yang sama
                     if (!printedLogs.some(log => log.frame === closest.frame)) {
-                        printedLogs.push({ frame: closest.frame, seconds: closest.seconds, html: logMsg });
-                        printedLogs.sort((a, b) => a.seconds - b.seconds);
-                        renderTerminalLogs();
+                         printedLogs.push({ frame: closest.frame, seconds: closest.seconds, html: logMsg });
+                         printedLogs.sort((a, b) => a.seconds - b.seconds);
+                         renderTerminalLogs();
                     }
                 }
                 
@@ -643,7 +643,7 @@
                     html5Ctx.fillStyle = color;
                     html5Ctx.font = "bold 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
                     const cleanLabel = closest.label.replace(/:\s*\d+\.\d+/, '');
-                    const labelText = `${cleanLabel} (${(closest.confidence * 100).toFixed(0)}%)`;
+                    const labelText = `${cleanLabel} (${parseFloat(closest.confidence).toFixed(4).replace('.', ',')})`;
                     const textW = html5Ctx.measureText(labelText).width;
                     
                     // Background label

@@ -212,11 +212,11 @@
             <table id="inference-table-modal" style="width:100%; border-collapse:collapse; font-family: 'Fira Code', monospace; font-size:0.75rem; border: 1px solid rgba(16, 185, 129, 0.2);">
             <thead>
                 <tr style="background: rgba(16, 185, 129, 0.1); text-align:left; color: var(--accent);">
-                    <th style="padding:10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2);">WAKTU</th>
-                    <th style="padding:10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2);">IDENTITAS (NRP)</th>
-                    <th style="padding:10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2);">STATUS</th>
-                    <th style="padding:10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2);">CONFIDENCE</th>
-                    <th style="padding:10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2);">LATENCY</th>
+                    <th style="padding:10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2);">Waktu</th>
+                    <th style="padding:10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2);">Identitas (NRP)</th>
+                    <th style="padding:10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2);">Status</th>
+                    <th style="padding:10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2);">Cosine Similarity</th>
+                    <th style="padding:10px; border-bottom: 1px solid rgba(16, 185, 129, 0.2);">Latency (ms)</th>
                 </tr>
             </thead>
             <tbody>`;
@@ -225,13 +225,14 @@
             const isUnknown = log.status === "UNKNOWN" || log.user_id === "Unknown";
             const statusColor = isUnknown ? '#ef4444' : '#10b981';
             const rowBg = isUnknown ? 'rgba(239, 68, 68, 0.02)' : 'transparent';
+            const latencyVal = typeof log.latency === 'string' ? log.latency.replace('ms', '') : log.latency;
             
             html += `<tr style="background: ${rowBg}; border-bottom: 1px solid rgba(255, 255, 255, 0.03);">
                 <td style="padding:8px; color:#9ca3af;">${log.timestamp}</td>
                 <td style="padding:8px; color:${isUnknown ? '#9ca3af' : '#fff'}; font-weight: ${isUnknown ? '400' : '600'};">${log.user_id}</td>
                 <td style="padding:8px; color:${statusColor}; font-weight:bold; letter-spacing: 1px;">${log.status || (isUnknown ? 'UNKNOWN' : 'KNOWN')}</td>
                 <td style="padding:8px; color:#38bdf8; font-weight: 600;">${parseFloat(log.confidence).toFixed(4).replace('.', ',')}</td>
-                <td style="padding:8px; color:#9ca3af;">${log.latency}</td>
+                <td style="padding:8px; color:#9ca3af;">${latencyVal}</td>
             </tr>`;
         });
         html += `</tbody></table>`;
@@ -242,9 +243,11 @@
         const filtered = window.allInferenceLogs.filter(log => log.client_id === clientId);
         if (filtered.length === 0) return;
 
-        let csv = "Timestamp,User_ID,Status,Confidence,Latency\n";
+        let csv = "Waktu,Identitas (NRP),Status,Cosine Similarity,Latency (ms)\n";
         filtered.forEach(log => {
-            csv += `${log.timestamp},${log.user_id},${log.status},${log.confidence},${log.latency}\n`;
+            const latencyVal = typeof log.latency === 'string' ? log.latency.replace('ms', '') : log.latency;
+            const confVal = log.confidence ? log.confidence.toString().replace(',', '.') : '0.0000';
+            csv += `${log.timestamp},${log.user_id},${log.status},${confVal},${latencyVal}\n`;
         });
 
         const blob = new Blob([csv], { type: 'text/csv' });
