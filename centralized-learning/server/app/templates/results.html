@@ -35,7 +35,7 @@
                     <td>{{ "%.2f"|format(h.accuracy|float)|replace('.', ',') }}</td>
                     <td>{{ "%.4f"|format(h.val_loss|float)|replace('.', ',') if h.val_loss is not none else "-" }}</td>
                     <td>{{ "%.2f"|format(h.val_accuracy|float)|replace('.', ',') if h.val_accuracy is not none else "-" }}</td>
-                    <td style="color: #38bdf8;">{{ "%.2f"|format(h.duration_s|float)|replace('.', ',') if h.duration_s is defined and h.duration_s is not none else "-" }}</td>
+                    <td>{{ "%.2f"|format(h.duration_s|float)|replace('.', ',') if h.duration_s is defined and h.duration_s is not none else "-" }}</td>
                 </tr>
 
                 {% endfor %}
@@ -68,18 +68,18 @@
             <tbody>
                 <tr>
                     <td><b>Transmisi Data</b></td>
-                    <td>Estimasi Total Bandwidth (MB)</td>
+                    <td><b>Estimasi Total Bandwidth (MB)</b></td>
                     <td>{{ "%.2f"|format(status.metrics.upload_volume_mb + status.metrics.download_volume_mb)|replace('.', ',') }}</td>
                     <td>Rp {{ "%.2f"|format(status.metrics.transmission_cost_idr|float)|replace('.', ',') }}</td>
                 </tr>
                 <tr>
                     <td rowspan="2"><b>Konsumsi Daya</b></td>
-                    <td>Energi Terpakai (kWh)</td>
+                    <td><b>Energi Terpakai (kWh)</b></td>
                     <td>{{ "%.6f"|format(status.metrics.compute_energy_kwh|float)|replace('.', ',') }}</td>
                     <td rowspan="2">Rp {{ "%.2f"|format(status.metrics.compute_cost_idr|float)|replace('.', ',') }}</td>
                 </tr>
                 <tr>
-                    <td>Durasi Pelatihan (detik)</td>
+                    <td><b>Durasi Pelatihan (detik)</b></td>
                     <td>{{ "%.2f"|format(status.metrics.training_duration_s|float)|replace('.', ',') }}</td>
                 </tr>
             </tbody>
@@ -92,24 +92,28 @@
         width: 100%;
         border-collapse: collapse;
         margin-top: 1rem;
-        background: rgba(0, 0, 0, 0.2);
-        color: #fff;
+        background-color: white !important;
+        color: black !important;
+        font-family: 'Times New Roman', Times, serif !important;
+        font-size: 12pt !important;
+        border: 1px solid black !important;
     }
 
     .result-table th,
     .result-table td {
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        border: 1px solid black !important;
         padding: 12px 15px;
         text-align: left;
+        color: black !important;
     }
 
     .result-table th {
-        background: rgba(255, 255, 255, 0.05);
-        color: var(--accent);
+        background-color: white !important;
+        font-weight: bold !important;
     }
 
-    .result-table tr:hover {
-        background: rgba(255, 255, 255, 0.02);
+    .result-table tr {
+        background-color: white !important;
     }
 </style>
 
