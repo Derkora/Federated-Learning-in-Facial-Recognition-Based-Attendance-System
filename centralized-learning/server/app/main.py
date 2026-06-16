@@ -569,6 +569,7 @@ async def upload_video(request: Request):
 async def list_videos():
     """Mengembalikan daftar video yang tersimpan di server."""
     files = [f for f in os.listdir(STORED_VIDEOS_DIR) if f.lower().endswith(".mp4")]
+    files = sorted(files, key=lambda s: s.lower())
     return {"status": "success", "videos": files}
 
 @app.get(api_video_stream)

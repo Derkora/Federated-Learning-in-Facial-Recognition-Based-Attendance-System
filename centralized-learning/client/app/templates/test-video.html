@@ -137,11 +137,16 @@
             <div style="color: #64748b;">[SYSTEM] Menginisialisasi visualizer pemrosesan video...</div>
         </div>
         
-        <button id="btn-reset" class="btn" style="width: 100%; margin-top: 1.5rem; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: #f8fafc; font-weight: bold; border-radius: 12px; height: 50px;">
-            Pilih Video Lain
-        </button>
+        <div style="display: flex; gap: 1rem; align-items: center; width: 100%; margin-top: 1.5rem;">
+            <button id="btn-copy-table" class="btn" style="display: none; background: linear-gradient(135deg, #0284c7, #0369a1); border: 1px solid rgba(255,255,255,0.1); color: #f8fafc; font-weight: bold; border-radius: 12px; height: 50px; flex: 1; align-items: center; justify-content: center; gap: 8px;">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: inline-block; vertical-align: middle;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                Salin Tabel Log
+            </button>
+            <button id="btn-reset" class="btn" style="flex: 1; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: #f8fafc; font-weight: bold; border-radius: 12px; height: 50px;">
+                Pilih Video Lain
+            </button>
+        </div>
     </div>
-</div>
 
 <style>
     @keyframes pulse {
@@ -257,7 +262,7 @@
                 });
                 
                 const results = await Promise.all(statusPromises);
-                
+                results.sort((a, b) => a.video.localeCompare(b.video, undefined, { numeric: true, sensitivity: 'base' }));
                 results.forEach(({ video, cache }) => {
                     let client = '-';
                     let duration = '-';
@@ -331,6 +336,7 @@
     let lastLoggedFrame = -1;
     let printedLogs = [];
     let lastPlaybackTime = 0;
+    let activeDetectionsList = [];
     const html5Video = document.getElementById('html5-video');
     const html5Canvas = document.getElementById('html5-canvas');
     const html5Ctx = html5Canvas.getContext('2d');
@@ -354,13 +360,21 @@
         // Ubah tinggi log terminal agar lapang (550px)
         terminalLog.style.height = '550px';
         
+        // Tampilkan tombol Salin Tabel Log
+        const btnCopyTable = document.getElementById('btn-copy-table');
+        if (btnCopyTable) {
+            btnCopyTable.style.display = 'flex';
+        }
+        
         // Sesuaikan tombol agar menjadi tombol 'Kembali' rata kanan
         const btnReset = document.getElementById('btn-reset');
         if (btnReset) {
             btnReset.innerText = 'Kembali';
-            btnReset.style.width = '200px';
-            btnReset.style.margin = '1.5rem 0 0 auto';
-            btnReset.style.display = 'block';
+            btnReset.style.flex = '0 0 200px';
+            btnReset.style.width = 'auto';
+            btnReset.style.margin = '0';
+            btnReset.style.background = 'rgba(255, 255, 255, 0.05)';
+            btnReset.style.border = '1px solid rgba(255, 255, 255, 0.1)';
         }
         
         terminalLog.innerHTML = `<div style="color: #60a5fa;">[SYSTEM] Menghubungi server untuk memuat seluruh log AI untuk "${videoName}"...</div>`;
@@ -384,18 +398,52 @@
                 }
                 
                 detections.sort((a, b) => a.seconds - b.seconds);
+                activeDetectionsList = detections;
                 
-                let logHTML = `<div style="color: #c084fc; font-weight: bold; border-bottom: 1px dashed rgba(255,255,255,0.1); padding-bottom: 0.5rem; margin-bottom: 0.5rem;">[SYSTEM] MENAMPILKAN SELURUH LOG DETEKSI KESELURUHAN (Total: ${detections.length} Deteksi)</div>`;
+                let logHTML = `
+                <div style="color: #c084fc; font-weight: bold; border-bottom: 1px dashed rgba(255,255,255,0.1); padding-bottom: 0.5rem; margin-bottom: 0.8rem;">
+                    [SYSTEM] MENAMPILKAN SELURUH LOG DETEKSI KESELURUHAN (Total: ${detections.length} Deteksi)
+                </div>
+                <div style="overflow-x: auto; width: 100%;">
+                    <table style="width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; color: #e2e8f0; text-align: left;">
+                        <thead>
+                            <tr style="border-bottom: 2px solid rgba(255,255,255,0.15); color: #94a3b8; font-size: 0.78rem; text-transform: uppercase;">
+                                <th style="padding: 0.6rem 0.5rem; width: 15%;">Waktu</th>
+                                <th style="padding: 0.6rem 0.5rem; width: 15%;">Frame</th>
+                                <th style="padding: 0.6rem 0.5rem; width: 20%;">Status</th>
+                                <th style="padding: 0.6rem 0.5rem; width: 35%;">Nama Mahasiswa</th>
+                                <th style="padding: 0.6rem 0.5rem; width: 15%; text-align: right;">Similarity</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
                 
                 detections.forEach(entry => {
-                    const timeStr = `${formatTime(entry.seconds)} (F${entry.frame})`;
+                    const timeStr = formatTime(entry.seconds);
                     const isUnknown = entry.label.startsWith("Unknown") || entry.label === "Rejected";
-                    const color = isUnknown ? "#ef4444" : "#10b981";
-                    const badge = isUnknown ? "[REJECTED]" : "[CONFIRMED]";
+                    const rowColor = isUnknown ? "rgba(239, 68, 68, 0.04)" : "rgba(16, 185, 129, 0.04)";
+                    const textColor = isUnknown ? "#fca5a5" : "#6ee7b7";
+                    const badgeColor = isUnknown ? "#ef4444" : "#10b981";
+                    const badgeText = isUnknown ? "REJECTED" : "CONFIRMED";
                     const cleanLabel = entry.label.replace(/:\s*\d+\.\d+/, '');
+                    const similarityStr = parseFloat(entry.confidence).toFixed(2).replace('.', ',');
                     
-                    logHTML += `<div style="color: ${color}; font-family: 'JetBrains Mono', monospace;">[${timeStr}] ${badge} ${cleanLabel} Terdeteksi (Similarity: ${parseFloat(entry.confidence).toFixed(2).replace('.', ',')})</div>`;
+                    logHTML += `
+                        <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); background-color: ${rowColor}; transition: background 0.15s;">
+                            <td style="padding: 0.5rem; color: #38bdf8;">${timeStr}</td>
+                            <td style="padding: 0.5rem; color: #94a3b8;">F${entry.frame}</td>
+                            <td style="padding: 0.5rem;"><span style="background: ${badgeColor}22; color: ${badgeColor}; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.72rem; font-weight: bold; border: 1px solid ${badgeColor}44;">${badgeText}</span></td>
+                            <td style="padding: 0.5rem; font-weight: 500; color: ${textColor};">${cleanLabel}</td>
+                            <td style="padding: 0.5rem; text-align: right; color: #e2e8f0;">${similarityStr}</td>
+                        </tr>
+                    `;
                 });
+                
+                logHTML += `
+                        </tbody>
+                    </table>
+                </div>
+                `;
                 
                 terminalLog.innerHTML = logHTML;
                 terminalLog.scrollTop = 0;
@@ -970,18 +1018,29 @@
             await fetch('/api/test-video/delete', { method: 'POST' });
         } catch (e) {}
 
+        activeDetectionsList = [];
+        
         // Kembalikan tinggi log terminal ke semula
         if (terminalLog) {
             terminalLog.style.height = '200px';
         }
         
-        // Kembalikan teks dan gaya tombol ke semula
+        // Sembunyikan tombol Salin Tabel Log
+        const btnCopyTable = document.getElementById('btn-copy-table');
+        if (btnCopyTable) {
+            btnCopyTable.style.display = 'none';
+        }
+        
+        // Kembalikan teks dan gaya tombol reset ke semula
         const btnReset = document.getElementById('btn-reset');
         if (btnReset) {
             btnReset.innerText = 'Pilih Video Lain';
+            btnReset.style.flex = '1';
             btnReset.style.width = '100%';
             btnReset.style.margin = '1.5rem 0 0 0';
             btnReset.style.display = 'block';
+            btnReset.style.background = 'rgba(255, 255, 255, 0.05)';
+            btnReset.style.border = '1px solid rgba(255, 255, 255, 0.1)';
         }
 
         processZone.style.display = 'none';
@@ -1069,6 +1128,46 @@
     });
 
     btnReset.onclick = resetPage;
+
+    const btnCopyTable = document.getElementById('btn-copy-table');
+    if (btnCopyTable) {
+        btnCopyTable.onclick = () => {
+            if (!activeDetectionsList || activeDetectionsList.length === 0) {
+                alert('Tidak ada data log untuk disalin.');
+                return;
+            }
+            
+            // Header untuk file TSV (Excel friendly)
+            let tsv = 'Waktu\tFrame\tStatus\tNama Mahasiswa\tSimilarity\n';
+            
+            activeDetectionsList.forEach(entry => {
+                const timeStr = formatTime(entry.seconds);
+                const isUnknown = entry.label.startsWith("Unknown") || entry.label === "Rejected";
+                const badge = isUnknown ? "REJECTED" : "CONFIRMED";
+                const cleanLabel = entry.label.replace(/:\s*\d+\.\d+/, '');
+                const similarity = parseFloat(entry.confidence).toFixed(2).replace('.', ',');
+                
+                tsv += `${timeStr}\tF${entry.frame}\t${badge}\t${cleanLabel}\t${similarity}\n`;
+            });
+            
+            navigator.clipboard.writeText(tsv).then(() => {
+                const origText = btnCopyTable.innerHTML;
+                btnCopyTable.innerHTML = `
+                    <svg style="width: 20px; height: 20px;" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                    Berhasil Disalin!
+                `;
+                btnCopyTable.style.background = 'linear-gradient(135deg, #10b981, #059669)';
+                setTimeout(() => {
+                    btnCopyTable.innerHTML = origText;
+                    btnCopyTable.style.background = 'linear-gradient(135deg, #0284c7, #0369a1)';
+                }, 2000);
+            }).catch(err => {
+                alert('Gagal menyalin log: ' + err);
+            });
+        };
+    }
 
     // Load server videos initially on page load
     loadServerVideos();

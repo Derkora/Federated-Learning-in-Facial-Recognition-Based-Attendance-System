@@ -35,6 +35,7 @@ def upload_video():
 def list_videos():
     """Mengembalikan daftar nama berkas video (.mp4) yang tersimpan di server."""
     files = [f for f in os.listdir(STORED_VIDEOS_DIR) if f.lower().endswith(".mp4")]
+    files = sorted(files, key=lambda s: s.lower())
     return jsonify({"status": "success", "videos": files})
 
 @video_server_bp.route('/video/stream/<video_name>', methods=['GET'])

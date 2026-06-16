@@ -190,7 +190,7 @@
             }
             
             if (dataVideos.status === 'success') {
-                const videos = dataVideos.videos || [];
+                const videos = (dataVideos.videos || []).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
                 const caches = (dataCaches.status === 'success') ? (dataCaches.caches || []) : [];
                 
                 if (videos.length === 0) {
