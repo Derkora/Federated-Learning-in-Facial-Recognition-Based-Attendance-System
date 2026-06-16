@@ -335,7 +335,9 @@
     let lastPlaybackTime = 0;
     const html5Video = document.getElementById('html5-video');
     const html5Canvas = document.getElementById('html5-canvas');
-    const html5Ctx = html5Canvas.getContext('2d');    async function viewFullLogs(videoName) {
+    const html5Ctx = html5Canvas.getContext('2d');
+
+    async function viewFullLogs(videoName) {
         if (!videoName) {
             alert('Pilih video terlebih dahulu.');
             return;
