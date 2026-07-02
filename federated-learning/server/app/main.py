@@ -23,6 +23,14 @@ from app.db.db import engine, get_db, Base
 from app.db.models import FLSession, FLRound, GlobalModel, Client, UserGlobal, AttendanceRecap
 Base.metadata.create_all(bind=engine)
 
+# Jalankan migrasi kolom dataset secara aman
+try:
+    from sqlalchemy import text
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE users_global ADD COLUMN dataset VARCHAR DEFAULT 'students'"))
+except Exception:
+    pass
+
 from app.server_manager_instance import fl_manager
 from app.controllers.fl_controller import FLController
 from app.config import REGISTRY_PATH, BN_PATH
@@ -76,9 +84,66 @@ async def index(request: Request, db: Session = Depends(get_db)):
 async def get_system_status(db: Session = Depends(get_db)):
     return fl_manager.get_status(db=db)
 
+@app.get("/api/models/list")
+def list_models():
+    # Mengembalikan daftar model yang tersedia untuk absensi atau uji coba
+    models_list = []
+    models_list.append({"version": "v0", "rounds": 0, "epochs": 0, "file": "global_model_v0.pth", "label": "Model v0 (Base Model)"})
+    from app.config import DATA_ROOT
+    if os.path.exists(DATA_ROOT):
+        for f in os.listdir(DATA_ROOT):
+            if f.startswith("global_model_") and f.endswith(".pth") and f not in ("global_model_v0.pth", "global_model.pth"):
+                version_str = f.replace("global_model_", "").replace(".pth", "")
+                parts = version_str.split("_")
+                learning_type = parts[0]
+                dataset_str = parts[1] if len(parts) >= 2 else "unknown"
+                
+                if learning_type == "cl":
+                    epochs_str = parts[2].replace("e", "") if len(parts) >= 3 else "0"
+                    label = f"Model Centralized | Dataset: {dataset_str} | Epoch: {epochs_str}"
+                    epochs_val = int(epochs_str) if epochs_str.isdigit() else 0
+                    rounds_val = 0
+                elif learning_type == "fl":
+                    rounds_str = parts[2].replace("r", "") if len(parts) >= 3 else "0"
+                    epochs_str = parts[3].replace("e", "") if len(parts) >= 4 else "0"
+                    label = f"Model Federated | Dataset: {dataset_str} | Round: {rounds_str} | Epoch: {epochs_str}"
+                    rounds_val = int(rounds_str) if rounds_str.isdigit() else 0
+                    epochs_val = int(epochs_str) if epochs_str.isdigit() else 0
+                else:
+                    label = f"Model {version_str}"
+                    epochs_val = 0
+                    rounds_val = 0
+                    
+                models_list.append({
+                    "version": version_str,
+                    "dataset": dataset_str,
+                    "rounds": rounds_val,
+                    "epochs": epochs_val,
+                    "file": f,
+                    "label": label
+                })
+                
+    # Custom sorting: versioned (descending), v0 (last)
+    v0_models = [m for m in models_list if m["version"] == "v0"]
+    other_models = [m for m in models_list if m["version"] != "v0"]
+    other_models.sort(key=lambda x: x["version"], reverse=True)
+    
+    models_list = other_models + v0_models
+    return {"status": "success", "models": models_list}
+
 # API Hasil Pelatihan Global (Metrik)
 @app.get(api_results)
-async def get_results_api(db: Session = Depends(get_db)):
+async def get_results_api(version: str = None, db: Session = Depends(get_db)):
+    if version:
+        if version == "v0" or version == "0":
+            return {"round_history": [], "accuracy": 0.0, "loss": 0.0, "unique_client_ids": []}
+        elif version == "active":
+            status = fl_manager.get_status(db=db)
+            return status.get("metrics", {})
+            
+        version_metrics = fl_manager.load_version_metrics(version)
+        if version_metrics:
+            return version_metrics
     status = fl_manager.get_status(db=db)
     return status.get("metrics", {})
 
@@ -128,12 +193,26 @@ async def view_video_simulasi(request: Request):
 
 # Memulai Siklus Pelatihan Federated Learning
 @app.post(api_fl_start)
-async def start_fl_training(rounds: int = None, min_clients: int = None, epochs: int = None):
+async def start_fl_training(rounds: int = None, min_clients: int = None, epochs: int = None, dataset: str = "students"):
     # Logika orkestrasi didelegasikan ke fl_controller
     rounds = rounds or fl_manager.default_rounds
     min_clients = min_clients or fl_manager.default_min_clients
     epochs = epochs or fl_manager.default_epochs
-    return fl_controller.start_lifecycle(rounds, min_clients, epochs)
+    fl_manager.reset_training_metrics()
+    return fl_controller.start_lifecycle(rounds, min_clients, epochs, dataset)
+
+@app.post("/api/fl/preprocess")
+async def start_fl_preprocess(min_clients: int = None, dataset: str = "students"):
+    min_clients = min_clients or fl_manager.default_min_clients
+    return fl_controller.start_preprocess(min_clients, dataset)
+
+@app.post("/api/fl/train")
+async def start_fl_train(rounds: int = None, min_clients: int = None, epochs: int = None, dataset: str = "students"):
+    rounds = rounds or fl_manager.default_rounds
+    min_clients = min_clients or fl_manager.default_min_clients
+    epochs = epochs or fl_manager.default_epochs
+    fl_manager.reset_training_metrics()
+    return fl_controller.start_train(rounds, min_clients, epochs, dataset)
 
 # Mengatur Ulang (Reset) Status Server
 @app.post(api_fl_reset)
@@ -148,7 +227,7 @@ async def reset_fl_state():
     fl_manager.metrics["accuracy"] = 0
     fl_manager.metrics["loss"] = 0
     
-    fl_manager.start_phase("Idle")
+    fl_manager.end_phase()
     fl_manager.discovery_clients.clear()
     fl_manager.update_logs("[INFO] Status server telah di-reset secara manual.")
     return {"status": "reset_ok"}
@@ -242,13 +321,157 @@ async def get_client_logs(client_id: str):
     except Exception as e:
         return {"logs": f"Client tidak merespon: {str(e)}"}
 
+@app.post("/api/clients/delete/{client_id}")
+async def delete_client(client_id: str, db: Session = Depends(get_db)):
+    client = db.query(Client).filter_by(edge_id=client_id).first()
+    if client:
+        db.delete(client)
+        db.commit()
+    if client_id in fl_manager.registered_clients:
+        del fl_manager.registered_clients[client_id]
+    return {"status": "success", "message": f"Client {client_id} berhasil dihapus"}
+
+
 # Akses model dan aset
+
+@app.post("/api/models/delete-specific")
+async def delete_specific_model(version: str, db: Session = Depends(get_db)):
+    try:
+        if version == "v0" or version == "0" or version == "active":
+            raise HTTPException(400, "Tidak dapat menghapus model dasar atau model aktif")
+            
+        # 1. Hapus file fisik
+        from app.config import DATA_ROOT
+        model_file = os.path.join(DATA_ROOT, f"global_model_{version}.pth")
+        registry_file = os.path.join(DATA_ROOT, f"global_embedding_registry_{version}.pth")
+        bn_file = os.path.join(DATA_ROOT, f"global_bn_combined_{version}.pth")
+        metrics_file = os.path.join(DATA_ROOT, f"metrics_{version}.json")
+        
+        if os.path.exists(model_file):
+            try: os.remove(model_file)
+            except Exception as e: print(f"Error removing model file: {e}")
+            
+        if os.path.exists(registry_file):
+            try: os.remove(registry_file)
+            except Exception as e: print(f"Error removing registry file: {e}")
+            
+        if os.path.exists(bn_file):
+            try: os.remove(bn_file)
+            except Exception as e: print(f"Error removing bn file: {e}")
+            
+        if os.path.exists(metrics_file):
+            try: os.remove(metrics_file)
+            except Exception as e: print(f"Error removing metrics file: {e}")
+            
+        fl_manager.logger.info(f"Model versi {version} berhasil dihapus dari sistem.")
+        return {"status": "success", "message": f"Model versi {version} berhasil dihapus."}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.post("/api/models/reset")
+async def reset_models(db: Session = Depends(get_db)):
+    try:
+        # 1. Hapus semua record ronde dan sesi pelatihan dari DB
+        db.query(FLRound).delete()
+        db.query(FLSession).delete()
+        db.query(GlobalModel).filter(GlobalModel.version > 0).delete()
+        db.commit()
+        
+        # 2. Hapus file fisik model cl/fl dan file metrics
+        from app.config import DATA_ROOT, MODEL_DIR, REGISTRY_PATH, BN_PATH
+        if os.path.exists(DATA_ROOT):
+            for f in os.listdir(DATA_ROOT):
+                if f.startswith("global_model_") and f.endswith(".pth") and f not in ("global_model_v0.pth", "global_model.pth", "backbone.pth"):
+                    try: os.remove(os.path.join(DATA_ROOT, f))
+                    except: pass
+                if f.startswith("global_embedding_registry_") and f.endswith(".pth") and f != "global_embedding_registry.pth":
+                    try: os.remove(os.path.join(DATA_ROOT, f))
+                    except: pass
+                if f.startswith("global_bn_combined_") and f.endswith(".pth") and f != "global_bn_combined.pth":
+                    try: os.remove(os.path.join(DATA_ROOT, f))
+                    except: pass
+                if f.startswith("metrics_") and f.endswith(".json"):
+                    try: os.remove(os.path.join(DATA_ROOT, f))
+                    except: pass
+        
+        # 3. Kembalikan model aktif (backbone.pth) ke v0
+        v0_path = os.path.join(MODEL_DIR, "global_model_v0.pth")
+        if not os.path.exists(v0_path):
+            v0_path = os.path.join(DATA_ROOT, "global_model_v0.pth")
+            
+        active_path = "data/backbone.pth"
+        if os.path.exists(v0_path):
+            shutil.copy2(v0_path, active_path)
+            
+        # Hapus registry embeddings aktif dan BN params karena v0 tidak memiliki wajah terdaftar
+        if os.path.exists(REGISTRY_PATH):
+            try: os.remove(REGISTRY_PATH)
+            except: pass
+        if os.path.exists(BN_PATH):
+            try: os.remove(BN_PATH)
+            except: pass
+            
+        # 4. Reset state manager FL
+        fl_manager.model_version = 0
+        fl_manager.model_version_str = "v0"
+        active_version_path = os.path.join(DATA_ROOT, "active_version.txt")
+        if os.path.exists(active_version_path):
+            try: os.remove(active_version_path)
+            except: pass
+        fl_manager.metrics = {
+            "round_history": [],
+            "accuracy": 0.0,
+            "loss": 0.0,
+            "total_round_time_s": 0,
+            "compute_energy_kwh": 0,
+            "upload_volume_mb": 0,
+            "download_volume_mb": 0,
+            "transmission_cost_idr": 0,
+            "compute_cost_idr": 0
+        }
+        
+        # Update logs
+        fl_manager.logger.info("Server FL di-reset ke model dasar v0. Semua versi model terlatih telah dihapus.")
+        
+        return {"status": "success", "message": "Model FL berhasil di-reset ke v0."}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 @app.get(api_model_backbone)
-async def get_backbone_model(db: Session = Depends(get_db)):
-    global_model = db.query(GlobalModel).order_by(GlobalModel.last_updated.desc()).first()
-    if not global_model or not global_model.weights:
-        raise HTTPException(status_code=404, detail="Global model weights not found in database.")
-    return Response(content=global_model.weights, media_type="application/octet-stream")
+async def get_backbone_model(version: str = None, db: Session = Depends(get_db)):
+    from app.config import DATA_ROOT
+    if version == "active":
+        active_path = "data/backbone.pth"
+        if os.path.exists(active_path):
+            with open(active_path, "rb") as f:
+                return Response(content=f.read(), media_type="application/octet-stream")
+        raise HTTPException(status_code=404, detail="Model aktif (backbone.pth) tidak ditemukan di disk.")
+    elif version and version != "v0" and version != "0":
+        file_path = os.path.join(DATA_ROOT, f"global_model_{version}.pth")
+        if os.path.exists(file_path):
+            with open(file_path, "rb") as f:
+                return Response(content=f.read(), media_type="application/octet-stream")
+        raise HTTPException(status_code=404, detail=f"Model versi {version} tidak ditemukan di disk.")
+    elif version == "v0" or version == "0":
+        # Muat model baseline v0
+        v0_path = os.path.join(DATA_ROOT, "global_model_v0.pth")
+        if os.path.exists(v0_path):
+            with open(v0_path, "rb") as f:
+                return Response(content=f.read(), media_type="application/octet-stream")
+        global_model = db.query(GlobalModel).filter(GlobalModel.version == 0).first()
+        if global_model and global_model.weights:
+            return Response(content=global_model.weights, media_type="application/octet-stream")
+        from app.config import FALLBACK_MODEL_PATH
+        if os.path.exists(FALLBACK_MODEL_PATH):
+            with open(FALLBACK_MODEL_PATH, "rb") as f:
+                return Response(content=f.read(), media_type="application/octet-stream")
+        raise HTTPException(status_code=404, detail="Model v0 tidak ditemukan.")
+    else:
+        # Default fallback: get latest updated model
+        global_model = db.query(GlobalModel).order_by(GlobalModel.last_updated.desc()).first()
+        if not global_model or not global_model.weights:
+            raise HTTPException(status_code=404, detail="Global model weights not found in database.")
+        return Response(content=global_model.weights, media_type="application/octet-stream")
 
 # Mengunduh Parameter Batch Normalization (BN)
 @app.get(api_model_bn)
@@ -260,9 +483,26 @@ async def get_bn_model():
 
 # Mengunduh Pustaka Identitas Global (Registry)
 @app.get(api_model_registry)
-async def get_registry():
-    if os.path.exists(REGISTRY_PATH):
-        with open(REGISTRY_PATH, "rb") as f:
+async def get_registry(version: str = None):
+    from app.config import DATA_ROOT
+    path = REGISTRY_PATH
+    if version == "active":
+        pass  # path tetap REGISTRY_PATH
+    elif version and version != "v0" and version != "0":
+        versioned_path = os.path.join(DATA_ROOT, f"global_embedding_registry_{version}.pth")
+        if os.path.exists(versioned_path):
+            path = versioned_path
+        else:
+            raise HTTPException(status_code=404, detail=f"Registry versi {version} tidak ditemukan")
+    elif version == "v0" or version == "0":
+        import io
+        import torch
+        buf = io.BytesIO()
+        torch.save({}, buf)
+        return Response(content=buf.getvalue(), media_type='application/octet-stream')
+        
+    if os.path.exists(path):
+        with open(path, "rb") as f:
             return Response(content=f.read(), media_type="application/octet-stream")
     raise HTTPException(status_code=404, detail="Registry not found")
 
@@ -273,7 +513,7 @@ async def get_training_status():
         "current_phase": fl_manager.current_phase,
         "is_running": fl_manager.is_running,
         "active_session_id": fl_manager.session_id,
-        "model_version": fl_manager.model_version,
+        "model_version": fl_manager.model_version_str,
         "inference_threshold": fl_manager.inference_threshold,
         "current_logs": fl_manager.current_logs[-10:]
     }
@@ -285,6 +525,7 @@ async def get_label(data: dict, db: Session = Depends(get_db)):
     name = data.get("name", "Unknown")
     edge_id = data.get("client_id", "edge-1")
     embedding_b64 = data.get("embedding")
+    dataset = data.get("dataset", "students")
     
     # Dekode embedding dari Base64 jika disertakan
     embedding_bytes = None
@@ -295,13 +536,14 @@ async def get_label(data: dict, db: Session = Depends(get_db)):
     user = db.query(UserGlobal).filter_by(nrp=nrp).first()
     if not user:
         # Jika belum terdaftar, buat entri baru secara serial (AUTOINCREMENT menjamin keunikan label ID)
-        user = UserGlobal(nrp=nrp, name=name, registered_edge_id=edge_id, embedding=embedding_bytes)
+        user = UserGlobal(nrp=nrp, name=name, registered_edge_id=edge_id, embedding=embedding_bytes, dataset=dataset)
         db.add(user)
         db.commit()
         db.refresh(user)
     else:
         # Jika sudah terdaftar, lakukan pembaruan data nama atau embedding
         user.name = name
+        user.dataset = dataset
         if embedding_bytes:
             user.embedding = embedding_bytes
         db.commit()
@@ -365,6 +607,68 @@ async def get_global_identities(db: Session = Depends(get_db)):
             item["embedding"] = base64.b64encode(u.embedding).decode('utf-8')
         results.append(item)
     return results
+
+
+# API status dataset dan status preprocessing
+@app.get("/api/datasets/status")
+def get_datasets_status(dbs: Session = Depends(get_db)):
+    status_list = []
+    
+    # Ambil data client aktif
+    status_data = fl_manager.get_status(db=dbs)
+    active_clients = status_data.get("active_clients", [])
+    available_datasets = status_data.get("available_datasets", ["students"])
+    
+    for ds in available_datasets:
+        online_clients_with_ds = [c for c in active_clients if c["status"] == "ONLINE" and ds in c.get("available_datasets", {})]
+        
+        if not online_clients_with_ds:
+            clients_to_check = active_clients
+        else:
+            clients_to_check = online_clients_with_ds
+            
+        if not clients_to_check:
+            is_preprocessed = False
+            status_label = "Belum Diproses"
+            info = "Tidak ada client terhubung"
+        else:
+            preprocessed_count = 0
+            total_count = 0
+            for c in clients_to_check:
+                avail = c.get("available_datasets", {})
+                if ds in avail:
+                    total_count += 1
+                    if avail[ds]:
+                        preprocessed_count += 1
+                elif c.get("dataset") == ds:
+                    total_count += 1
+                    if c.get("is_preprocessed"):
+                        preprocessed_count += 1
+            
+            if total_count > 0 and preprocessed_count == total_count:
+                is_preprocessed = True
+                status_label = "Sudah Diproses"
+                info = f"Semua client ({preprocessed_count}/{total_count}) telah melakukan pra-pemrosesan"
+            else:
+                is_preprocessed = False
+                status_label = "Belum Diproses"
+                info = f"Hanya {preprocessed_count}/{total_count} client yang siap"
+                
+        status_list.append({
+            "dataset": ds,
+            "raw_exists": True,
+            "raw_classes": 0,
+            "raw_images": 0,
+            "processed_exists": is_preprocessed,
+            "processed_classes": 0,
+            "processed_images": 0,
+            "is_preprocessed": is_preprocessed,
+            "status_label": status_label,
+            "info": info
+        })
+        
+    return {"status": "success", "datasets": status_list}
+
 
 
 # Sinkronisasi Hasil Presensi dari Terminal
@@ -445,8 +749,11 @@ async def update_settings(data: dict):
         return {"status": "error", "message": str(e)}
 
 @app.get(api_attendance)
-async def get_attendance_json(db: Session = Depends(get_db)):
-    all_users = db.query(UserGlobal).all()
+async def get_attendance_json(dataset: str = None, db: Session = Depends(get_db)):
+    query = db.query(UserGlobal)
+    if dataset:
+        query = query.filter(UserGlobal.dataset == dataset)
+    all_users = query.all()
     tz_wib = timezone(timedelta(hours=7))
     today_start = datetime.now(tz_wib).replace(hour=0, minute=0, second=0, microsecond=0)
     today_recap = db.query(AttendanceRecap).filter(AttendanceRecap.timestamp >= today_start).all()

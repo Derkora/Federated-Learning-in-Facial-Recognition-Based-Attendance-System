@@ -104,6 +104,16 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
         clients_data = {}
         for i, (client_proxy, fit_res) in enumerate(valid_results):
             cid = fit_res.metrics.get("hostname") or getattr(client_proxy, "cid", f"client-{i}")
+            raw_epoch_history = fit_res.metrics.get("epoch_history", [])
+            parsed_epoch_history = []
+            if isinstance(raw_epoch_history, str):
+                try:
+                    parsed_epoch_history = json.loads(raw_epoch_history)
+                except:
+                    parsed_epoch_history = []
+            else:
+                parsed_epoch_history = raw_epoch_history
+
             clients_data[cid] = {
                 "num_samples": fit_res.num_examples,
                 "accuracy": fit_res.metrics.get("accuracy", 0.0),
@@ -111,11 +121,46 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                 "val_accuracy": fit_res.metrics.get("val_accuracy", 0.0),
                 "val_loss": fit_res.metrics.get("val_loss", 0.0),
                 "duration_s": fit_res.metrics.get("duration_s", 0.0),
-                "epoch_history": fit_res.metrics.get("epoch_history", [])
+                "epoch_history": parsed_epoch_history
             }
         
         if aggregated_metrics is None: aggregated_metrics = {}
         aggregated_metrics["clients"] = clients_data
+
+        # Aggregate epoch history across clients to produce global epoch history
+        global_epoch_history = []
+        max_epochs = 0
+        client_epochs = []
+        for cid, c_info in clients_data.items():
+            parsed_eh = c_info.get("epoch_history", [])
+            if parsed_eh:
+                client_epochs.append((c_info.get("num_samples", 0), parsed_eh))
+                max_epochs = max(max_epochs, len(parsed_eh))
+        
+        for epoch_idx in range(max_epochs):
+            total_examples_e = 0
+            sum_loss = 0.0
+            sum_acc = 0.0
+            sum_val_loss = 0.0
+            sum_val_acc = 0.0
+            for num_examples, parsed_eh in client_epochs:
+                if epoch_idx < len(parsed_eh):
+                    eh = parsed_eh[epoch_idx]
+                    total_examples_e += num_examples
+                    sum_loss += eh.get("loss", 0.0) * num_examples
+                    sum_acc += eh.get("accuracy", 0.0) * num_examples
+                    sum_val_loss += eh.get("val_loss", 0.0) * num_examples
+                    sum_val_acc += eh.get("val_accuracy", 0.0) * num_examples
+            
+            if total_examples_e > 0:
+                global_epoch_history.append({
+                    "epoch": epoch_idx + 1,
+                    "loss": sum_loss / total_examples_e,
+                    "accuracy": sum_acc / total_examples_e,
+                    "val_loss": sum_val_loss / total_examples_e,
+                    "val_accuracy": sum_val_acc / total_examples_e
+                })
+        aggregated_metrics["epoch_history"] = global_epoch_history
 
         if aggregated_parameters is None:
             self.logger.warn(f"Agregasi Ronde {server_round} menghasilkan None (Tidak cukup data?).")
@@ -162,7 +207,8 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                 
                 # Deteksi mode penyelarasan parameter (Full Backbone vs pFedFace)
                 all_keys = list(sd.keys())
-                conv_keys = [k for k in all_keys if not any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked'])]
+                bn_filter = lambda name: any(x in name.lower() for x in ['.bn.', '.conv.1.', '.conv.4.', '.conv.7.', 'running_', 'num_batches_tracked'])
+                conv_keys = [k for k in all_keys if not bn_filter(k)]
                 
                 if len(params_np) == len(conv_keys):
                     self.logger.info(f"Ronde {server_round}: Mode pFedFace (Backbone saja) terdeteksi ({len(params_np)} parameter).")
@@ -184,7 +230,7 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                 for i, k in enumerate(target_keys):
                     if i < len(params_np):
                         val = torch.from_numpy(params_np[i].copy())
-                        if any(x in k.lower() for x in ['bn', 'running_', 'num_batches_tracked']):
+                        if bn_filter(k):
                             bn_params[k] = val
                         else:
                             backbone_params[k] = val
@@ -352,7 +398,9 @@ class FLServerManager:
         self.start_time = 0
         self.current_round = 0
         self.model_version = 0
+        self.model_version_str = "v0"
         self.tracker = None
+        self.current_dataset = "students"
         
         # Inisialisasi Logger Terpusat (Global)
         self.log_path = "/app/data/server_training.log"
@@ -386,6 +434,10 @@ class FLServerManager:
             "transmission_cost_idr": 0,
             "training_duration_s": 0, "total_round_time_s": 0,
             "compute_energy_kwh": 0, "compute_cost_idr": 0,
+            "preprocess_duration_s": 0.0,
+            "preprocess_energy_kwh": 0.0,
+            "preprocess_upload_mb": 0.0,
+            "preprocess_download_mb": 0.0,
             "round_history": [], # Riwayat data ronde dengan rincian client
             "unique_client_ids": [], # Pelacakan ID unik client yang berkontribusi
             "inference_logs": [] # Log detail untuk riset FAR/TAR
@@ -494,19 +546,27 @@ class FLServerManager:
                 try:
                     # Muat Versi Model Terbaru
                     latest_model = db.query(GlobalModel).order_by(GlobalModel.last_updated.desc()).first()
+                    self.model_version_str = "v0"
                     if latest_model:
                         self.model_version = latest_model.version
-                        self.logger.info(f"Database terhubung. Versi Model saat ini: v{self.model_version}")
+                        
+                        from app.config import DATA_ROOT
+                        active_version_path = os.path.join(DATA_ROOT, "active_version.txt")
+                        if os.path.exists(active_version_path):
+                            try:
+                                with open(active_version_path, "r") as f:
+                                    self.model_version_str = f.read().strip()
+                            except: pass
+                            
+                        self.logger.info("Database terhubung.")
 
                     # Muat riwayat ronde (Hanya sesi terbaru agar tidak duplikat)
                     latest_round = db.query(FLRound).order_by(FLRound.timestamp.desc()).first()
                     if latest_round:
                         latest_session_id = latest_round.session_id
                         rounds = db.query(FLRound).filter_by(session_id=latest_session_id).order_by(FLRound.round_number.asc()).all()
-                        self.logger.info(f"Menemukan {len(rounds)} ronde federated dari sesi {latest_session_id}.")
                     else:
                         rounds = []
-                        self.logger.info("Tidak ada riwayat ronde di database.")
                     
                     if rounds:
                         history = []
@@ -516,6 +576,11 @@ class FLServerManager:
                         for r in rounds:
                             try:
                                 m = json.loads(r.metrics) if r.metrics else {}
+                                if "epoch_history" in m and isinstance(m["epoch_history"], str):
+                                    try:
+                                        m["epoch_history"] = json.loads(m["epoch_history"])
+                                    except:
+                                        m["epoch_history"] = []
                                 clients = m.get("clients", {})
                                 # Ensure epoch_history in each client is parsed if it's a string
                                 for cid, c_data in clients.items():
@@ -632,6 +697,21 @@ class FLServerManager:
 
             self.metrics.update(new_data)
             self.update_economics({})
+
+    def reset_training_metrics(self):
+        with self.lock:
+            self.metrics["accuracy"] = 0
+            self.metrics["loss"] = 0
+            self.metrics["backbone_sync_mb"] = 0
+            self.metrics["registry_sync_mb"] = 0
+            self.metrics["transmission_cost_idr"] = 0
+            self.metrics["training_duration_s"] = 0
+            self.metrics["total_round_time_s"] = 0
+            self.metrics["compute_energy_kwh"] = 0
+            self.metrics["compute_cost_idr"] = 0
+            self.metrics["round_history"] = []
+            self.metrics["unique_client_ids"] = []
+            self.update_logs("[INFO] Metrik pelatihan di-reset untuk sesi pelatihan baru.")
 
     # Perhitungan Nilai Ekonomi
     def update_economics(self, new_data):
@@ -783,6 +863,130 @@ class FLServerManager:
                     lr = schedule[threshold]
             return lr
 
+    def save_version_metrics(self, version_str):
+        with self.lock:
+            try:
+                from app.config import ECONOMICS
+                # Preprocessing
+                prep_duration = self.metrics.get("preprocess_duration_s", 0.0)
+                prep_upload = self.metrics.get("preprocess_upload_mb", 0.0)
+                prep_download = self.metrics.get("preprocess_download_mb", 0.0)
+                prep_bandwidth = prep_upload + prep_download
+                prep_transmission_cost = round(prep_bandwidth * ECONOMICS["transmission_cost_per_mb"], 2)
+                
+                prep_energy = self.metrics.get("preprocess_energy_kwh", 0.0)
+                if prep_energy == 0.0 and prep_duration > 0.0:
+                    prep_energy = (prep_duration / 3600.0) * ECONOMICS["estimated_server_power_kw"]
+                prep_compute_cost = round(prep_energy * ECONOMICS["compute_cost_per_kwh"], 2)
+                
+                # Training
+                train_duration = self.metrics.get("training_duration_s", 0.0)
+                if train_duration == 0.0:
+                    train_duration = self.metrics.get("total_round_time_s", 0.0)
+                
+                # transmission calculation
+                backbone_mb = self.metrics.get("backbone_sync_mb", 0.0)
+                registry_mb = self.metrics.get("registry_sync_mb", 0.0)
+                train_upload = (backbone_mb / 2.0) + registry_mb
+                train_download = backbone_mb / 2.0
+                train_bandwidth = train_upload + train_download
+                train_transmission_cost = round(train_bandwidth * ECONOMICS["transmission_cost_per_mb"], 2)
+                
+                train_energy = self.metrics.get("compute_energy_kwh", 0.0)
+                if train_energy == 0.0 and train_duration > 0.0:
+                    train_energy = (train_duration / 3600.0) * ECONOMICS["estimated_server_power_kw"]
+                train_compute_cost = round(train_energy * ECONOMICS["compute_cost_per_kwh"], 2)
+                
+                # Combined
+                comb_duration = prep_duration + train_duration
+                comb_upload = prep_upload + train_upload
+                comb_download = prep_download + train_download
+                comb_bandwidth = comb_upload + comb_download
+                comb_transmission_cost = round(comb_bandwidth * ECONOMICS["transmission_cost_per_mb"], 2)
+                comb_energy = prep_energy + train_energy
+                comb_compute_cost = round(comb_energy * ECONOMICS["compute_cost_per_kwh"], 2)
+                
+                self.metrics["preprocess"] = {
+                    "duration_s": round(prep_duration, 2),
+                    "upload_volume_mb": round(prep_upload, 2),
+                    "download_volume_mb": round(prep_download, 2),
+                    "bandwidth_mb": round(prep_bandwidth, 2),
+                    "transmission_cost_idr": prep_transmission_cost,
+                    "compute_energy_kwh": round(prep_energy, 6),
+                    "compute_cost_idr": prep_compute_cost
+                }
+                
+                self.metrics["training"] = {
+                    "duration_s": round(train_duration, 2),
+                    "upload_volume_mb": round(train_upload, 2),
+                    "download_volume_mb": round(train_download, 2),
+                    "bandwidth_mb": round(train_bandwidth, 2),
+                    "transmission_cost_idr": train_transmission_cost,
+                    "compute_energy_kwh": round(train_energy, 6),
+                    "compute_cost_idr": train_compute_cost
+                }
+                
+                self.metrics["combined"] = {
+                    "duration_s": round(comb_duration, 2),
+                    "upload_volume_mb": round(comb_upload, 2),
+                    "download_volume_mb": round(comb_download, 2),
+                    "bandwidth_mb": round(comb_bandwidth, 2),
+                    "transmission_cost_idr": comb_transmission_cost,
+                    "compute_energy_kwh": round(comb_energy, 6),
+                    "compute_cost_idr": comb_compute_cost
+                }
+
+                import math
+                from datetime import datetime
+                def sanitize_floats(obj):
+                    if isinstance(obj, float):
+                        if math.isnan(obj) or math.isinf(obj):
+                            return None
+                        return obj
+                    elif isinstance(obj, datetime):
+                        return obj.isoformat()
+                    elif isinstance(obj, dict):
+                        return {k: sanitize_floats(v) for k, v in obj.items()}
+                    elif isinstance(obj, list):
+                        return [sanitize_floats(x) for x in obj]
+                    return obj
+
+                from app.config import DATA_ROOT
+                path = os.path.join(DATA_ROOT, f"metrics_{version_str}.json")
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                
+                clean_metrics = sanitize_floats(self.metrics)
+                with open(path, "w") as f:
+                    json.dump(clean_metrics, f, indent=4)
+                self.logger.info(f"Berhasil menyimpan metrik untuk versi {version_str} ke {path}")
+            except Exception as e:
+                self.logger.error(f"Gagal menyimpan metrik versi {version_str}: {e}")
+
+    def load_version_metrics(self, version_str):
+        with self.lock:
+            from app.config import DATA_ROOT
+            path = os.path.join(DATA_ROOT, f"metrics_{version_str}.json")
+            if os.path.exists(path):
+                try:
+                    import math
+                    def sanitize_floats(obj):
+                        if isinstance(obj, float):
+                            if math.isnan(obj) or math.isinf(obj):
+                                return None
+                            return obj
+                        elif isinstance(obj, dict):
+                            return {k: sanitize_floats(v) for k, v in obj.items()}
+                        elif isinstance(obj, list):
+                            return [sanitize_floats(x) for x in obj]
+                        return obj
+
+                    with open(path, "r") as f:
+                        data = json.load(f)
+                        return sanitize_floats(data)
+                except Exception as e:
+                    self.logger.error(f"Gagal memuat metrik versi {version_str}: {e}")
+            return None
+
     def get_status(self, db=None):
         # self.logger.info(f"get_status called. round_history len: {len(self.metrics.get('round_history', []))}")
         with self.lock:
@@ -818,11 +1022,19 @@ class FLServerManager:
                         db.add(c)
                         db_needs_commit = True
                     
+                    c_data = self.registered_clients.get(c.edge_id, {})
+                    dataset_name = c_data.get("dataset", "students")
+                    is_prep = c_data.get("is_preprocessed", False)
+                    avail_ds = c_data.get("available_datasets", {dataset_name: is_prep})
+
                     active_clients.append({
                         "id": c.edge_id,
                         "ip": c.ip_address,
                         "status": status.upper(),
-                        "last_seen": wib_time_str
+                        "last_seen": wib_time_str,
+                        "dataset": dataset_name,
+                        "is_preprocessed": is_prep,
+                        "available_datasets": avail_ds
                     })
                     
                 if db_needs_commit:
@@ -832,6 +1044,19 @@ class FLServerManager:
                         db.rollback()
                         self.logger.error(f"Gagal commit status client terupdate: {e}")
                 
+            # Kumpulkan semua dataset unik yang dilaporkan oleh seluruh client
+            all_datasets = set()
+            for cid, c_data in self.registered_clients.items():
+                avail = c_data.get("available_datasets", {})
+                for ds in avail.keys():
+                    all_datasets.add(ds)
+                # Tambahkan juga dataset name utama jika ada
+                ds = c_data.get("dataset")
+                if ds:
+                    all_datasets.add(ds)
+            all_datasets.add("students")
+            all_datasets_list = sorted(list(all_datasets))
+                
             return {
                 "is_running": self.is_running,
                 "phase": self.current_phase,
@@ -839,7 +1064,7 @@ class FLServerManager:
                 "metrics": self.metrics,
                 "current_logs": self.current_logs,
                 "received_data": self.received_data,
-                "model_version": self.model_version,
+                "model_version": self.model_version_str,
                 "default_rounds": self.default_rounds,
                 "default_epochs": self.default_epochs,
                 "default_min_clients": self.default_min_clients,
@@ -847,7 +1072,9 @@ class FLServerManager:
                 "attendance_count": attendance_count,
                 "uptime": int(datetime.now().timestamp() - self.start_time) if self.start_time > 0 else 0,
                 "active_clients": active_clients,
-                "inference_logs": self.metrics.get("inference_logs", [])
+                "inference_logs": self.metrics.get("inference_logs", []),
+                "current_dataset": self.current_dataset,
+                "available_datasets": all_datasets_list
             }
 
     def ensure_model_seeded(self, db):
@@ -889,6 +1116,47 @@ class FLServerManager:
                 db.commit()
             except Exception as e:
                 self.logger.error(f"Gagal inisialisasi GlobalModel: {e}")
+                db.rollback()
+                
+    def force_seed_model_v0(self, db):
+        # Selalu paksa GlobalModel di database menggunakan bobot awal v0 dari global_model_v0.pth
+        fallback_path = FALLBACK_MODEL_PATH
+        if os.path.exists(fallback_path):
+            self.logger.info(f"Paksa seeding GlobalModel dari {fallback_path}...")
+            try:
+                model = MobileFaceNet()
+                loaded = torch.load(fallback_path, map_location="cpu")
+                current_sd = model.state_dict()
+                shared_keys = [k for k in current_sd.keys() if 
+                               any(x in k.lower() for x in ['weight', 'bias', 'bn', 'running_', 'num_batches_tracked'])]
+                
+                final_sd = {}
+                if isinstance(loaded, dict):
+                    for key in shared_keys:
+                        if key in loaded:
+                            final_sd[key] = loaded[key]
+                        else:
+                            final_sd[key] = current_sd[key]
+                else:
+                    final_sd = current_sd
+                
+                buf = io.BytesIO()
+                torch.save(final_sd, buf)
+                weights_bytes = buf.getvalue()
+                
+                # Update atau insert GlobalModel pertama
+                global_model = db.query(GlobalModel).first()
+                if not global_model:
+                    global_model = GlobalModel(version=0, weights=weights_bytes)
+                    db.add(global_model)
+                else:
+                    global_model.weights = weights_bytes
+                    global_model.version = 0
+                    global_model.last_updated = datetime.now(timezone(timedelta(hours=7)))
+                db.commit()
+                self.logger.success("GlobalModel berhasil dipaksa kembali ke bobot v0.")
+            except Exception as e:
+                self.logger.error(f"Gagal memaksa seeding GlobalModel ke v0: {e}")
                 db.rollback()
                 
     def get_label_map_from_db(self):
@@ -949,9 +1217,11 @@ class FLServerManager:
                 fit_metrics_aggregation_fn=weighted_average,
                 evaluate_metrics_aggregation_fn=weighted_average,
                 on_fit_config_fn=lambda server_round: {
+                    "session_id": session_id,
                     "round": server_round,
                     "total_rounds": rounds,
                     "local_epochs": self.default_epochs,
+                    "dataset": self.current_dataset,
                     "lr": self._get_lr_for_round(server_round),
                     "mu": 0.05, 
                     "lambda": self.default_lambda,

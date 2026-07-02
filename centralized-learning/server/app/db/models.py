@@ -23,6 +23,7 @@ class UserGlobal(Base):
     name = Column(String)
     nrp = Column(String, unique=True)
     photo_path = Column(String, nullable=True) 
+    dataset = Column(String, default="students", nullable=True)
     registered_edge_id = Column(String, ForeignKey("clients.edge_id"))
     created_at = Column(DateTime, default=lambda: datetime.now(timezone(timedelta(hours=7))))
 

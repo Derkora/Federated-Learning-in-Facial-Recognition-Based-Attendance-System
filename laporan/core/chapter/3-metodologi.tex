@@ -4,7 +4,7 @@
 \section{Metode yang Digunakan}
 \label{sec:metode-yang-digunakan}
 
-Penelitian ini menerapkan metode \textit{Federated Learning} pada lingkungan \textit{Edge Computing} sebagai pendekatan utama dalam pembangunan sistem. Tahapan pelaksanaan penelitian, dimulai dari pengumpulan data hingga evaluasi, diilustrasikan melalui diagram alur pada Gambar \ref{fig:diagram-alur-penelitian} berikut ini.
+Penelitian ini menggunakan metode \textit{Federated Learning} pada perangkat \textit{Edge Computing} sebagai pendekatan utama. Secara umum, alur penelitian dari awal hingga akhir ditunjukkan pada Gambar \ref{fig:diagram-alur-penelitian} berikut.
 
 \begin{figure}[H]
   \centering
@@ -13,12 +13,12 @@ Penelitian ini menerapkan metode \textit{Federated Learning} pada lingkungan \te
   \label{fig:diagram-alur-penelitian}
 \end{figure}
 
-\subsection{Data Preparation}
+\subsection{\textit{Data Preparation}}
 \label{subsec:data-prep}
 
 \begin{enumerate}
   \item \textbf{Pengumpulan Data} \\
-  Langkah awal dalam kerangka kerja sistem ini dimulai dari proses akuisisi sampel data wajah mentah yang representatif langsung dari subjek penelitian, di mana proses ini dikerjakan secara riil dengan merekam video karakteristik wajah dari 30 mahasiswa menggunakan perangkat \textit{webcam} yang kemudian diekstraksi secara dinamis menjadi sekumpulan berkas citra gambar mandiri (\textit{frame}) melalui bantuan skrip ekstraktor otomatis dengan pengaturan laju pencuplikan (\textit{sampling rate}) sebesar 0,17 detik per \textit{frame} sebagaimana contoh visualnya diilustrasikan pada Gambar \ref{fig:sampel-citra-mentah}. Guna merepresentasikan skenario lingkungan jaringan \textit{Federated Learning} yang mendekati kondisi nyata di lapangan, seluruh aset citra tersebut tidak dikumpulkan pada satu penyimpanan terpusat, melainkan dibagi secara merata ke dalam beberapa perangkat komputer \textit{edge} sehingga masing-masing perangkat \textit{client} dikondisikan untuk menyimpan data biometrik lokal dari 15 mahasiswa yang berbeda sebagai basis data latih utama untuk melatih model kecerdasan buatan secara terisolasi tanpa melanggar privasi data induk.
+  Langkah pertama adalah merekam video wajah dari 30 mahasiswa menggunakan \textit{webcam}. Video tersebut kemudian diekstraksi secara otomatis menjadi kumpulan frame dengan interval pengambilan setiap 0,17 detik, sebagaimana diilustrasikan pada Gambar \ref{fig:sampel-citra-mentah}. Guna mensimulasikan skenario \textit{Federated Learning} yang mendekati kondisi nyata, seluruh data tidak disimpan pada satu lokasi terpusat, melainkan didistribusikan ke beberapa perangkat \textit{edge} sehingga masing-masing perangkat menyimpan data dari 15 mahasiswa yang berbeda.
 
   \begin{figure}[H]
     \centering
@@ -28,15 +28,15 @@ Penelitian ini menerapkan metode \textit{Federated Learning} pada lingkungan \te
   \end{figure}
 
   \item \textbf{Distribusi Model} \\
-  Setelah data gambar dari 15 mahasiswa berhasil terdistribusi dan tersimpan di penyimpanan lokal masing-masing \textit{client}, sistem menyelaraskan parameter arsitektur pada seluruh lingkungan perangkat sebelum proses manipulasi gambar dimulai. Langkah ini dieksekusi dengan mendistribusikan berkas inisialisasi bobot model global awal (\textit{pre-trained weights}) dari \textit{server} pusat ke setiap perangkat \textit{client} yang aktif. Distribusi ini memastikan bahwa setiap \textit{client} memiliki basis kecerdasan model yang seragam sebelum melakukan proses \textit{fine-tuning} lokal menggunakan data 15 mahasiswa yang dikelolanya.
+  Setelah data terdistribusi, server mendistribusikan bobot awal model (\textit{pre-trained weights}) ke setiap perangkat \textit{client}. Langkah ini memastikan seluruh perangkat memiliki titik awal yang seragam sebelum masing-masing menjalankan pelatihan lokal menggunakan data 15 mahasiswa yang dikelolanya.
 
   \item \textbf{Penyatuan Registrasi} \\
-  Setelah perangkat lokal menerima inisialisasi model dan mengisolasi data mentah dari 15 mahasiswa, sistem melakukan pengorganisasian identitas subjek agar proses pemetaan data berjalan secara terstruktur. Proses ini mengintegrasikan informasi registrasi dari 15 mahasiswa yang ada di tingkat \textit{client} ke dalam sebuah indeks \textit{mapping} hasil penyatuan. Melalui penggabungan indeks registrasi ini, sistem dapat memastikan koordinasi label kelas identitas tidak tumpang tindih antar perangkat. Indeks pemetaan terpadu inilah yang menjadi acuan utama sistem saat mengelompokkan sampel citra wajah pada tahap \textit{preprocessing}.
+  Setiap perangkat \textit{client} mendaftarkan identitas 15 mahasiswanya ke server pusat. Server kemudian menyusun satu daftar label terpadu yang mencakup seluruh 30 mahasiswa sehingga tidak terjadi tumpang tindih penomoran label antar-perangkat. Daftar terpadu ini menjadi acuan utama dalam proses pengelompokan citra pada tahap \textit{preprocessing}.
 
   \item \textbf{Preprocessing} \\
-  Berdasarkan indeks pemetaan yang telah terbentuk, sistem menjalankan rangkaian \textit{preprocessing} untuk menstandardisasi kondisi visual dari sampel citra wajah agar seragam dan siap diproses oleh model. Tahapan manipulasi data citra ini mengalir secara sekuensial sebagai berikut:
+  Berdasarkan daftar label yang telah terbentuk, setiap citra wajah diproses secara sekuensial untuk memenuhi format masukan model. Tahapannya adalah sebagai berikut.
   \begin{enumerate}
-    \item \textit{Seleksi Laplacian Variance}: Alur \textit{preprocessing} dimulai dengan menyaring kualitas ketajaman dari ribuan \textit{frame} gambar hasil \textit{Data Gathering} secara otomatis. Sistem menghitung nilai varians operator Laplacian pada setiap citra untuk mengeliminasi gambar yang kabur (\textit{blur}), sehingga hanya 50 citra tertajam yang lolos untuk dikirim ke tahap deteksi. Representasi perbedaan visual antara citra wajah asli dan matriks hasil transformasi deteksi gradien tepi dari proses penyaringan ini ditunjukkan secara mendalam pada Gambar \ref{fig:laplacian-variance}.
+    \item \textit{Seleksi Laplacian Variance}: Sistem mengukur ketajaman setiap frame menggunakan operator Laplacian yang bekerja dengan mendeteksi gradien tepi objek dalam citra. Frame yang memiliki nilai ketajaman rendah akibat gerakan subjek maupun kondisi pencahayaan yang kurang optimal akan disaring secara otomatis. Dari seluruh frame yang tersedia, dipilih 50 frame dengan nilai ketajaman tertinggi untuk diteruskan ke tahap berikutnya. Perbandingan visual antara citra tajam dan citra buram dapat dilihat pada Gambar \ref{fig:laplacian-variance}.
 
     \begin{figure}[H]
       \centering
@@ -45,7 +45,7 @@ Penelitian ini menerapkan metode \textit{Federated Learning} pada lingkungan \te
       \label{fig:laplacian-variance}
     \end{figure}
 
-    \item \textit{Face Detection dan Cropping}: Setelah citra melalui tahap penyaringan kualitas ketajaman, 50 berkas citra terpilih diproses menuju fase lokalisasi objek wajah secara otomatis. Pada tahap ini, skrip pemrograman mengeksekusi model MTCNN untuk memindai struktur gambar dan mengekstraksi koordinat kotak pembatas (\textit{bounding box}) di sekitar area wajah pengguna. Selain menentukan batas kotak, algoritma ini juga mengekstrak letak posisi dari lima titik kanonik penanda wajah (\textit{landmarks}) utama yang meliputi sebaran koordinat mata kiri, mata kanan, hidung, ujung mulut kiri, dan ujung mulut kanan. Hasil komputasi geometri tersebut digunakan untuk melakukan \textit{cropping} gambar secara presisi guna mengeliminasi objek latar belakang yang tidak diperlukan, seperti ilustrasi visual deteksi titik koordinat yang disajikan pada Gambar \ref{fig:mtcnn-detection}.
+    \item \textit{Face Detection dan Cropping}: Dari 50 frame terpilih, model MTCNN melokalisasi wajah secara otomatis dengan menghasilkan koordinat kotak pembatas di sekitar area wajah sekaligus mengekstraksi posisi 5 titik penanda wajah, yaitu mata kiri, mata kanan, hidung, sudut mulut kiri, dan sudut mulut kanan. Koordinat tersebut digunakan untuk memotong citra secara presisi sehingga hanya area wajah yang dipertahankan, sebagaimana ditunjukkan pada Gambar \ref{fig:mtcnn-detection}.
 
     \begin{figure}[H]
       \centering
@@ -54,7 +54,7 @@ Penelitian ini menerapkan metode \textit{Federated Learning} pada lingkungan \te
       \label{fig:mtcnn-detection}
     \end{figure}
 
-    \item \textit{Resizing}: Setelah wajah dipotong, ukuran gambar harus diubah agar pas dengan kebutuhan model. Menggunakan metode interpolasi bilinear, sistem mengubah resolusi gambar menjadi 96x112 piksel. Standarisasi ukuran ini wajib dilakukan supaya struktur matriks gambar bisa diterima dan dibaca dengan benar oleh \textit{input layer} MobileFaceNet. Hasil perubahan ukuran gambar wajah ini dapat dilihat secara jelas pada Gambar \ref{fig:normalisasi-resolusi}.
+    \item \textit{Resizing}: Citra wajah hasil pemotongan diubah ukurannya menjadi 96$\times$112 piksel karena arsitektur MobileFaceNet hanya dapat menerima citra dengan dimensi tersebut sebagai masukan lapisan konvolusi pertamanya. Hasil normalisasi resolusi ini dapat dilihat pada Gambar \ref{fig:normalisasi-resolusi}.
 
     \begin{figure}[H]
       \centering
@@ -63,26 +63,24 @@ Penelitian ini menerapkan metode \textit{Federated Learning} pada lingkungan \te
       \label{fig:normalisasi-resolusi}
     \end{figure}
 
-    \item \textit{Normalization}: Setelah dimensi gambar disesuaikan, nilai sebaran piksel citra distandardisasi untuk mempercepat proses pencapaian kestabilan konvergensi saat pelatihan. Gambar dikonversi ke dalam representasi data bentuk tensor, nilainya dibagi dengan skala warna dasar, lalu dikurangi nilai rata-rata (\textit{mean}) serta dibagi nilai standar deviasi bawaan arsitektur MobileFaceNet. Tensor terstandardisasi inilah yang siap diekstrak oleh model menjadi vektor \textit{face embedding}.
+    \item \textit{Normalization}: Nilai piksel citra dinormalisasi agar berada pada rentang yang konsisten. Citra dikonversi ke format \textit{tensor} multidimensi, kemudian setiap nilai piksel dikurangi nilai rata-rata sebesar 0,5 dan dibagi dengan standar deviasi sebesar 0,5. Normalisasi ini bertujuan menstabilkan distribusi gradien sehingga proses pelatihan model berlangsung lebih stabil dan konvergen lebih cepat.
 
-    \item \textit{Enkripsi}: Langkah akhir dari fase \textit{preparation} ini difokuskan pada perlindungan keamanan aset data biometrik yang telah terekstraksi oleh model. Vektor numerik \textit{face embedding} luaran MobileFaceNet diproses menggunakan algoritma \textit{Advanced Encryption Standard} 256-bit (AES-256) dalam mode \textit{Cipher Block Chaining} (CBC) dengan tambahan skema penggenapan PKCS7 serta vektor inisialisasi (IV) acak 16-byte sebelum disimpan ke dalam database PostgreSQL lokal. Enkripsi kriptografi tingkat akhir ini menjamin bahwa seluruh data wajah abstrak mahasiswa tetap aman di dalam penyimpanan perangkat \textit{edge} dan tidak dapat direkonstruksi kembali menjadi visual wajah asli jika terjadi pencurian infrastruktur fisik di lapangan.
+    \item \textit{Enkripsi}: Vektor \textit{face embedding} yang dihasilkan model dienkripsi sebelum disimpan ke database lokal menggunakan algoritma AES-256 dalam mode CBC. Dengan demikian, meskipun perangkat \textit{edge} berhasil diakses secara fisik oleh pihak tidak berwenang, data biometrik yang tersimpan tidak dapat dibaca maupun direkonstruksi kembali tanpa kunci enkripsi yang valid.
   \end{enumerate}
 \end{enumerate}
 
-\subsection{Model Training}
+\subsection{\textit{Model Training}}
 \label{subsec:model-training-alur}
 
-Proses pelatihan dimulai setelah seluruh data gambar lokal pada penyimpanan perangkat \textit{edge} selesai dibersihkan, dipotong, dan dienkripsi dengan aman. Dalam penelitian ini, siklus pelatihan difokuskan untuk mengoptimalkan model MobileFaceNet secara terdesentralisasi agar lebih pintar dalam mengenali karakteristik wajah mahasiswa. Proses ini dijalankan secara berulang dalam siklus multi-ronde komunikasi (\textit{N-Iterations}) menggunakan algoritma FedProx dengan rincian langkah sebagai berikut:
+Proses pelatihan dimulai setelah semua citra wajah di setiap perangkat \textit{edge} selesai dibersihkan, dipotong, dan diamankan. Tujuan dari tahap ini adalah melatih model MobileFaceNet secara kolaboratif agar mampu mengenali wajah mahasiswa tanpa harus mengirimkan data ke server. Proses ini berjalan berulang dalam beberapa ronde menggunakan algoritma FedProx dengan langkah-langkah sebagai berikut.
 
 \begin{enumerate}
   \item \textbf{Pelatihan Lokal} \\
-  Tahap ini merupakan fase eksekusi komputasi mandiri di sisi perangkat \textit{client} menggunakan pasokan data lokal terisolasi dari 15 mahasiswa yang dikelolanya. Alur pengerjaan pada fase lokal ini dibagi ke dalam sub-proses berikut:
+  Tahap ini merupakan fase komputasi mandiri di sisi perangkat \textit{client} menggunakan data lokal terisolasi dari 15 mahasiswa yang dikelolanya. Alurnya dibagi ke dalam sub-proses berikut.
   \begin{enumerate}
-    \item \textit{Konfigurasi Layer Freezing}: Sebelum pelatihan dimulai, sistem mengunci lapisan-lapisan backbone pada model MobileFaceNet. Artinya, bagian ekstraktor fitur wajah dasar ini dibuat statis guna menghemat daya komputasi perangkat \textit{edge}. Sebaliknya, lapisan yang dinamis hanya dibatasi pada \textit{embedding layer} dan bagian \textit{classifier head}.
-    
-    \item \textit{Augmentasi Data On-The-Fly}: Proses augmentasi data secara langsung (\textit{on-the-fly}) yang diterapkan pada sistem ini sengaja dirancang dengan variasi transformasi yang lebih kaya untuk mencakup berbagai tantangan visual di lingkungan nyata. Saat data citra wajah dimuat ke dalam memori pelatihan (\textit{data loading}), sistem memanipulasi gambar secara langsung pada setiap \textit{batch} yang dipanggil menggunakan kombinasi beberapa teknik dari pustaka PyTorch \textit{torchvision}. Selain menggunakan pembalikan horizontal acak (\textit{Random Horizontal Flip}) untuk mensimulasikan sudut hadap wajah dari arah kiri maupun kanan serta perubahan acak nilai warna, kontras, saturasi, dan kecerahan (\textit{Color Jitter}) untuk meniru fluktuasi intensitas cahaya ruangan, sistem juga menambahkan teknik rotasi acak (\textit{Random Rotation}) dengan rentang derajat tertentu guna mengenali posisi kemiringan kepala subjek di depan kamera.
-    
-    Di samping itu, sistem mengintegrasikan teknik pemotongan acak yang disesuaikan kembali ke dimensi asal (\textit{Random Resized Crop}) untuk memberikan efek variasi jarak jauh-dekat subjek terhadap lensa kamera perangkat \textit{edge}, serta konversi skala keabu-abuan acak (\textit{Random Grayscale}) untuk melatih ketajaman ekstraksi fitur model meskipun dalam kondisi minim warna. Penggabungan seluruh teknik augmentasi ini di dalam kode program bertujuan agar arsitektur MobileFaceNet memiliki ketahanan ekstraksi (\textit{robustness}) yang sangat tinggi terhadap berbagai gangguan visual di lapangan tanpa perlu membebani atau menambah kapasitas ruang penyimpanan fisik pada perangkat lokal. Melalui manipulasi yang berubah secara dinamis pada setiap \textit{epoch} pelatihan ini, model dipaksa untuk tidak menghafal posisi piksel gambar mentah secara monoton, sehingga variasi hasil perubahan citra instan yang diilustrasikan pada Gambar \ref{fig:data-augmentation} dapat menghasilkan generalisasi performa akurasi yang optimal.
+    \item \textit{Konfigurasi Layer Freezing}: Sebelum pelatihan dimulai, sebagian lapisan awal \textit{backbone} MobileFaceNet dibekukan sehingga parameternya tidak ikut diperbarui selama pelatihan. Pembekuan ini menonaktifkan kalkulasi gradien pada lapisan-lapisan terkait, yang secara langsung mengurangi konsumsi memori komputasi pada perangkat \textit{edge}. Dari total 19 lapisan utama MobileFaceNet yang terdiri dari 1 lapisan konvolusi awal, 1 konvolusi depthwise, dan 17 blok \textit{bottleneck}, sistem membekukan 14 lapisan pertama. Lapisan yang tetap aktif dan dilatih meliputi 5 blok \textit{bottleneck} terakhir, lapisan \textit{embedding}, serta lapisan klasifikasi. Skema ini diterapkan karena keterbatasan kapasitas RAM pada perangkat \textit{edge} seperti Raspberry Pi tidak memungkinkan pelatihan penuh seluruh lapisan secara serentak.
+
+    \item \textit{Augmentasi Data On-The-Fly}: Setiap citra wajah dimodifikasi secara acak pada saat pemuatan data tanpa mengubah berkas aslinya di penyimpanan fisik. Teknik augmentasi yang diterapkan meliputi pembalikan horizontal acak untuk mensimulasikan variasi sudut pandang wajah, perubahan acak kecerahan dan kontras untuk meniru fluktuasi intensitas cahaya ruangan, rotasi acak untuk mensimulasikan kemiringan kepala subjek, pemotongan dan penskalaan ulang acak untuk mensimulasikan variasi jarak terhadap kamera, serta konversi ke skala abu-abu secara acak untuk melatih ketahanan ekstraksi fitur pada kondisi minim warna. Variasi citra hasil augmentasi ini ditunjukkan pada Gambar \ref{fig:data-augmentation}.
 
     \begin{figure}[H]
       \centering
@@ -91,366 +89,46 @@ Proses pelatihan dimulai setelah seluruh data gambar lokal pada penyimpanan pera
       \label{fig:data-augmentation}
     \end{figure}
 
-    \item \textit{Optimasi Lokal Dengan FedProx Proximal Term}: Proses \textit{fine-tuning} dijalankan selama 1 \textit{epoch} lokal menggunakan fungsi \textit{loss} yang diintegrasikan dengan komponen \textit{Proximal Term} ($\mu$) bawaan algoritma FedProx. Fungsi utama dari penambahan parameter penalti ini adalah sebagai pengendali matematis untuk membatasi agar arah pembaruan parameter bobot lokal pada lapisan \textit{head} yang dinamis tidak melenceng terlalu jauh dari arsitektur model global asal. Dengan demikian, risiko kegagalan latih (\textit{divergence}) akibat karakteristik distribusi data wajah antarperangkat yang tidak seragam (\textit{Non-IID}) dapat diredam secara optimal.
+    \item \textit{Hiperparameter dan Optimasi Lokal dengan FedProx Proximal Term}: Pelatihan lokal pada setiap perangkat \textit{client} dikonfigurasi dengan beberapa parameter utama. Algoritma optimasi yang digunakan adalah \textit{Stochastic Gradient Descent} (SGD) dengan nilai momentum 0,9 dan Nesterov diaktifkan untuk mempercepat konvergensi dan menstabilkan pembaruan bobot. Setiap ronde, model dilatih selama 1 \textit{epoch} dengan ukuran \textit{batch} 32. Laju pembelajaran (\textit{learning rate}) dimulai dari 0,01 dan diturunkan secara bertahap mengikuti pola \textit{Cosine Decay}. Fungsi kerugian yang diterapkan adalah \textit{ArcFace Margin Loss} yang dirancang khusus untuk pengenalan wajah dengan mempertegas separasi antar kelas dalam ruang fitur. Di samping itu, ditambahkan komponen penalti \textit{Proximal Term} dengan nilai $\mu = 0{,}05$ dari algoritma FedProx yang berfungsi membatasi deviasi parameter model lokal terhadap model global acuan. Penalti ini penting dalam skenario distribusi data yang tidak merata antar-perangkat karena tanpa mekanisme ini model pada setiap \textit{client} berpotensi berkembang ke arah yang divergen sehingga sulit diagregasikan.
 
-    \item \textit{Ekstraksi Parameter dan Head Centroid}: Setelah seluruh rangkaian dalam satu siklus \textit{epoch} lokal selesai dikerjakan, sistem akan mengunci model dan langsung mengekstraksi parameter hasil pembaruan. Parameter yang diambil ini meliputi matriks bobot \textit{layer} internal yang mengalami perubahan dinamis serta nilai \textit{head centroid weights} (vektor pusat yang mewakili representasi kelas atau identitas wajah mahasiswa pada \textit{layer} klasifikasi). Komponen numerik abstrak hasil ekstraksi inilah yang dibungkus menjadi satu paket data koordinasi untuk bersiap dikirimkan menuju \textit{server} pusat.
+    \item \textit{Ekstraksi Parameter dan Head Centroid}: Setelah satu ronde pelatihan lokal selesai, sistem mengambil dua komponen dari model, yaitu bobot lapisan konvolusi yang sudah diperbarui dan \textit{head centroid weights} yang merepresentasikan profil rata-rata setiap identitas mahasiswa di lapisan klasifikasi. Kedua komponen ini dikemas menjadi satu paket data yang siap dikirim ke server.
 
-    \item \textit{Transmisi Parameter}: Paket data koordinasi parameter model yang berisi kumpulan nilai bobot internal dan nilai \textit{head} abstrak tersebut kemudian dikirimkan kembali menuju \textit{server} pusat melalui jaringan komunikasi lokal. Proses pengiriman ini dilakukan sepenuhnya tanpa menyertakan satu pun berkas gambar wajah mentah milik mahasiswa. Mekanisme isolasi parameter ini menjamin bahwa aspek privasi data biometrik dasar mahasiswa tetap terjaga utuh di dalam batas fisik perangkat \textit{edge} sepanjang siklus komunikasi terdistribusi berlangsung.
+    \item \textit{Transmisi Parameter}: Paket parameter tersebut dikirimkan ke server pusat melalui jaringan lokal. Yang ditransmisikan hanyalah nilai bobot model hasil pelatihan, bukan citra wajah mahasiswa dalam bentuk apapun. Mekanisme ini menjamin bahwa data biometrik asli tetap tersimpan secara eksklusif di dalam perangkat \textit{edge} sepanjang siklus komunikasi berlangsung.
   \end{enumerate}
 
   \item \textbf{Aggregator} \\
-  Tahap ini merupakan fase konsolidasi terpusat di sisi \textit{server} untuk menyatukan seluruh kecerdasan lokal yang telah dikirimkan oleh perangkat \textit{client}. Langkah agregasi ini dijabarkan ke dalam sub-proses berikut:
+  Setelah semua \textit{client} mengirimkan hasil pelatihan lokalnya, server bertugas menggabungkan seluruh parameter tersebut menjadi satu model global. Proses ini terdiri dari tiga langkah berikut.
   \begin{enumerate}
-    \item \textit{Penyelarasan Pengumpulan Parameter}: \textit{Server} pusat mengumpulkan seluruh kiriman berkas bobot model lokal beserta \textit{head centroid weights} dari masing-masing \textit{client} yang berpartisipasi pada ronde berjalan. Sistem menyelaraskan struktur matriks parameter tersebut berdasarkan indeks \textit{Registry Fusion} yang telah disepakati di awal.
-    \item \textit{Agregasi Multi-Client FedProx}: \textit{Server} mengeksekusi operasi rata-rata tertimbang (\textit{weighted averaging}) terhadap parameter bobot internal model dan nilai \textit{head centroid} dari seluruh \textit{client} secara proporsional sesuai volume data latih lokal masing-masing. Hasil dari kalkulasi matematis terpusat ini melahirkan sebuah model global baru yang memiliki cakupan pengetahuan biometrik 30 mahasiswa secara utuh.
-    \item \textit{Redistribusi Model Global}: Model global mutakhir hasil agregasi tersebut kemudian disimpan dan langsung didistribusikan kembali secara serentak ke seluruh perangkat \textit{client} untuk digunakan sebagai basis awal pada ronde pelatihan berikutnya, di mana siklus iterasi terpusat ini terus diulang hingga memenuhi target batas total \textit{N} ronde pelatihan.
+    \item \textit{Pengumpulan Parameter}: Server mengumpulkan semua bobot model dan \textit{head centroid weights} dari setiap \textit{client} yang aktif pada ronde tersebut, lalu menyelaraskan strukturnya berdasarkan indeks label yang sudah disepakati bersama.
+    \item \textit{Penggabungan (Agregasi)}: Server menghitung rata-rata tertimbang dari seluruh bobot yang diterima. \textit{Client} dengan volume data latih lebih besar memperoleh bobot kontribusi yang lebih besar dalam perhitungan. Hasilnya adalah satu model global baru yang memiliki representasi fitur biometrik dari seluruh 30 mahasiswa secara kolektif tanpa sekalipun menerima citra wajah dari perangkat manapun.
+    \item \textit{Distribusi Model Global}: Model global yang baru disebarkan kembali ke semua \textit{client} sebagai titik awal pelatihan ronde berikutnya. Siklus ini terus berulang hingga jumlah ronde yang ditargetkan tercapai.
   \end{enumerate}
 
   \item \textbf{Evaluasi Pelatihan Model} \\
-  Tahap evaluasi ini bertujuan untuk mengkomparasi model hasil pelatihan desentralisasi berbasis algoritma FedProx terhadap model tradisional \textit{Centralized Learning} yang bertindak sebagai standar tolok ukur (\textit{baseline}). Evaluasi dilakukan secara komprehensif dengan meninjau dua aspek utama sebagai berikut:
+  Untuk mengetahui seberapa baik sistem bekerja, model hasil \textit{Federated Learning} dibandingkan dengan model yang dilatih secara terpusat (\textit{Centralized Learning}) sebagai patokan. Perbandingan dilakukan dari dua sisi.
   \begin{enumerate}
-    \item \textit{Evaluasi Performa Pelatihan}: Aspek ini difokuskan untuk menilai karakteristik pembaruan model pada masing-masing arsitektur yang diuji. Pengujian dilakukan dengan cara mencatat seluruh pergerakan nilai \textit{loss}, \textit{accuracy}, \textit{validation loss}, dan \textit{validation accuracy} ke dalam tabel evaluasi pada setiap siklus putaran latih (ronde pada \textit{Federated Learning} dan \textit{epoch} pada \textit{Centralized Learning}). Melalui representasi angka pada tabel tersebut, analisis dilakukan untuk melihat kestabilan model dalam mengenali fitur wajah mahasiswa.
-    \item \textit{Evaluasi Fisik dan Efisiensi Sumber Daya}: Aspek ini ditujukan untuk menilai beban penggunaan infrastruktur komputasi riil dari kedua pendekatan sistem. Pengukuran dilakukan secara berurutan meliputi total durasi waktu latih sistem dalam satuan detik, volume transmisi data koordinasi parameter model yang dihabiskan melewati jaringan dalam satuan Megabyte (MB), serta akumulasi total konsumsi energi listrik perangkat keras yang dihabiskan selama operasional komputasi berlangsung dalam satuan kiloWatt-hour (kWh). Riset ini membatasi analisis objektif pada parameter fisik mutlak tersebut dan mencatatnya ke dalam tabel ringkasan.
+    \item \textit{Evaluasi Performa Pelatihan}: Setiap ronde pelatihan, nilai \textit{loss} dan akurasi pada data latih maupun validasi dicatat ke dalam tabel. Dari tabel ini dapat dilihat apakah model semakin baik dalam mengenali wajah dari ronde ke ronde serta seberapa stabil proses belajarnya.
+    \item \textit{Evaluasi Efisiensi Sumber Daya}: Selain akurasi, penelitian ini juga mengukur biaya komputasi yang dikeluarkan, yaitu durasi pelatihan dalam satuan detik, volume data yang dikirim melalui jaringan dalam satuan MB, serta konsumsi energi listrik dalam satuan kWh. Ketiga nilai ini dicatat dan dibandingkan antara kedua pendekatan.
   \end{enumerate}
 \end{enumerate}
 
-\subsection{Model Integration}
+\subsection{\textit{Model Integration}}
 \label{subsec:model-integration-alur}
 
-Tahap \textit{model integration} merupakan fase akhir dari perancangan sistem, di mana arsitektur model MobileFaceNet yang telah terlatih diintegrasikan ke dalam subsistem antarmuka aplikasi untuk mengeksekusi layanan verifikasi kehadiran mahasiswa secara langsung (\textit{on-device}) pada perangkat \textit{edge}. Rangkaian prosedur integrasi dan pengujian operasional ini dibagi ke dalam 2 poin utama sebagai berikut:
+Tahap \textit{model integration} adalah fase terakhir dari perancangan sistem, di mana model MobileFaceNet yang sudah terlatih diintegrasikan ke dalam aplikasi absensi untuk melakukan pengenalan wajah secara langsung di perangkat \textit{edge}. Tahap ini terbagi menjadi 2 bagian utama.
 
 \begin{enumerate}
-  \item \textbf{Interface} \\
-  Subsistem ini berfungsi sebagai komponen utama interaksi \textit{real-time} untuk menjembatani proses akuisisi data visual pengguna dengan database lokal perangkat \textit{edge}. Siklus eksekusi dimulai ketika aplikasi mengakses perangkat \textit{webcam} secara lokal untuk menangkap aliran video wajah mahasiswa secara langsung. Aliran data visual tersebut diekstrak per \textit{frame} untuk mendeteksi keberadaan objek wajah menggunakan MTCNN yang telah terpasang, sebelum akhirnya diumpankan menuju arsitektur MobileFaceNet global mutakhir hasil pelatihan desentralisasi. Model kemudian mengekstraksi karakteristik geometri wajah tersebut menjadi sebuah \textit{face embeddings}, yang langsung dihitung tingkat jarak kedekatannya terhadap matriks \textit{head centroid} referensi mahasiswa di database lokal menggunakan metode \textit{Cosine Similarity}. Guna mengeliminasi fluktuasi salah deteksi akibat pergerakan dinamis subjek di lapangan, sistem menerapkan jaring pengaman \textit{Temporal Voting} yang merata-ratakan akumulasi skor kemiripan dari rentang 3 \textit{frame} terakhir yang tertangkap, sebelum akhirnya mengeluarkan keputusan identitas akhir berupa status dikenal (\textit{KNOWN} beserta nomor registrasi mahasiswa) atau tidak dikenal (\textit{UNKNOWN}).
+  \item \textbf{\textit{Interface}} \\
+  Subsistem ini menangani proses absensi secara langsung. Siklus kerjanya dimulai ketika kamera \textit{webcam} aktif dan mulai menangkap video wajah mahasiswa. Setiap frame dari video tersebut dideteksi wajahnya menggunakan MTCNN, lalu diekstraksi karakteristiknya oleh MobileFaceNet menjadi sebuah \textit{face embedding}. Selanjutnya, sistem menghitung seberapa mirip \textit{embedding} tersebut dengan data wajah yang sudah tersimpan di database menggunakan \textit{Cosine Similarity}. Agar tidak salah dalam mengenali identitas akibat gerakan sesaat, sistem menggunakan \textit{Temporal Voting} dengan mengakumulasikan skor kemiripan dari 3 frame terakhir sebelum memutuskan identitas akhir, apakah mahasiswa tersebut dikenal beserta NRP-nya atau tidak dikenal.
 
-  \item \textbf{Evaluasi Pengujian Model} \\
-  Fase evaluasi ini ditujukan untuk menguji keandalan operasional sistem absensi secara biner dengan parameter keputusan berupa status Berhasil atau Gagal mendasarkan pada metodologi pengujian Tugas Akhir terdahulu \parencite{Nagamas2022}. Pengujian fungsional pertama dilakukan melalui serangkaian skenario pengujian terkontrol yang memetakan performa pengenalan wajah berdasarkan variasi kondisi lingkungan fisik, yaitu jarak pemindaian (0,5 meter; 1 meter; 1,5 meter; 2 meter; 2,5 meter; dan 3 meter) serta tingkat intensitas pencahayaan ruangan (cahaya cukup dan pencahayaan minim). Status pengujian dinyatakan Berhasil apabila sistem antarmuka pada perangkat \textit{edge} mampu mendeteksi wajah, melakukan ekstraksi vektor fitur, dan mengeluarkan label keputusan identitas secara tepat (\textit{KNOWN} beserta nama/NRP mahasiswa) pada variasi jarak dan kondisi pencahayaan tersebut, serta memiliki kemampuan untuk mengenali identitas mahasiswa lintas \textit{client} (mampu menebak wajah mahasiswa yang dilatih di perangkat \textit{edge} lain berkat hasil agregasi model global \textit{Federated Learning}). Sebaliknya, pengujian dikategorikan Gagal apabila sistem tidak mampu mendeteksi wajah, salah mengenali identitas subjek, mengeluarkan keputusan tidak dikenal (\textit{UNKNOWN}) untuk mahasiswa yang seharusnya terdaftar, atau mengalami \textit{timeout} dan kegagalan operasional pada database lokal.
-  
-  Selanjutnya, pengujian performa sistem pada kondisi nyata dilakukan dengan memanfaatkan fungsi simulasi kelas otomatis yang telah disematkan pada pembaruan kode program terbaru. Prosedur ini dijalankan dengan mengumpankan berkas video rekaman langsung yang menangkap aktivitas sekelompok mahasiswa di dalam ruang kelas saat proses perkuliahan berlangsung. Skrip pengujian pada sisi \textit{client} akan membaca aliran video tersebut secara sekuensial untuk menyimulasikan proses presensi dinamis di lapangan, di mana sistem dituntut untuk melakukan pelacakan multi-wajah dan inferensi \textit{on-device} secara kontinu. Melalui evaluasi berbasis video kelas ini, efektivitas jaring pengaman \textit{Temporal Voting} akan diuji secara riil dalam meredam \textit{noise} visual dari pergerakan alami mahasiswa, seperti menoleh, menunduk, atau terhalang objek lain, guna memastikan akurasi pencatatan log kehadiran tetap stabil pada situasi operasional yang tidak ideal.
-\end{enumerate}
+  \item \textbf{Evaluasi Pengujian} \\
+  Fase ini menguji keandalan operasional sistem absensi dalam berbagai kondisi lingkungan. Metode pengujian mengacu pada metodologi Tugas Akhir terdahulu \parencite{Nagamas2022}, dengan hasil keputusan berupa status Berhasil atau Gagal. Pengujian fungsional pertama dilakukan dengan memvariasikan dua parameter kondisi fisik, yaitu jarak mahasiswa terhadap kamera pada 0,5 m, 1 m, 1,5 m, 2 m, 2,5 m, dan 3 m, serta tingkat intensitas pencahayaan ruangan pada kondisi cukup dan minim. Pengujian dinyatakan Berhasil apabila sistem mampu mendeteksi wajah, mengekstraksi vektor fitur, dan mengeluarkan keputusan identitas yang tepat pada seluruh variasi kondisi tersebut, termasuk kemampuan mengenali mahasiswa yang datanya dilatih pada perangkat \textit{edge} berbeda berkat hasil agregasi model global \textit{Federated Learning}. Sebaliknya, pengujian dikategorikan Gagal apabila sistem gagal mendeteksi wajah, menghasilkan identifikasi yang keliru, mengeluarkan keputusan tidak dikenal untuk mahasiswa yang seharusnya terdaftar, atau mengalami kegagalan operasional pada database lokal.
 
-\section{Bahan dan Peralatan yang Digunakan}
-\label{sec:bahan-peralatan}
-
-Berikut merupakan alat dan bahan yang digunakan dalam penelitian ini:
-\begin{enumerate}[label=\alph*.]
-  \item \textbf{Dataset Wajah}: Dikumpulkan secara mandiri dari mahasiswa Teknologi Informasi menggunakan \textit{webcam}.
-  \item \textbf{Perangkat Lunak}:
-  \begin{enumerate}[label=\roman*.]
-    \item Python 3.10
-    \item Docker
-    \item Flower, PyTorch, MTCNN, OpenCV, PyCryptodome, CodeCarbon, dan pustaka pendukung lainnya.
-  \end{enumerate}
-  \item \textbf{Perangkat Keras}:
-  Penelitian ini menggunakan tiga jenis perangkat keras dengan spesifikasi sebagai berikut:
-  \begin{enumerate}[label=\roman*.]
-    \item \textit{Server} Utama (VPS):
-    \begin{itemize}[itemsep=1pt]
-      \item Prosesor: Intel(R) Xeon(R) Gold 5218 CPU @ 2.30GHz
-      \item Jumlah Core (vCPU): 4 core
-      \item RAM: 6 GB
-      \item Penyimpanan: 50 GB
-      \item Sistem Operasi: Ubuntu 22.04 LTS
-    \end{itemize}
-    \item Raspberry Pi 3 Model B:
-    \begin{itemize}[itemsep=1pt]
-      \item Prosesor: Quad-core ARM Cortex-A53 @ 1.20 GHz
-      \item Jumlah Core (vCPU): 4 core
-      \item RAM: 1 GB
-      \item Penyimpanan: 32 GB
-      \item Sistem Operasi: Linux 6.12.75+rpt-rpi-v8 (aarch64)
-    \end{itemize}
-    \item NVIDIA Jetson Nano:
-    \begin{itemize}[itemsep=1pt]
-      \item Prosesor: Quad-core ARM Cortex-A57 @ 1.48 GHz
-      \item Jumlah Core (vCPU): 4 core
-      \item RAM: 4 GB
-      \item Penyimpanan: 16 GB
-      \item Sistem Operasi: Linux 4.9.337-tegra (aarch64)
-    \end{itemize}
+  Selanjutnya, pengujian dilakukan menggunakan 5 video simulasi yang merekam mahasiswa berjalan melewati pintu kelas untuk merepresentasikan kondisi operasional nyata. Agar RAM perangkat \textit{edge} tidak kehabisan memori, deteksi wajah hanya dijalankan setiap 5 frame sekali dan dibatasi maksimal 3 wajah per frame. Sistem juga menggunakan \textit{Temporal Voting} dari 3 frame terakhir untuk meminimalkan kesalahan deteksi akibat gerakan mahasiswa seperti menoleh atau tertutup benda. Evaluasi didasarkan pada tiga indikator.
+  \begin{enumerate}
+    \item \textbf{Durasi Pemrosesan}: Mengukur kecepatan inferensi sistem di setiap perangkat untuk melihat dampak keterbatasan RAM, di mana Raspberry Pi dengan RAM 1 GB cenderung lebih lambat dibanding Jetson Nano dengan RAM 4 GB karena menggunakan \textit{memory swapping}.
+    \item \textbf{Jumlah Salah Absen}: Mengukur seberapa sering sistem salah mengenali orang lain sebagai mahasiswa terdaftar. Ini membandingkan ketahanan \textit{Federated Learning} terhadap \textit{Centralized Learning}, terutama pada kasus wajah yang memiliki kemiripan visual.
+    \item \textbf{Rasio Mahasiswa Terdeteksi}: Mengukur seberapa banyak mahasiswa yang berhasil tercatat hadir, sekaligus mengevaluasi pengaruh perubahan penampilan seperti penggunaan kacamata serta perbedaan metode pemindaian aktif dan pasif.
   \end{enumerate}
 \end{enumerate}
 
-\section{Implementasi}
-\label{sec:implementasi}
-
-Berikut merupakan tahapan implementasi pelaksanaan penelitian ini:
-
-\subsection{Penyiapan Lingkungan Sistem}
-\label{subsec:penyiapan-lingkungan}
-
-Tahap awal pelaksanaan implementasi sistem dilakukan dengan mengonfigurasi seluruh lingkungan perangkat lunak, pustaka pemrograman, dan isolasi kontainerisasi pada sisi \textit{server} maupun \textit{client}. Langkah kontainerisasi ini krusial untuk menjamin kelancaran komunikasi data dan keselarasan dependensi sistem terdistribusi tanpa terikat oleh sistem operasi bawaan perangkat keras. Proses penyiapan lingkungan operasional ini dibagi menjadi dua poin utama sebagai berikut:
-
-\subsubsection{Client}
-
-Implementasi lingkungan pada sisi \textit{client} (Jetson Nano dan Raspberry Pi) diisolasi menggunakan layanan kontainerisasi untuk mendukung sistem komputasi berbasis prosesor ARM yang tertanam pada perangkat keras \textit{edge}. Sistem menggunakan \textit{image} dasar resmi python:3.10-slim-bullseye karena varian ini sangat ringan, stabil, dan memiliki kecocokan arsitektur kompilasi silang yang optimal.
-
-Di dalam kontainer ini, sistem mengonfigurasi beberapa parameter lingkungan penting, meliputi tautan alamat basis data SQLite lokal untuk menyimpan data kehadiran sementara, serta variabel alamat \textit{server} utama dan alamat \textit{server} \textit{Federated Learning} untuk mengarahkan jalur komunikasi \textit{socket} menuju alamat IP \textit{server} pusat. Guna menjembatani interaksi visual secara langsung, kontainer diberikan hak akses khusus dan pemetaan perangkat fisik untuk mengaktifkan modul kamera \textit{webcam} eksternal secara langsung, lengkap dengan pengaturan format video MJPG serta batas resolusi tangkapan berdimensi 1280x720 piksel.
-
-\subsubsection{Server}
-
-Implementasi lingkungan pada sisi \textit{server} pusat dirancang secara multi-kontainer menggunakan berkas konfigurasi yang mengorkestrasi dua layanan utama, yaitu mesin aplikasi utama \textit{Federated Learning} dan sistem manajemen basis data terpusat. Sama halnya dengan sisi \textit{client}, kontainer aplikasi utama \textit{server} dibangun menggunakan \textit{image} dasar python:3.10-slim-bullseye guna menjaga efisiensi konsumsi memori RAM dan keselarasan interpretasi tipe data saat proses serialisasi parameter bobot berlangsung.
-
-\textit{Server} membuka dua jalur pintu gerbang komunikasi internal, yaitu gerbang pertama untuk melayani penarikan data REST API dari antarmuka \textit{web} Flask, serta gerbang kedua untuk mengelola lalu lintas sinkronisasi parameter bobot lokal algoritma FedProx menggunakan pustaka Flower. Sementara itu, untuk menjamin keamanan rekapitulasi log absensi dari seluruh \textit{client}, \textit{server} mengintegrasikan layanan basis data relasional berbasis \textit{image} kontainer resmi postgres:15 yang dikonfigurasi dengan kredensial otentikasi yang aman.
-
-\subsection{Ekstraksi Data Wajah}
-\label{subsec:ekstraksi-wajah}
-
-Tahap pengelolaan data wajah awal merupakan fase pra-pelatihan yang dieksekusi secara mandiri di luar lingkungan operasional kontainer \textit{server} maupun \textit{client} menggunakan perangkat laptop. Proses ini dilakukan dengan membaca setiap bingkai dari berkas rekaman video mentah secara berurutan melalui fungsi pemrosesan citra dari pustaka OpenCV. Sistem kemudian mengambil nilai laju bingkai asli dari properti video tersebut untuk dikalikan dengan konstanta laju \textit{sampling} sebesar 0,17 detik, sehingga diperoleh angka interval lompatan bingkai komputasi yang konstan. Setiap kali indeks bingkai berjalan mencapai kelipatan dari nilai interval tersebut, sistem akan mengeksekusi pemotongan dan penyimpanan citra statis secara terformat ke dalam direktori luaran. Proses penyimpanan ini dikonfigurasi dengan menyematkan tingkat kompresi kualitas JPEG yang tinggi sebesar 95\% guna menjaga ketajaman resolusi objek wajah tanpa memperbesar ukuran berkas secara berlebihan. Alur implementasi ekstraksi visual ini ditunjukkan pada Kode Sumber \ref{lst:ekstraksi-video}.
-
-\lstinputlisting[
-  language=Python,
-  caption={Pemotongan Video Berdasarkan \textit{Frame Rate}.},
-  label={lst:ekstraksi-video}
-]{program/3.3.2_run_extraction.py}
-
-\subsection{Sinkronisasi Identitas}
-\label{subsec:sinkronisasi-identitas}
-
-Tahap penyelarasan identitas merupakan fase krusial dalam arsitektur pembelajaran terdistribusi yang bertujuan untuk menstandarkan indeks label kelas mahasiswa dari seluruh \textit{client} secara terpusat sebelum pelatihan model dimulai. Langkah ini dirancang untuk mengeliminasi risiko terjadinya tumpang tindih penomoran target matriks klasifikasi jala saraf MobileFaceNet antarperangkat \textit{edge} yang mengoleksi subset data berbeda. Mekanisme ini dieksekusi melalui empat tahapan sinkronisasi asinkron antara komponen manajer \textit{client} dan mesin \textit{server} pusat sebagai berikut:
-
-\subsubsection{Registrasi Identitas Pada Client}
-
-Proses diawali pada sisi \textit{client} dengan memindai seluruh direktori data mentah mahasiswa pada penyimpanan internal untuk memisahkan format penamaan folder menjadi komponen nomor induk mahasiswa (NRP) dan nama subjek secara terpisah. Setiap kali entitas identitas baru ditemukan, manajer \textit{client} secara otomatis mengemas parameter data tersebut ke dalam paket JSON dan mengirimkannya ke \textit{server} pusat melalui protokol REST API HTTP POST, sekaligus mendaftarkan salinan data tersebut ke dalam pangkalan data SQLite lokal perangkat. Implementasi fungsi penemuan dan pengiriman identitas awal pada sisi \textit{client} ini ditunjukkan pada Kode Sumber \ref{lst:registrasi-client}.
-
-\lstinputlisting[
-  language=Python,
-  caption={Registrasi Identitas Pada \textit{Client}.},
-  label={lst:registrasi-client}
-]{program/3.3.3_run_discovery_phase.py}
-
-\subsubsection{Penanganan Registrasi Pada Server}
-
-Pada sisi penerima, \textit{server} menangkap kiriman paket registrasi dari seluruh terminal \textit{client} yang aktif melalui fungsi penerimaan \textit{endpoint} khusus. \textit{Server} memeriksa keberadaan data nomor induk mahasiswa di dalam \textit{database} pusat. Jika data tersebut belum terdaftar, entri pengguna baru akan dibuat secara otomatis dengan pengenal unik (\textit{integer} ID) menggunakan mekanisme \textit{auto-increment} pada pangkalan data PostgreSQL. Pendekatan terpusat ini memastikan setiap subjek memiliki satu representasi nomor label kelas yang mutlak dan terhindar dari risiko tabrakan identitas lintas perangkat \textit{edge}. Alur penanganan registrasi dan penjaminan ID unik pada \textit{server} ditunjukkan pada Kode Sumber \ref{lst:registrasi-server}.
-
-\lstinputlisting[
-  language=Python,
-  caption={Penanganan Registrasi Pada \textit{Server}.},
-  label={lst:registrasi-server}
-]{program/3.3.3_get_label.py}
-
-\subsubsection{Pembentukan Global Label Map Server}
-
-Setelah seluruh data dari \textit{node} \textit{client} terkumpul secara kolektif, \textit{server} mengeksekusi fungsi penarikan data terpusat untuk membentuk struktur klaster matriks yang seragam. Sistem menarik seluruh baris identitas pengguna global dari \textit{database}, mengurutkannya secara teratur berpatokan pada urutan string karakter nomor induk mahasiswa, lalu mengemas barisan data tersebut ke dalam sebuah \textit{array} indeks terpadu. Larik data urutan yang terstandar inilah yang menjadi struktur acuan tunggal dimensi lapisan luaran (\textit{output layer classifier}) pada arsitektur model. Logika pembentukan peta label terpadu di sisi \textit{server} ditunjukkan pada Kode Sumber \ref{lst:label-map-server}.
-
-\lstinputlisting[
-  language=Python,
-  caption={Pembentukan Global Label Map \textit{Server}.},
-  label={lst:label-map-server}
-]{program/3.3.3_get_label_map.py}
-
-\subsubsection{Sinkronisasi Global Label Map Client}
-
-Pada fase akhir sebelum proses pra-pemrosesan citra dijalankan, komponen manajer \textit{client} memicu fungsi penarikan balik peta klasifikasi global. \textit{Client} mengunduh \textit{array} indeks pemetaan terpadu dari \textit{server} melalui protokol HTTP GET, menghitung total dimensi kelas baru untuk melakukan ekspansi ukuran matriks bobot pada \textit{classifier head} model lokal secara otomatis, lalu membekukan hasilnya ke dalam berkas konfigurasi JSON lokal. Berkas konfigurasi objek inilah yang menjadi acuan utama sistem \textit{client} dalam memetakan target folder data latih secara seragam di seluruh ekosistem \textit{Federated Learning}. Logika pengodean sinkronisasi umpan balik pada \textit{client} ditunjukkan pada Kode Sumber \ref{lst:label-map-client}.
-
-\lstinputlisting[
-  language=Python,
-  caption={Sinkronisasi Global Label Map \textit{Client}.},
-  label={lst:label-map-client}
-]{program/3.3.3_sync_label_map.py}
-
-\subsection{Image Preprocessing}
-\label{subsec:preprocessing}
-
-Tahap \textit{image preprocessing} merupakan fase operasional terisolasi pada sisi \textit{client} yang bertujuan untuk membersihkan, menyeimbangkan geometri posisi spasial, serta menstandarkan dimensi matriks piksel wajah mahasiswa sebelum diekstraksi menjadi vektor karakteristik. Langkah ini dirancang untuk mengondisikan data visual mentah agar memenuhi kriteria format masukan arsitektur jala saraf MobileFaceNet secara seragam. Seluruh siklus manipulasi data statis ini dijalankan menggunakan unit CPU pada perangkat keras \textit{client} demi menjaga efisiensi konsumsi daya melalui mekanisme pemuatan model detektor secara tertunda (\textit{lazy loading}). Mekanisme ini dibagi ke dalam empat tahapan proses operasional sebagai berikut:
-
-\subsubsection{Deteksi dan Alignment Wajah}
-
-Proses diawali dengan melokalisasi kotak pembatas wajah memanfaatkan arsitektur MTCNN sekaligus mengalkulasi matriks transformasi afinitas dua dimensi berdasarkan koordinat lima titik marka penanda biometrik meliputi mata, hidung, dan mulut. Citra wajah kemudian dirotasi secara matematis berpatokan pada koordinat acuan standar agar posisi kemiringan kepala mahasiswa tegak simetris, lalu dipotong secara presisi ke dalam dimensi potret wajib 96x112 piksel. Jika proses transformasi afinitas mengalami kegagalan, sistem menyediakan fungsi jala pengaman (\textit{fallback}) untuk memotong gambar secara statis mengikuti koordinat kotak pembatas awal dengan margin tambahan. Implementasi pengodean untuk proses alih geometri spasial ini ditunjukkan pada Kode Sumber \ref{lst:deteksi-alignment}.
-
-\lstinputlisting[
-  language=Python,
-  caption={Deteksi dan \textit{Alignment} Wajah.},
-  label={lst:deteksi-alignment}
-]{program/3.3.4_detect_face.py}
-
-\subsubsection{Persiapan Model Tensor}
-
-Proses kedua berfungsi untuk mengonversi format data citra hasil pemotongan wajah menjadi bentuk objek matriks bilangan desimal multidimensi (Tensor) PyTorch. Melalui fungsi penyiapan ini, nilai intensitas piksel dipetakan ulang lewat fungsi transformasi normalisasi dengan rentang nilai parameter rata-rata (\textit{mean}) dan deviasi standar (\textit{standard deviation}) yang disesuaikan pada angka 0,5 guna menstabilkan gradien komputasi. Sistem kemudian menyisipkan dimensi \textit{batch} tambahan pada sumbu pertama matriks agar struktur data tensor siap diumpankan secara langsung menuju lapisan masukan model. Logika transformasi penyiapan data masukan ini ditunjukkan pada Kode Sumber \ref{lst:transformasi-normalisasi}.
-
-\lstinputlisting[
-  language=Python,
-  caption={Transformasi dan Normalisasi Nilai Tensor L2.},
-  label={lst:transformasi-normalisasi}
-]{program/3.3.4_prepare_for_model.py}
-
-\subsubsection{Perhitungan Tingkat Kekaburan Gambar}
-
-Proses ketiga bertindak sebagai unit penilai kualitas fisik gambar untuk mendeteksi tingkat ketajaman fokus lensa kamera terhadap objek wajah mahasiswa. Langkah evaluasi dilakukan dengan mengubah ruang warna berkas gambar dari format warna asal menjadi skala keabu-abuan (\textit{grayscale}) terisolasi. Sistem selanjutnya menerapkan operator \textit{kernel} matematika Laplacian untuk menghitung nilai varians turunan kedua dari matriks gradien, di mana skor yang dihasilkan merepresentasikan tingkat ketajaman tepi objek visual secara kuantitatif. Logika perhitungan skor kekaburan citra ini ditunjukkan pada Kode Sumber \ref{lst:skor-ketajaman}.
-
-\lstinputlisting[
-  language=Python,
-  caption={Perhitungan Skor Ketajaman Piksel Laplacian.},
-  label={lst:skor-ketajaman}
-]{program/3.3.4_get_blur_score.py}
-
-\subsubsection{Seleksi Kualitas Citra Terbaik Berbasis Ranking}
-
-Proses keempat mengintegrasikan fungsi seleksi massal untuk menyaring dan memilih sejumlah N berkas foto wajah terbaik dari direktori penyimpanan sementara. Fungsi ini mendata seluruh file citra, mengurutkan daftar gambar berdasarkan pemetaan skor \textit{Laplacian Variance} dari nilai tertinggi ke terendah, lalu mengekstrak sampel foto tertajam sesuai dengan jumlah batasan yang ditentukan. Guna mempercepat durasi eksekusi data, skrip memanfaatkan sistem pencatatan berkas riwayat berbasis objek dokumen konfigurasi agar kalkulasi matematika tidak perlu diproses ulang dari awal. Logika pengurutan kualitas citra terbaik ini ditunjukkan pada Kode Sumber \ref{lst:seleksi-citra}.
-
-\lstinputlisting[
-  language=Python,
-  caption={Seleksi Kualitas Citra Berbasis Ranking Ketajaman.},
-  label={lst:seleksi-citra}
-]{program/3.3.4_select_best_faces.py}
-
-\subsection{Enkripsi Embedding}
-\label{subsec:enkripsi-embedding}
-
-Tahap enkripsi kriptografi merupakan fase pengamanan data biometrik pada sisi \textit{client} yang bertujuan untuk melindungi kerahasiaan vektor karakteristik (\textit{face embedding}) mahasiswa sebelum disimpan ke dalam pangkalan data lokal maupun ditransmisikan di dalam jaringan. Langkah ini dirancang sebagai jaring pengaman privasi untuk memastikan bahwa jika pangkalan data lokal pada perangkat \textit{edge} berhasil ditembus oleh pihak luar, data vektor wajah tersebut tetap tidak dapat disalahgunakan atau direkonstruksi kembali menjadi citra wajah asli tanpa kunci enkripsi yang sah. Proses pengamanan ini diimplementasikan menggunakan algoritma standar industri AES-256 bit dalam mode operasi \textit{Cipher Block Chaining} (CBC). Fungsi operasional yang bertanggung jawab atas siklus pengamanan data biometrik ini ditunjukkan pada Kode Sumber \ref{lst:enkripsi-embedding}.
-
-\lstinputlisting[
-  language=Python,
-  caption={Enkripsi Menggunakan AES-256.},
-  label={lst:enkripsi-embedding}
-]{program/3.3.5_encrypt_embedding.py}
-
-\subsection{Pelatihan Model}
-\label{subsec:pelatihan-model}
-
-Tahap pelatihan model merupakan fase pembelajaran utama dalam sistem absensi terdistribusi di mana bobot model dioptimasi secara kolaboratif menggunakan pendekatan \textit{Federated Learning} (\textit{pFedFace}). Fase ini membagi proses pembaruan parameter menjadi beberapa tahap utama: pembekuan parsial, augmentasi citra secara dinamis, proses \textit{training} lokal dengan regularisasi \textit{FedProx}, dan agregasi parameter terpusat di \textit{server}. Alur ini memastikan model \textit{edge} dapat belajar dengan konsumsi RAM yang rendah dan tetap patuh pada kerangka privasi data.
-
-\subsubsection{Pembekuan Parsial (Layer Freezing)}
-
-Sebelum siklus pelatihan dimulai pada perangkat \textit{edge}, sistem membekukan lapisan-lapisan awal \textit{backbone} \textit{MobileFaceNet}. Pembekuan lapisan awal (\textit{early freezing}) ini menonaktifkan kalkulasi gradien pada lapisan ekstraksi fitur dasar, sehingga menghemat konsumsi memori komputasi perangkat \textit{edge}. Pengondisian pembekuan lapisan ini ditunjukkan pada Kode Sumber \ref{lst:pembekuan-lapisan}.
-
-\lstinputlisting[
-  language=Python,
-  caption={Pengaturan Pembekuan Lapisan Model.},
-  label={lst:pembekuan-lapisan}
-]{program/3.3.6_set_model_freeze.py}
-
-\subsubsection{Augmentasi Data On-the-Fly}
-
-Selama proses pemuatan data oleh \textit{DataLoader}, gambar wajah dimodifikasi secara dinamis di RAM menggunakan transformasi acak. Langkah ini menghasilkan variasi spasial dan visual baru di setiap \textit{epoch} tanpa mengubah berkas citra asli pada penyimpanan fisik. Logika augmentasi data dan pemuatan dinamis ditunjukkan pada Kode Sumber \ref{lst:augmentasi-pemuatan}.
-
-\lstinputlisting[
-  language=Python,
-  caption={Augmentasi dan Pemuatan Data Latih.},
-  label={lst:augmentasi-pemuatan}
-]{program/3.3.6_augmentasi_pemuatan.py}
-
-\subsubsection{Pelatihan Lokal}
-
-Pelatihan model lokal dijalankan pada \textit{client} menggunakan optimasi \textit{SGD} dan \textit{ArcFace Margin Loss}. Guna mengatasi masalah ketidakseimbangan distribusi data \textit{non-IID}, ditambahkan penalti regulasi jarak L2 (\textit{proximity loss}) antara parameter model lokal dengan model global acuan. Logika utama pelatihan lokal \textit{client} ditunjukkan pada Kode Sumber \ref{lst:pelatihan-lokal}.
-
-\lstinputlisting[
-  language=Python,
-  caption={Loop Pelatihan Lokal \textit{Client}.},
-  label={lst:pelatihan-lokal}
-]{program/3.3.6_train.py}
-
-\subsubsection{Agregasi Parameter pada Server (FedAvg)}
-
-\textit{Server} mengagregasikan parameter \textit{backbone} dari seluruh \textit{client} aktif menggunakan pembobotan rata-rata berbasis \textit{Flower}. Guna mempertahankan adaptasi personalisasi (\textit{personalization}) tingkat \textit{client}, statistik lapisan \textit{Batch Normalization} (\textit{BN}) tidak disertakan dalam proses agregasi global (\textit{global aggregation}). Logika agregasi parameter konvolusi \textit{backbone} ditunjukkan pada Kode Sumber \ref{lst:agregasi-global}.
-
-\lstinputlisting[
-  language=Python,
-  caption={Agregasi Model Backbone Global.},
-  label={lst:agregasi-global}
-]{program/3.3.6_aggregate_fit.py}
-
-\subsection{Evaluasi Sistem}
-\label{subsec:evaluasi-sistem}
-
-Tahap evaluasi sistem dibagi menjadi dua fokus pengukuran utama: evaluasi performa model untuk mengukur keandalan klasifikasi wajah, dan evaluasi konsumsi sumber daya (ekonomi) untuk mengukur dampak penggunaan daya komputasi serta transfer data jaringan (\textit{network bandwidth}) dalam skema pembelajaran terdistribusi.
-
-\subsubsection{Evaluasi Performa Model}
-
-Evaluasi performa model dilakukan baik di sisi \textit{client} untuk memvalidasi model lokal, maupun di sisi \textit{server} untuk mengukur performa agregasi model global (\textit{global model aggregation}) secara menyeluruh:
-
-\paragraph{A. Validasi Performa Lokal Client}
-
-Evaluasi performa model lokal dijalankan pada akhir setiap ronde pelatihan \textit{client} menggunakan \textit{dataset} validasi lokal yang terpisah (\textit{disjoint}). Pengukuran ini menerapkan teknik \textit{Flip Trick} (mengkombinasikan \textit{embedding} citra asli dan \textit{mirror} horizontal) untuk mencerminkan akurasi sesungguhnya pada kondisi operasional. Implementasi \textit{loop} evaluasi performa lokal ini ditunjukkan pada Kode Sumber \ref{lst:evaluasi-lokal}.
-
-\lstinputlisting[
-  language=Python,
-  caption={Uji Coba Validasi Performa Model \textit{Client}.},
-  label={lst:evaluasi-lokal}
-]{program/3.3.7_evaluate.py}
-
-\paragraph{B. Agregasi Metrik Global Server}
-
-Di sisi \textit{server}, hasil evaluasi performa lokal dari seluruh \textit{client} digabungkan menjadi metrik evaluasi global terpadu menggunakan metode rata-rata tertimbang (\textit{weighted average}). \textit{Server} mengagregasikan nilai \textit{loss} dan akurasi (\textit{accuracy}) baik dari data pelatihan lokal (\textit{train dataset}) maupun data validasi lokal (\textit{validation dataset}) berdasarkan jumlah sampel data masing-masing \textit{client}. Implementasinya ditunjukkan pada Kode Sumber \ref{lst:agregasi-metrik}.
-
-\lstinputlisting[
-  language=Python,
-  caption={Fungsi Agregasi Metrik Performa \textit{Server}.},
-  label={lst:agregasi-metrik}
-]{program/3.3.7_weighted_average.py}
-
-\subsubsection{Evaluasi Konsumsi Sumber Daya (Ekonomi)}
-
-Evaluasi ekonomi mencakup pengukuran konsumsi sumber daya sistem terdistribusi yang dibagi secara berimbang menjadi dua fokus pengukuran:
-
-\paragraph{A. Pengukuran Sisi Client}
-
-Perangkat \textit{client} secara mandiri melacak durasi waktu pelatihan lokal (dalam detik) dan total konsumsi energi listrik CPU (dalam kWh) pada setiap putaran latihan lokal. Pengukuran durasi dilakukan dengan menghitung selisih waktu sistem operasi, sementara pengukuran energi listrik memanfaatkan pelacakan \textit{offline} dari pustaka \textit{CodeCarbon}. Penggabungan alur pelacakan durasi dan daya pada \textit{client} ditunjukkan pada Kode Sumber \ref{lst:pelacakan-client}.
-
-\lstinputlisting[
-  language=Python,
-  caption={Pelacakan Durasi dan Energi \textit{Client}.},
-  label={lst:pelacakan-client}
-]{program/3.3.7_pelacakan_client.py}
-
-\paragraph{B. Pengukuran Sisi Server}
-
-\textit{Server} melacak tiga parameter utama secara terpadu: total durasi eksekusi ronde global, estimasi transfer data jaringan (\textit{bandwidth} dalam MB) secara dinamis dari ukuran fisik berkas model di \textit{disk}, serta total akumulasi konsumsi daya (\textit{server} dan gabungan laporan energi \textit{client}). Implementasi gabungan pelacakan sumber daya di \textit{server} ditunjukkan pada Kode Sumber \ref{lst:pelacakan-server}.
-
-\lstinputlisting[
-  language=Python,
-  caption={Pelacakan Durasi, \textit{Bandwidth}, dan Akumulasi Energi \textit{Server}.},
-  label={lst:pelacakan-server}
-]{program/3.3.7_pelacakan_server.py}
-
-\subsection{Proses Absensi}
-\label{subsec:proses-absensi}
-
-Tahap proses absensi merupakan fase operasional utama yang melibatkan interaksi dua arah antara terminal \textit{client} secara \textit{real-time} dan \textit{server} pusat untuk melakukan konsolidasi data kehadiran mahasiswa.
-
-\subsubsection{Pipa Inferensi Real-Time Client}
-
-Proses inferensi dirancang agar berjalan efisien pada unit CPU perangkat \textit{edge}. Skrip mengekstrak koordinat wajah menggunakan detektor MTCNN, menyelaraskan orientasi posisi geometris, melakukan ekstraksi fitur ganda (\textit{Flip Trick}), dan menyeimbangkan \textit{noise transient} dengan \textit{buffer} \textit{Temporal Voting} sepanjang rentang waktu 3 detik. Jika wajah berhasil dikenali, presensi dicatat ke \textit{database} SQLite lokal sebelum disinkronkan ke \textit{server}. Alur pengolahan inferensi presensi ini ditunjukkan pada Kode Sumber \ref{lst:inferensi-client}.
-
-\lstinputlisting[
-  language=Python,
-  caption={Alur Utama Inferensi Presensi Wajah \textit{Client}.},
-  label={lst:inferensi-client}
-]{program/3.3.8_process_inference.py}
-
-\subsubsection{Sinkronisasi Presensi Pusat (Server)}
-
-Di sisi \textit{server}, terdapat sebuah \textit{endpoint} API HTTP POST (\texttt{/api/attendance/sync}) untuk menerima unggahan \textit{batch} log presensi dari \textit{database} lokal \textit{client} ketika koneksi jaringan tersedia. \textit{Server} mencocokkan NRP mahasiswa, memverifikasi integritas data untuk mencegah duplikasi, memvalidasi keberadaan perangkat \textit{edge} di tabel registri, dan menyimpan log kehadiran global secara aman ke \textit{database} PostgreSQL terpusat. Implementasi sinkronisasi absensi pada \textit{server} ditunjukkan pada Kode Sumber \ref{lst:sinkronisasi-server}.
-
-\lstinputlisting[
-  language=Python,
-  caption={API Sinkronisasi Kehadiran Global \textit{Server}.},
-  label={lst:sinkronisasi-server}
-]{program/3.3.8_sync_attendance.py}
-
-\subsection{Pengembangan Antarmuka Aplikasi}
-\label{subsec:pengembangan-antarmuka}
-
-Tahap pengembangan antarmuka (\textit{user interface}) bertujuan untuk menyediakan visualisasi interaktif bagi administrator dan pengguna dalam memantau jalannya sistem absensi terdistribusi. Pengembangan ini dibagi menjadi dua bagian utama, yaitu antarmuka pusat pada sisi \textit{server} dan antarmuka operasional pada sisi terminal \textit{client}.
-
-\subsubsection{Antarmuka Server}
-
-Antarmuka pada sisi \textit{server} dirancang berbasis \textit{web dashboard} terpusat yang memfasilitasi administrator untuk memantau status keaktifan masing-masing \textit{client}, melihat visualisasi grafik metrik performa global (\textit{accuracy} dan \textit{loss}) dari setiap ronde pelatihan \textit{Federated Learning}, serta mengelola rekapitulasi data kehadiran mahasiswa global yang disimpan di \textit{database} pusat. Tampilan antarmuka dasbor utama ini dapat dilihat pada Gambar \ref{fig:antarmuka-server}.
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=0.8\textwidth]{gambar/server.png}
-  \caption{Tampilan Antarmuka Dasbor Utama \textit{Server}.}
-  \label{fig:antarmuka-server}
-\end{figure}
-
-\subsubsection{Antarmuka Client}
-
-Antarmuka pada sisi \textit{client} dirancang untuk dioperasikan langsung di kelas menggunakan terminal \textit{edge}. Halaman ini menyajikan tampilan \textit{video stream} dari kamera secara \textit{real-time}, mendeteksi wajah dengan kotak pembatas (\textit{bounding box}), melakukan identifikasi menggunakan algoritma pencocokan \textit{embedding} dan \textit{temporal voting}, serta menampilkan notifikasi status kehadiran mahasiswa secara langsung sebelum datanya disinkronisasikan ke \textit{server} pusat. Tampilan antarmuka terminal sisi \textit{client} ini dapat dilihat pada Gambar \ref{fig:antarmuka-client}.
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=0.8\textwidth]{gambar/client.png}
-  \caption{Tampilan Antarmuka Terminal Presensi Sisi \textit{Client}.}
-  \label{fig:antarmuka-client}
-\end{figure}

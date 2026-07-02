@@ -1,0 +1,343 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="glass" style="padding: 1.5rem; margin-bottom: 1.5rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.8rem;">
+        <h2 style="margin: 0; font-size: 1.4rem; background: linear-gradient(135deg, #a78bfa, #3b82f6); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Simulasi Uji Gambar (Dataset)</h2>
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <select id="dataset-selector" class="glass" style="background: rgba(255,255,255,0.05); color: white; border: 1px solid rgba(255,255,255,0.2); padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; outline: none; cursor: pointer;">
+                <option value="" disabled selected>Memuat dataset...</option>
+            </select>
+            <select id="model-selector" class="glass" style="background: rgba(255,255,255,0.05); color: white; border: 1px solid rgba(255,255,255,0.2); padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; outline: none; cursor: pointer;">
+                <option value="" disabled selected>Memuat model...</option>
+            </select>
+        </div>
+    </div>
+
+    <div id="simulation-container" style="position: relative; overflow: hidden; border-radius: 12px; background: #000; box-shadow: 0 10px 25px rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; border: 1px solid rgba(255,255,255,0.08);">
+        <!-- Simulation Image Stream -->
+        <img id="stream-img" src="" style="width: 100%; height: auto; display: block; min-height: 360px; background: #050508;">
+        
+        <div id="status-overlay" style="position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,0.6); padding: 6px 12px; border-radius: 6px; font-size: 0.75rem; border: 1px solid rgba(255,255,255,0.1); display: flex; align-items: center; gap: 6px;">
+             <span style="width: 8px; height: 8px; background: #ef4444; border-radius: 50%; display: inline-block;" id="status-dot"></span>
+             <span style="font-weight: 700;" id="status-label">SIMULASI BERHENTI</span>
+        </div>
+    </div>
+
+    <!-- Kontrol Pilihan Mahasiswa -->
+    <div class="glass" style="margin-top: 1rem; padding: 1rem; display: flex; flex-direction: column; gap: 0.8rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.08);">
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+            <span style="font-size: 0.9rem; font-weight: 600; color: #a78bfa;">Pilih Target Uji:</span>
+            <select id="student-selector" class="glass" style="background: rgba(255,255,255,0.05); color: white; border: 1px solid rgba(255,255,255,0.2); padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; outline: none; cursor: pointer; min-width: 220px;">
+                <option value="all">Semua Mahasiswa (Acak/Urut)</option>
+            </select>
+        </div>
+        <div style="display: flex; gap: 0.5rem; justify-content: center;">
+            <button id="btn-prev-student" class="btn" style="flex: 1; padding: 8px 16px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; color: white; cursor: pointer; transition: all 0.2s; font-size: 0.85rem;">
+                &larr; Sebelumnya
+            </button>
+            <button id="btn-next-student" class="btn" style="flex: 1; padding: 8px 16px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; color: white; cursor: pointer; transition: all 0.2s; font-size: 0.85rem;">
+                Selanjutnya &rarr;
+            </button>
+        </div>
+    </div>
+
+    <button id="btn-toggle-sim" class="btn" style="width: 100%; height: 50px; margin-top: 1rem; background: var(--accent); color: white; font-weight: bold; font-size: 1rem; border-radius: 12px; border: none; box-shadow: 0 4px 15px rgba(0,0,0,0.3); cursor: pointer; transition: all 0.2s;">
+        Mulai Simulasi
+    </button>
+</div>
+
+<style>
+    .badge {
+        background: var(--accent);
+        color: white;
+        padding: 6px 12px;
+        border-radius: 20px;
+        font-size: 0.8rem;
+        font-weight: bold;
+    }
+    .btn:hover {
+        opacity: 0.9;
+        transform: translateY(-1px);
+    }
+    .btn:active {
+        transform: translateY(1px);
+    }
+</style>
+
+<script>
+    const datasetSelector = document.getElementById('dataset-selector');
+    const modelSelector = document.getElementById('model-selector');
+    const toggleBtn = document.getElementById('btn-toggle-sim');
+    const streamImg = document.getElementById('stream-img');
+    const statusDot = document.getElementById('status-dot');
+    const statusLabel = document.getElementById('status-label');
+
+    const studentSelector = document.getElementById('student-selector');
+    const prevBtn = document.getElementById('btn-prev-student');
+    const nextBtn = document.getElementById('btn-next-student');
+
+    let simActive = false;
+    let cachedModels = [];
+    let studentList = [];
+
+    // Load available datasets
+    async function loadDatasets() {
+        try {
+            const res = await fetch('/api/datasets/list');
+            const data = await res.json();
+            if (data.status === 'success') {
+                datasetSelector.innerHTML = '';
+                Object.keys(data.datasets).forEach(ds => {
+                    const opt = document.createElement('option');
+                    opt.value = ds;
+                    opt.textContent = ds;
+                    if (ds === data.current_dataset) {
+                        opt.selected = true;
+                    }
+                    datasetSelector.appendChild(opt);
+                });
+                
+                const currentDataset = datasetSelector.value;
+                if (currentDataset) {
+                    await loadStudentsForDataset(currentDataset);
+                }
+                
+                // Load model list next
+                await loadModelsList();
+            }
+        } catch (err) {
+            console.error("Gagal memuat dataset list:", err);
+        }
+    }
+
+    async function loadStudentsForDataset(datasetName) {
+        try {
+            const res = await fetch(`/api/datasets/${encodeURIComponent(datasetName)}/students`);
+            const data = await res.json();
+            if (data.status === 'success') {
+                studentList = data.students || [];
+                studentSelector.innerHTML = '<option value="all">Semua Mahasiswa (Acak/Urut)</option>';
+                studentList.forEach(student => {
+                    const opt = document.createElement('option');
+                    opt.value = student.dir_name;
+                    opt.textContent = student.dir_name.replace(/_/g, ' ');
+                    studentSelector.appendChild(opt);
+                });
+            }
+        } catch (err) {
+            console.error("Gagal memuat daftar mahasiswa:", err);
+        }
+    }
+
+    async function loadModelsList() {
+        try {
+            const res = await fetch('/api/models/list');
+            const data = await res.json();
+            if (data.status === 'success') {
+                cachedModels = data.models;
+                renderFilteredModels();
+            }
+        } catch (e) {
+            console.error("Gagal memuat daftar model:", e);
+        }
+    }
+
+    function renderFilteredModels() {
+        modelSelector.innerHTML = '';
+        const selectedDataset = datasetSelector.value;
+        
+        // Filter models based on selected dataset
+        const filtered = cachedModels.filter(m => {
+            return m.version === 'v0' || m.dataset === selectedDataset;
+        });
+        
+        filtered.forEach(model => {
+            const opt = document.createElement('option');
+            opt.value = model.version;
+            opt.textContent = model.label;
+            modelSelector.appendChild(opt);
+        });
+        
+        // Match active version
+        const currentV = '{{ model_version }}';
+        let matchedIndex = 0;
+        for (let i = 0; i < modelSelector.options.length; i++) {
+            if (modelSelector.options[i].value === currentV || modelSelector.options[i].value === 'v' + currentV) {
+                matchedIndex = i;
+                break;
+            }
+        }
+        if (modelSelector.options.length > 0) {
+            modelSelector.selectedIndex = matchedIndex;
+        }
+    }
+
+    // Handle dataset change
+    datasetSelector.addEventListener('change', async () => {
+        const selectedDataset = datasetSelector.value;
+        try {
+            const res = await fetch('/api/dataset/select', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ dataset: selectedDataset })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                console.log("Dataset aktif diubah ke:", selectedDataset);
+                await loadStudentsForDataset(selectedDataset);
+                renderFilteredModels();
+                // Automatically switch model if current is not available
+                if (modelSelector.options.length > 0) {
+                    modelSelector.dispatchEvent(new Event('change'));
+                } else if (simActive) {
+                    stopSimulation();
+                    startSimulation();
+                }
+            } else {
+                alert("Gagal memilih dataset: " + data.message);
+            }
+        } catch (err) {
+            console.error("Gagal mengganti dataset:", err);
+        }
+    });
+
+    // Handle model change
+    modelSelector.addEventListener('change', async () => {
+        const selectedVersion = modelSelector.value;
+        try {
+            const res = await fetch('/api/model/select', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ version: selectedVersion })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                console.log("Model aktif diubah ke:", selectedVersion);
+                if (simActive) {
+                    stopSimulation();
+                    startSimulation();
+                }
+            } else {
+                alert("Gagal memilih model: " + data.message);
+            }
+        } catch (err) {
+            console.error("Gagal mengganti model:", err);
+        }
+    });
+
+    // Handle student selection change
+    studentSelector.addEventListener('change', () => {
+        if (simActive) {
+            const studentVal = studentSelector.value;
+            streamImg.src = `/api/stream/dataset-simulation?student=${encodeURIComponent(studentVal)}&t=${Date.now()}`;
+        }
+    });
+
+    // Navigation buttons
+    prevBtn.addEventListener('click', () => {
+        if (studentList.length === 0) return;
+        let currentIndex = -1;
+        const currentVal = studentSelector.value;
+        
+        if (currentVal !== 'all') {
+            currentIndex = studentList.findIndex(s => s.dir_name === currentVal);
+        }
+        
+        let nextIndex;
+        if (currentIndex === -1) {
+            // From 'all', previous goes to last student
+            nextIndex = studentList.length - 1;
+        } else if (currentIndex === 0) {
+            // From first student, previous goes to 'all'
+            nextIndex = -1;
+        } else {
+            nextIndex = currentIndex - 1;
+        }
+        
+        if (nextIndex === -1) {
+            studentSelector.value = 'all';
+        } else {
+            studentSelector.value = studentList[nextIndex].dir_name;
+        }
+        studentSelector.dispatchEvent(new Event('change'));
+    });
+
+    nextBtn.addEventListener('click', () => {
+        if (studentList.length === 0) return;
+        let currentIndex = -1;
+        const currentVal = studentSelector.value;
+        
+        if (currentVal !== 'all') {
+            currentIndex = studentList.findIndex(s => s.dir_name === currentVal);
+        }
+        
+        let nextIndex;
+        if (currentIndex === -1) {
+            // From 'all', next goes to first student
+            nextIndex = 0;
+        } else if (currentIndex === studentList.length - 1) {
+            // From last student, next goes to 'all'
+            nextIndex = -1;
+        } else {
+            nextIndex = currentIndex + 1;
+        }
+        
+        if (nextIndex === -1) {
+            studentSelector.value = 'all';
+        } else {
+            studentSelector.value = studentList[nextIndex].dir_name;
+        }
+        studentSelector.dispatchEvent(new Event('change'));
+    });
+
+    function startSimulation() {
+        simActive = true;
+        const studentVal = studentSelector.value;
+        streamImg.src = `/api/stream/dataset-simulation?student=${encodeURIComponent(studentVal)}&t=${Date.now()}`;
+        
+        statusDot.style.background = '#10b981';
+        statusDot.style.animation = 'pulse 1.5s infinite';
+        statusLabel.innerText = "SIMULASI AKTIF";
+        
+        toggleBtn.innerText = "Hentikan Simulasi";
+        toggleBtn.style.background = '#ef4444';
+    }
+
+    function stopSimulation() {
+        simActive = false;
+        streamImg.src = '';
+        
+        statusDot.style.background = '#ef4444';
+        statusDot.style.animation = 'none';
+        statusLabel.innerText = "SIMULASI BERHENTI";
+        
+        toggleBtn.innerText = "Mulai Simulasi";
+        toggleBtn.style.background = 'var(--accent)';
+    }
+
+    toggleBtn.addEventListener('click', () => {
+        if (simActive) {
+            stopSimulation();
+        } else {
+            startSimulation();
+        }
+    });
+
+    window.addEventListener('beforeunload', () => {
+        stopSimulation();
+    });
+
+    const styleSheet = document.createElement("style");
+    styleSheet.innerText = `
+        @keyframes pulse {
+            0% { transform: scale(0.95); opacity: 0.5; }
+            50% { transform: scale(1.2); opacity: 1; }
+            100% { transform: scale(0.95); opacity: 0.5; }
+        }
+    `;
+    document.head.appendChild(styleSheet);
+
+    loadDatasets();
+</script>
+{% endblock %}

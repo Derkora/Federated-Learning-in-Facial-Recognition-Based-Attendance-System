@@ -8,25 +8,23 @@
 </div>
 
 <div class="layout-grid" style="grid-template-columns: 1fr 1fr;">
-    <!-- Card 1: Pelatihan -->
+    <!-- Card 1: Hapus Model Tertentu -->
     <div class="glass" style="padding: 1.5rem;">
         <h3
             style="color: var(--accent); margin-top: 0; margin-bottom: 1.5rem; font-size: 1.2rem; display: flex; align-items: center; gap: 0.5rem;">
-            Parameter Pelatihan
+            Hapus Model Terlatih Tertentu
         </h3>
         <div class="setting-item">
-            <label>Total Epochs</label>
-            <input type="number" id="epochs" value="{{ status.default_epochs }}" class="form-input">
-        </div>
-        <div class="setting-item">
-            <label>Batch Size</label>
-            <input type="number" id="batch_size" value="{{ status.default_batch_size }}" class="form-input">
+            <label>Pilih Versi Model</label>
+            <select id="delete-model-select" class="form-input" style="outline: none;">
+                <option value="">Memuat daftar model...</option>
+            </select>
         </div>
         <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 1rem;">
-            Parameter ini mengontrol intensitas pelatihan di <i>server</i> pusat.
+            Pilih versi model terlatih tertentu untuk dihapus secara permanen dari penyimpanan server.
         </p>
-        <button onclick="saveSettings()" class="btn btn-primary" style="width: 100%; margin-top: 1rem;">
-            Simpan Parameter
+        <button id="btn-delete-specific" onclick="deleteSpecificModel()" class="btn" style="background-color: rgba(255, 77, 77, 0.15); border: 1px solid #ff4d4d; color: #ff4d4d; width: 100%; margin-top: 1.5rem; padding: 12px; font-weight: bold; border-radius: 8px; cursor: pointer; transition: all 0.3s;" onmouseover="this.style.backgroundColor='#ff4d4d'; this.style.color='#fff'" onmouseout="this.style.backgroundColor='rgba(255, 77, 77, 0.15)'; this.style.color='#ff4d4d'" disabled>
+            Hapus Model Terpilih
         </button>
     </div>
 
@@ -45,6 +43,19 @@
             Simpan Inferensi
         </button>
     </div>
+</div>
+
+<!-- Card 3: Reset Model -->
+<div class="glass" style="padding: 1.5rem; margin-top: 2rem;">
+    <h3 style="color: #ff4d4d; margin-top: 0; margin-bottom: 1rem; font-size: 1.2rem; display: flex; align-items: center; gap: 0.5rem;">
+        Reset & Hapus Model Terlatih (Reset ke Base v0)
+    </h3>
+    <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1.5rem; line-height: 1.5;">
+        Tindakan ini akan menghapus semua file model versi terlatih (kecuali model dasar v0), menghapus metrik/riwayat pelatihan dari database, dan mengembalikan model aktif ke versi v0. Pengguna yang terdaftar tetap ada di database, tetapi database wajah (embeddings) perlu dilatih ulang agar fitur absensi dapat berfungsi kembali.
+    </p>
+    <button onclick="resetModel()" class="btn" style="background-color: rgba(255, 77, 77, 0.15); border: 1px solid #ff4d4d; color: #ff4d4d; width: 100%; padding: 12px; font-weight: bold; border-radius: 8px; cursor: pointer; transition: all 0.3s;" onmouseover="this.style.backgroundColor='#ff4d4d'; this.style.color='#fff'" onmouseout="this.style.backgroundColor='rgba(255, 77, 77, 0.15)'; this.style.color='#ff4d4d'">
+        Hapus & Reset Model Terlatih
+    </button>
 </div>
 
 <style>
@@ -80,10 +91,56 @@
 </style>
 
 <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        loadModelsForDelete();
+    });
+
+    async function loadModelsForDelete() {
+        try {
+            const res = await fetch('/api/models/list');
+            const data = await res.json();
+            if (data.status === 'success') {
+                const select = document.getElementById('delete-model-select');
+                const deletable = data.models.filter(m => m.version !== 'active' && m.version !== 'v0');
+                if (deletable.length === 0) {
+                    select.innerHTML = '<option value="">Tidak ada versi model terlatih yang tersedia</option>';
+                    document.getElementById('btn-delete-specific').disabled = true;
+                } else {
+                    select.innerHTML = deletable.map(m => `<option value="${m.version}">${m.label}</option>`).join('');
+                    document.getElementById('btn-delete-specific').disabled = false;
+                }
+            }
+        } catch (e) {
+            console.error("Gagal memuat daftar model untuk dihapus:", e);
+        }
+    }
+
+    async function deleteSpecificModel() {
+        const version = document.getElementById('delete-model-select').value;
+        if (!version) return;
+        
+        if (!confirm(`Apakah Anda yakin ingin menghapus model versi "${version}"? Tindakan ini tidak dapat dibatalkan!`)) {
+            return;
+        }
+        
+        try {
+            const res = await fetch(`/api/models/delete-specific?version=${version}`, {
+                method: 'POST'
+            });
+            const result = await res.json();
+            if (result.status === 'success') {
+                alert(`Model versi ${version} berhasil dihapus!`);
+                location.reload();
+            } else {
+                alert('Gagal menghapus: ' + result.message);
+            }
+        } catch (e) {
+            alert('Terjadi kesalahan: ' + e);
+        }
+    }
+
     async function saveSettings() {
         const data = {
-            epochs: document.getElementById('epochs').value,
-            batch_size: document.getElementById('batch_size').value,
             threshold: document.getElementById('threshold').value
         };
 
@@ -95,10 +152,34 @@
             });
             const result = await res.json();
             if (result.status === 'success') {
-                alert('Pengaturan berhasil disimpan!');
+                alert('Pengaturan ambang batas berhasil disimpan!');
                 location.reload();
             } else {
                 alert('Gagal menyimpan: ' + result.message);
+            }
+        } catch (e) {
+            alert('Terjadi kesalahan: ' + e);
+        }
+    }
+
+    async function resetModel() {
+        if (!confirm("Apakah Anda yakin ingin menghapus semua model hasil pelatihan dan kembali ke model dasar v0? Tindakan ini tidak dapat dibatalkan!")) {
+            return;
+        }
+        if (!confirm("KONFIRMASI TERAKHIR: Anda akan kehilangan seluruh versi model terlatih dan statistik performa. Lanjutkan reset?")) {
+            return;
+        }
+        
+        try {
+            const res = await fetch('/api/models/reset', {
+                method: 'POST'
+            });
+            const result = await res.json();
+            if (result.status === 'success') {
+                alert('Semua model hasil pelatihan berhasil dihapus dan dikembalikan ke v0!');
+                location.reload();
+            } else {
+                alert('Gagal melakukan reset: ' + result.message);
             }
         } catch (e) {
             alert('Terjadi kesalahan: ' + e);

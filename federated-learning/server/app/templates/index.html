@@ -9,11 +9,54 @@
                 <h1 style="color: var(--accent); margin-bottom: 0.5rem; font-size: 1.8rem;">Control Dashboard</h1>
                 <p id="status-phase" style="color: var(--text-muted); font-weight: 500;">Status: Standby</p>
             </div>
-            <button id="btn-start" class="btn btn-primary" onclick="startTraining()"
-                style="padding: 1rem 2rem; font-size: 1.1rem; border-radius: 8px;" {{ 'disabled' if status.is_running
-                }}>
-                {{ "SEDANG BERJALAN..." if status.is_running else "Mulai" }}
-            </button>
+            <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+                <!-- Rounds Input -->
+                <div style="display: flex; align-items: center; gap: 0.5rem; background: rgba(255,255,255,0.03); padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                    <label style="color: var(--text-muted); font-size: 0.9rem; font-weight: 500; margin: 0;">Rounds:</label>
+                    <input type="number" id="rounds-input" value="{{ status.default_rounds }}" 
+                        style="width: 70px; padding: 0.35rem; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-family: monospace; text-align: center; outline: none;">
+                </div>
+                <!-- Epochs Input -->
+                <div style="display: flex; align-items: center; gap: 0.5rem; background: rgba(255,255,255,0.03); padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                    <label style="color: var(--text-muted); font-size: 0.9rem; font-weight: 500; margin: 0;">Epochs:</label>
+                    <input type="number" id="epochs-input" value="{{ status.default_epochs }}" 
+                        style="width: 70px; padding: 0.35rem; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-family: monospace; text-align: center; outline: none;">
+                </div>
+                <!-- Dataset Selection Dropdown -->
+                <div style="display: flex; align-items: center; gap: 0.5rem; background: rgba(255,255,255,0.03); padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                    <label style="color: var(--text-muted); font-size: 0.9rem; font-weight: 500; margin: 0;">Dataset:</label>
+                    <select id="dataset-select" onchange="updateDatasetFilter()"
+                        style="padding: 0.35rem; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; outline: none; font-size: 0.9rem; min-width: 110px;">
+                        <option value="students" selected>students</option>
+                    </select>
+                </div>
+                <input type="hidden" id="min-clients-input" value="{{ status.default_min_clients }}">
+
+                <button id="btn-preprocess" class="btn btn-secondary" onclick="startPreprocessing()"
+                    style="padding: 1rem 1.5rem; font-size: 1rem; border-radius: 8px;" {{ 'disabled' if status.is_running }}>
+                    Pra-proses Data
+                </button>
+                <button id="btn-train" class="btn btn-primary" onclick="startTrainOnly()"
+                    style="padding: 1rem 1.5rem; font-size: 1rem; border-radius: 8px;" {{ 'disabled' if status.is_running }}>
+                    Latih Model
+                </button>
+                <button id="btn-start" class="btn btn-outline-primary" onclick="startTraining()"
+                    style="padding: 1rem 1.5rem; font-size: 1rem; border-radius: 8px;" {{ 'disabled' if status.is_running }}>
+                    {{ "SEDANG BERJALAN..." if status.is_running else "Siklus Penuh" }}
+                </button>
+                <button id="btn-models" class="btn btn-secondary" onclick="openModelsModal()"
+                    style="padding: 1rem 1.5rem; font-size: 1rem; border-radius: 8px; background: #334155; border: 1px solid #475569; color: #fff; transition: background 0.3s;"
+                    onmouseover="this.style.background='#475569'" onmouseout="this.style.background='#334155'">
+                    Lihat Model
+                </button>
+            </div>
+        </div>
+
+        <!-- Dataset Status info area -->
+        <div id="dataset-status-alert" style="margin-top: -1.5rem; margin-bottom: 2.5rem; display: flex; align-items: center; gap: 0.5rem; padding: 0.75rem 1rem; border-radius: 8px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); font-size: 0.9rem;">
+            <span style="color: var(--text-muted); font-weight: 500;">Status Dataset:</span>
+            <span id="dataset-status-label" style="font-weight: 600;">Memuat status...</span>
+            <span id="dataset-status-info" style="color: var(--text-muted); font-size: 0.85rem; margin-left: 0.5rem;"></span>
         </div>
 
         <div id="training-terminal"
@@ -59,14 +102,74 @@
     let pollInterval = null;
 
     async function startTraining() {
-        if (!confirm("Mulai siklus Federated Learning?")) return;
-        const res = await fetch(`/api/fl/start?rounds={{ status.default_rounds }}&min_clients={{ status.default_min_clients }}`, { method: 'POST' });
-        const data = await res.json();
-        if (data.status === 'started') {
-            alert("Siklus Hidup Penuh Dimulai: Sinkronisasi -> Pra-proses -> Pelatihan");
-            startPolling();
-        } else if (data.status === 'already_running') {
-            alert("Pelatihan sedang berlangsung.");
+        const rounds = document.getElementById('rounds-input').value;
+        const epochs = document.getElementById('epochs-input').value;
+        const minClients = document.getElementById('min-clients-input').value;
+        const dataset = document.getElementById('dataset-select').value || 'students';
+        
+        if (!confirm(`Mulai siklus penuh Federated Learning (${rounds} ronde, ${epochs} epoch per ronde, dataset: ${dataset})?`)) return;
+        window.isWorkflowActive = true;
+        startPolling();
+        try {
+            const res = await fetch(`/api/fl/start?rounds=${rounds}&epochs=${epochs}&min_clients=${minClients}&dataset=${dataset}`, { method: 'POST' });
+            const data = await res.json();
+            if (data.status === 'started') {
+                alert("Siklus Hidup Penuh Dimulai: Sinkronisasi -> Pra-proses -> Pelatihan");
+            } else if (data.status === 'already_running') {
+                alert("Proses sedang berjalan.");
+            }
+        } catch (e) {
+            console.error("Training start error:", e);
+        } finally {
+            window.isWorkflowActive = false;
+            updateUIState();
+        }
+    }
+
+    async function startPreprocessing() {
+        const minClients = document.getElementById('min-clients-input').value;
+        const dataset = document.getElementById('dataset-select').value || 'students';
+        if (!confirm(`Mulai pra-proses data saja di seluruh terminal (dataset: ${dataset})?`)) return;
+        window.isWorkflowActive = true;
+        startPolling();
+        try {
+            const res = await fetch(`/api/fl/preprocess?min_clients=${minClients}&dataset=${dataset}`, { method: 'POST' });
+            const data = await res.json();
+            if (data.status === 'started') {
+                alert("Proses Pra-proses Wajah Dimulai.");
+            } else if (data.status === 'already_running') {
+                alert("Proses sedang berjalan.");
+            }
+        } catch (e) {
+            console.error("Preprocessing start error:", e);
+        } finally {
+            window.isWorkflowActive = false;
+            updateUIState();
+        }
+    }
+
+    async function startTrainOnly() {
+        const rounds = document.getElementById('rounds-input').value;
+        const epochs = document.getElementById('epochs-input').value;
+        const minClients = document.getElementById('min-clients-input').value;
+        const dataset = document.getElementById('dataset-select').value || 'students';
+        
+        if (!confirm(`Mulai pelatihan terfederasi saja (Train Only) dengan ${rounds} ronde, ${epochs} epoch per ronde (dataset: ${dataset})?`)) return;
+        window.isWorkflowActive = true;
+        startPolling();
+        try {
+            const res = await fetch(`/api/fl/train?rounds=${rounds}&epochs=${epochs}&min_clients=${minClients}&dataset=${dataset}`, { method: 'POST' });
+            const data = await res.json();
+            if (data.status === 'started') {
+                alert("Pelatihan Terfederasi Dimulai.");
+            } else if (data.status === 'already_running') {
+                alert("Proses sedang berjalan.");
+            }
+        } catch (e) {
+            console.error("Train start error:", e);
+        } finally {
+            window.isWorkflowActive = false;
+            updateUIState();
         }
     }
 
@@ -80,10 +183,38 @@
         pollInterval = null;
     }
 
+    function updateDatasetFilter() {
+        updateUIState();
+    }
+
     async function updateUIState() {
         try {
             const res = await fetch('/api/status');
             const data = await res.json();
+            window.latestStatusData = data;
+
+            // 0. Update Dataset Dropdown Options Dynamically
+            const datasetSelect = document.getElementById('dataset-select');
+            if (data.available_datasets && data.available_datasets.length > 0 && datasetSelect) {
+                const currentVal = datasetSelect.value;
+                const optionsList = data.available_datasets;
+                const existingOptions = Array.from(datasetSelect.options).map(o => o.value);
+                const isSame = optionsList.length === existingOptions.length && optionsList.every((val, index) => val === existingOptions[index]);
+                
+                if (!isSame) {
+                    datasetSelect.innerHTML = '';
+                    optionsList.forEach(ds => {
+                        const opt = document.createElement('option');
+                        opt.value = ds;
+                        opt.innerText = ds;
+                        if (ds === currentVal) opt.selected = true;
+                        datasetSelect.appendChild(opt);
+                    });
+                    if (!optionsList.includes(currentVal)) {
+                        datasetSelect.value = data.current_dataset || 'students';
+                    }
+                }
+            }
 
             // 1. Update Phase & Running Status
             const phaseEl = document.getElementById('status-phase');
@@ -94,7 +225,46 @@
             const startBtn = document.getElementById('btn-start');
             if (startBtn) {
                 startBtn.disabled = data.is_running;
-                startBtn.innerText = data.is_running ? "SEDANG BERJALAN..." : "Mulai";
+                startBtn.innerText = data.is_running ? "SEDANG BERJALAN..." : "Siklus Penuh";
+            }
+
+            const btnPre = document.getElementById('btn-preprocess');
+            if (btnPre) {
+                btnPre.disabled = data.is_running;
+            }
+
+            // Check preprocessing status
+            const selectedDataset = datasetSelect ? datasetSelect.value : 'students';
+            let isDatasetPreprocessed = false;
+            try {
+                const resDs = await fetch('/api/datasets/status');
+                const dsData = await resDs.json();
+                if (dsData.status === 'success') {
+                    const dsInfo = dsData.datasets.find(d => d.dataset === selectedDataset);
+                    if (dsInfo) {
+                        isDatasetPreprocessed = dsInfo.is_preprocessed;
+                        
+                        // Update Dataset Status info area
+                        const labelEl = document.getElementById('dataset-status-label');
+                        const infoEl = document.getElementById('dataset-status-info');
+                        if (labelEl && infoEl) {
+                            labelEl.innerText = dsInfo.status_label;
+                            if (dsInfo.is_preprocessed) {
+                                labelEl.style.color = '#10B981'; // Green
+                            } else {
+                                labelEl.style.color = '#EF4444'; // Red
+                            }
+                            infoEl.innerText = dsInfo.info;
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error("Gagal memeriksa status dataset:", e);
+            }
+
+            const btnTrain = document.getElementById('btn-train');
+            if (btnTrain) {
+                btnTrain.disabled = data.is_running || !isDatasetPreprocessed;
             }
 
             // 2. Update Logs (Terminal)
@@ -107,7 +277,8 @@
             // 3. Update Active Terminals
             const terminalContainer = document.getElementById('active-terminals');
             if (data.active_clients && data.active_clients.length > 0) {
-                terminalContainer.innerHTML = data.active_clients.map(client => `
+                terminalContainer.innerHTML = data.active_clients.map(client => {
+                    return `
                     <div class="glass" style="padding: 1rem; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05);">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
                             <span style="font-weight: 600; color: #fff;">${client.id}</span>
@@ -126,9 +297,14 @@
                             <button class="btn btn-sm btn-primary" onclick="viewInferenceLogs('${client.id}')" style="width: 100%; font-size: 0.75rem;">
                                 Log Inferensi
                             </button>
+                            ${client.status !== 'ONLINE' ? `
+                            <button class="btn btn-sm" onclick="deleteClient('${client.id}')" style="width: 100%; font-size: 0.75rem; background: #EF4444; border: none; color: white; padding: 6px 12px; border-radius: 6px; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='#DC2626'" onmouseout="this.style.background='#EF4444'">
+                                Hapus Terminal
+                            </button>
+                            ` : ''}
                         </div>
                     </div>
-                `).join('');
+                `}).join('');
             } else {
                 terminalContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 0.9rem;">Tidak ada terminal yang terdaftar.</p>';
             }
@@ -139,8 +315,9 @@
             }
 
             // 5. Polling Management
-            if (data.is_running && !pollInterval) startPolling();
-            if (!data.is_running && pollInterval) stopPolling();
+            const isBusy = data.is_running || window.isWorkflowActive;
+            if (isBusy && !pollInterval) startPolling();
+            if (!isBusy && pollInterval) stopPolling();
 
         } catch (e) { console.error("Poll error:", e); }
     }
@@ -150,22 +327,29 @@
         const modalTitle = document.getElementById('log-modal-title');
         const modalBody = document.getElementById('log-modal-body');
         
-        modalBody.style.backgroundColor = 'rgba(0,0,0,0.3)';
+        modalBody.style.backgroundColor = 'rgba(15, 23, 42, 0.95)';
         modalBody.style.color = '#e5e7eb';
         modalBody.style.fontFamily = "'Fira Code', monospace";
         modalBody.style.fontSize = "0.85rem";
         
         modalTitle.innerText = `Log Pelatihan: ${clientId}`;
-        modalBody.innerText = "Memuat log pelatihan...";
+        modalBody.innerHTML = '<div style="padding: 1rem;">Memuat log pelatihan...</div>';
         modal.style.display = 'flex';
         
         try {
             const res = await fetch(`/api/clients/logs/${clientId}`);
-            const data = await res.json();
-            modalBody.innerText = data.logs || "Log tidak ditemukan.";
-            modalBody.scrollTop = modalBody.scrollHeight;
+            const logData = await res.json();
+            
+            const rawLogs = logData.logs || "Log tidak ditemukan.";
+            modalBody.innerHTML = `
+                <div style="padding: 1rem; display: flex; flex-direction: column; height: 100%; box-sizing: border-box;">
+                    <pre style="margin: 0; flex-grow: 1; overflow-y: auto; white-space: pre-wrap; font-family: inherit; font-size: inherit; background: rgba(0,0,0,0.3); padding: 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); color: #10B981; max-height: 45vh;">${rawLogs}</pre>
+                </div>
+            `;
+            const preEl = modalBody.querySelector('pre');
+            if (preEl) preEl.scrollTop = preEl.scrollHeight;
         } catch (e) {
-            modalBody.innerText = "Gagal mengambil log: " + e.message;
+            modalBody.innerHTML = `<div style="padding: 1rem; color: #ef4444;">Gagal mengambil log: ${e.message}</div>`;
         }
     }
 
@@ -188,6 +372,22 @@
         }
         
         renderInferenceModal(clientId);
+    }
+
+    async function deleteClient(clientId) {
+        if (!confirm(`Hapus data terminal ${clientId} dari daftar?`)) return;
+        try {
+            const res = await fetch(`/api/clients/delete/${clientId}`, { method: 'POST' });
+            const data = await res.json();
+            if (data.status === 'success') {
+                updateUIState();
+            } else {
+                alert(data.message || "Gagal menghapus client");
+            }
+        } catch (e) {
+            console.error("Gagal menghapus client:", e);
+            alert("Kesalahan koneksi saat menghapus client");
+        }
     }
 
     function renderInferenceModal(clientId) {
@@ -316,6 +516,66 @@
             alert('Gagal menyalin tabel.');
         }
         window.getSelection().removeAllRanges();
+    }
+
+    async function openModelsModal() {
+        const modal = document.getElementById('log-modal');
+        const modalTitle = document.getElementById('log-modal-title');
+        const modalBody = document.getElementById('log-modal-body');
+        
+        modalBody.style.backgroundColor = 'rgba(0,0,0,0.3)';
+        modalBody.style.color = '#e5e7eb';
+        modalBody.style.fontFamily = "'Fira Code', monospace";
+        modalBody.style.fontSize = "0.85rem";
+        
+        modalTitle.innerText = "Daftar Model Tersimpan";
+        modalBody.innerHTML = '<div style="text-align:center; padding: 2rem;">Memuat daftar model...</div>';
+        modal.style.display = 'flex';
+        
+        try {
+            const res = await fetch('/api/models/list');
+            const data = await res.json();
+            if (data.status === 'success' && data.models.length > 0) {
+                let html = `
+                    <div style="overflow-x: auto;">
+                        <table style="width: 100%; border-collapse: collapse; text-align: left; color: #fff;">
+                            <thead>
+                                <tr style="border-bottom: 2px solid rgba(255,255,255,0.1); font-weight: bold; color: var(--accent);">
+                                    <th style="padding: 10px;">Versi</th>
+                                    <th style="padding: 10px;">Dataset</th>
+                                    <th style="padding: 10px;">Rounds</th>
+                                    <th style="padding: 10px;">Epochs</th>
+                                    <th style="padding: 10px;">Aksi</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                `;
+                data.models.forEach(m => {
+                    html += `
+                                <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                                    <td style="padding: 10px; font-weight: bold; color: var(--accent);">${m.version}</td>
+                                    <td style="padding: 10px;">${m.dataset || 'unknown'}</td>
+                                    <td style="padding: 10px;">${m.rounds || 0}</td>
+                                    <td style="padding: 10px;">${m.epochs || 0}</td>
+                                    <td style="padding: 10px;">
+                                        <a href="/api/model/backbone?version=${m.version}" class="btn btn-sm btn-primary" style="font-size: 0.75rem; text-decoration: none; padding: 0.25rem 0.5rem; display: inline-block;">Unduh Backbone</a>
+                                        <a href="/api/model/registry?version=${m.version}" class="btn btn-sm btn-outline-primary" style="font-size: 0.75rem; text-decoration: none; padding: 0.25rem 0.5rem; display: inline-block;">Unduh Registry</a>
+                                    </td>
+                                </tr>
+                    `;
+                });
+                html += `
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+                modalBody.innerHTML = html;
+            } else {
+                modalBody.innerHTML = '<div style="text-align:center; padding: 2rem; color: var(--text-muted);">Tidak ada model tersimpan di server.</div>';
+            }
+        } catch (e) {
+            modalBody.innerHTML = '<div style="text-align:center; padding: 2rem; color: var(--danger);">Gagal memuat model: ' + e.message + '</div>';
+        }
     }
 
     function closeModal() {

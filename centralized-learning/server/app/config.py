@@ -10,7 +10,7 @@ except ImportError:
 DATA_ROOT = os.getenv("DATA_ROOT", "data")
 UPLOAD_DIR = os.path.join(DATA_ROOT, "students")
 PROCESSED_DATA = os.path.join(DATA_ROOT, "datasets_processed")
-MODEL_DIR = os.getenv("MODEL_DIR", "app/model")
+MODEL_DIR = os.getenv("MODEL_DIR", "data/model")
 MODEL_PATH = os.path.join(MODEL_DIR, "global_model.pth")
 REF_PATH = os.path.join(MODEL_DIR, "reference_embeddings.pth")
 PRETRAINED_PATH = os.path.join(MODEL_DIR, "global_model_v0.pth")

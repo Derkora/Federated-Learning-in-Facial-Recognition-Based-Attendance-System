@@ -19,11 +19,14 @@ class CentralizedServerManager:
     def __init__(self):
         self.lock = threading.RLock()
         self.is_running = False
+        self.running_tasks_count = 0
         self.current_phase = "Standby"
         self.upload_requested = False
         self.start_time = 0
         self.received_data = [] 
         self.uploader_map = {} 
+        self.registered_clients = {}
+        self.current_dataset = "students"
         self.model_version = 0
         
         # Inisialisasi Logger Terpusat (Global)
@@ -39,6 +42,10 @@ class CentralizedServerManager:
             "total_round_time_s": 0,
             "compute_energy_kwh": 0,
             "compute_cost_idr": 0,
+            "preprocess_duration_s": 0.0,
+            "preprocess_energy_kwh": 0.0,
+            "preprocess_upload_mb": 0.0,
+            "preprocess_download_mb": 0.0,
             "epoch_history": [], # Riwayat {"epoch": i, "loss": l, "accuracy": a}
             "inference_logs": [] # Log detail untuk riset FAR/TAR
         }
@@ -49,6 +56,8 @@ class CentralizedServerManager:
         self.default_epochs = TRAINING_PARAMS["epochs"]
         self.default_batch_size = TRAINING_PARAMS["batch_size"]
         self.inference_threshold = 0.7
+        self.current_db_version_id = None
+        self.model_version_str = "v0"
         
         self.update_logs("=== Server Started / Restarted ===")
         
@@ -81,14 +90,35 @@ class CentralizedServerManager:
         for i in range(max_retries):
             db = SessionLocal()
             try:
-                # 1. Cek Koneksi & Muat Versi
                 version_count = db.query(models.ModelVersion).count()
                 self.model_version = version_count
-                self.logger.info(f"Database terhubung. Ditemukan {version_count} versi model.")
+                
+                # Muat Versi Model String
+                latest_version = db.query(models.ModelVersion).order_by(models.ModelVersion.version_id.desc()).first()
+                if latest_version and latest_version.notes:
+                    try:
+                        notes = latest_version.notes
+                        parts = [p.strip() for p in notes.split("|")]
+                        dataset = "students"
+                        epochs = 0
+                        for p in parts:
+                            if p.startswith("Dataset:"):
+                                dataset = p.split(":")[1].strip()
+                            elif p.startswith("Epochs:"):
+                                epochs = p.split(":")[1].strip()
+                        self.model_version_str = f"cl_{dataset}_{epochs}e"
+                    except:
+                        self.model_version_str = "v0"
+                else:
+                    self.model_version_str = "v0"
+                self.logger.info("Database terhubung.")
 
                 # 2. Muat Riwayat Pelatihan
-                rounds = db.query(models.TrainingRound).order_by(models.TrainingRound.round_id.asc()).all()
-                self.logger.info(f"Menemukan {len(rounds)} ronde pelatihan di database.")
+                latest_version = db.query(models.ModelVersion).order_by(models.ModelVersion.version_id.desc()).first()
+                if latest_version:
+                    rounds = db.query(models.TrainingRound).filter_by(model_version_id=latest_version.version_id).order_by(models.TrainingRound.round_id.asc()).all()
+                else:
+                    rounds = db.query(models.TrainingRound).filter(models.TrainingRound.model_version_id == None).order_by(models.TrainingRound.round_id.asc()).all()
                 
                 if rounds:
                     history = []
@@ -203,6 +233,17 @@ class CentralizedServerManager:
                 except Exception as e:
                     self.logger.error(f"Gagal memuat log inferensi: {e}")
 
+    def start_task(self):
+        with self.lock:
+            self.running_tasks_count += 1
+            self.is_running = True
+
+    def end_task(self):
+        with self.lock:
+            self.running_tasks_count = max(0, self.running_tasks_count - 1)
+            if self.running_tasks_count == 0:
+                self.is_running = False
+
     def start_phase(self, phase_name):
         # Menandai awal dari fase alur kerja penelitian
         with self.lock:
@@ -214,7 +255,8 @@ class CentralizedServerManager:
     def end_phase(self):
         # Mengembalikan status ke Standby setelah fase selesai
         with self.lock:
-            self.is_running = False
+            if self.running_tasks_count == 0:
+                self.is_running = False
             self.current_phase = "Standby"
 
     def update_logs(self, msg):
@@ -244,10 +286,8 @@ class CentralizedServerManager:
             try:
                 version_count = dbs.query(models.ModelVersion).count()
                 self.model_version = version_count
-                self.update_logs(f"Versi Model Global naik ke v{self.model_version}")
             except Exception as e:
                 self.model_version += 1
-                self.update_logs(f"Gagal sinkronisasi DB, fallback increment: v{self.model_version}")
 
     def update_metrics(self, new_data):
         # Memperbarui metrik performa dan estimasi biaya
@@ -285,9 +325,10 @@ class CentralizedServerManager:
             cost_per_kwh = ECONOMICS["compute_cost_per_kwh"] # Rp 1.444,70
             self.metrics["compute_cost_idr"] = round(energy_kwh * cost_per_kwh, 2)
 
-    def save_training_round(self, db, round_num, loss, accuracy, val_loss=None, val_accuracy=None, duration=0, energy=0, upload=0, download=0, start_time=None):
+    def save_training_round(self, db, round_num, loss, accuracy, val_loss=None, val_accuracy=None, duration=0, energy=0, upload=0, download=0, start_time=None, model_version_id=None):
         # Menyimpan hasil ronde ke Database Postgres
         try:
+            actual_version_id = model_version_id or self.current_db_version_id
             new_round = models.TrainingRound(
                 round_number=round_num,
                 global_loss=float(loss),
@@ -298,7 +339,8 @@ class CentralizedServerManager:
                 compute_energy_kwh=float(energy),
                 upload_volume_mb=float(upload),
                 download_volume_mb=float(download),
-                start_time=start_time or datetime.now(timezone(timedelta(hours=7)))
+                start_time=start_time or datetime.now(timezone(timedelta(hours=7))),
+                model_version_id=actual_version_id
             )
             db.add(new_round)
             db.commit()
@@ -306,6 +348,133 @@ class CentralizedServerManager:
         except Exception as e:
             self.logger.error(f"Gagal menyimpan ronde ke database: {e}")
             db.rollback()
+
+    def save_version_metrics(self, version_str):
+        with self.lock:
+            try:
+                # Preprocessing
+                prep_duration = self.metrics.get("preprocess_duration_s", 0.0)
+                prep_upload = self.metrics.get("preprocess_upload_mb", self.metrics.get("upload_volume_mb", 0.0))
+                prep_download = 0.0
+                prep_bandwidth = prep_upload + prep_download
+                prep_transmission_cost = round(prep_bandwidth * ECONOMICS["transmission_cost_per_mb"], 2)
+                
+                prep_energy = self.metrics.get("preprocess_energy_kwh", 0.0)
+                if prep_energy == 0.0 and prep_duration > 0.0:
+                    prep_energy = (prep_duration / 3600.0) * ECONOMICS["estimated_server_power_kw"]
+                prep_compute_cost = round(prep_energy * ECONOMICS["compute_cost_per_kwh"], 2)
+                
+                # Training
+                train_duration = self.metrics.get("training_duration_s", 0.0)
+                if train_duration == 0.0:
+                    train_duration = self.metrics.get("total_round_time_s", 0.0)
+                train_upload = 0.0
+                train_download = self.metrics.get("download_volume_mb", 0.0)
+                train_bandwidth = train_upload + train_download
+                train_transmission_cost = round(train_bandwidth * ECONOMICS["transmission_cost_per_mb"], 2)
+                
+                train_energy = self.metrics.get("compute_energy_kwh", 0.0)
+                if train_energy == 0.0 and train_duration > 0.0:
+                    train_energy = (train_duration / 3600.0) * ECONOMICS["estimated_server_power_kw"]
+                train_compute_cost = round(train_energy * ECONOMICS["compute_cost_per_kwh"], 2)
+                
+                # Combined
+                comb_duration = prep_duration + train_duration
+                comb_upload = prep_upload + train_upload
+                comb_download = prep_download + train_download
+                comb_bandwidth = comb_upload + comb_download
+                comb_transmission_cost = round(comb_bandwidth * ECONOMICS["transmission_cost_per_mb"], 2)
+                comb_energy = prep_energy + train_energy
+                comb_compute_cost = round(comb_energy * ECONOMICS["compute_cost_per_kwh"], 2)
+                
+                self.metrics["preprocess"] = {
+                    "duration_s": round(prep_duration, 2),
+                    "upload_volume_mb": round(prep_upload, 2),
+                    "download_volume_mb": round(prep_download, 2),
+                    "bandwidth_mb": round(prep_bandwidth, 2),
+                    "transmission_cost_idr": prep_transmission_cost,
+                    "compute_energy_kwh": round(prep_energy, 6),
+                    "compute_cost_idr": prep_compute_cost
+                }
+                
+                self.metrics["training"] = {
+                    "duration_s": round(train_duration, 2),
+                    "upload_volume_mb": round(train_upload, 2),
+                    "download_volume_mb": round(train_download, 2),
+                    "bandwidth_mb": round(train_bandwidth, 2),
+                    "transmission_cost_idr": train_transmission_cost,
+                    "compute_energy_kwh": round(train_energy, 6),
+                    "compute_cost_idr": train_compute_cost
+                }
+                
+                self.metrics["combined"] = {
+                    "duration_s": round(comb_duration, 2),
+                    "upload_volume_mb": round(comb_upload, 2),
+                    "download_volume_mb": round(comb_download, 2),
+                    "bandwidth_mb": round(comb_bandwidth, 2),
+                    "transmission_cost_idr": comb_transmission_cost,
+                    "compute_energy_kwh": round(comb_energy, 6),
+                    "compute_cost_idr": comb_compute_cost
+                }
+
+                import math
+                from datetime import datetime
+                def sanitize_floats(obj):
+                    if isinstance(obj, float):
+                        if math.isnan(obj) or math.isinf(obj):
+                            return None
+                        return obj
+                    elif isinstance(obj, datetime):
+                        return obj.isoformat()
+                    elif isinstance(obj, dict):
+                        return {k: sanitize_floats(v) for k, v in obj.items()}
+                    elif isinstance(obj, list):
+                        return [sanitize_floats(x) for x in obj]
+                    return obj
+
+                path = f"data/metrics_{version_str}.json"
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                
+                clean_metrics = sanitize_floats(self.metrics)
+                with open(path, "w") as f:
+                    json.dump(clean_metrics, f, indent=4)
+                self.logger.info(f"Berhasil menyimpan metrik untuk versi {version_str} ke {path}")
+            except Exception as e:
+                self.logger.error(f"Gagal menyimpan metrik versi {version_str}: {e}")
+
+    def load_version_metrics(self, version_str):
+        with self.lock:
+            path = f"data/metrics_{version_str}.json"
+            if os.path.exists(path):
+                try:
+                    import math
+                    def sanitize_floats(obj):
+                        if isinstance(obj, float):
+                            if math.isnan(obj) or math.isinf(obj):
+                                return None
+                            return obj
+                        elif isinstance(obj, dict):
+                            return {k: sanitize_floats(v) for k, v in obj.items()}
+                        elif isinstance(obj, list):
+                            return [sanitize_floats(x) for x in obj]
+                        return obj
+
+                    with open(path, "r") as f:
+                        data = json.load(f)
+                        return sanitize_floats(data)
+                except Exception as e:
+                    self.logger.error(f"Gagal memuat metrik versi {version_str}: {e}")
+            return None
+
+    def reset_training_metrics(self):
+        with self.lock:
+            self.metrics["accuracy"] = 0.0
+            self.metrics["loss"] = 0.0
+            self.metrics["training_duration_s"] = 0.0
+            self.metrics["compute_energy_kwh"] = 0.0
+            self.metrics["download_volume_mb"] = 0.0
+            self.metrics["epoch_history"] = []
+            self.update_logs("[INFO] Metrik pelatihan di-reset untuk sesi pelatihan baru.")
 
     def get_status(self, db=None):
         # Mengembalikan status lengkap server untuk dashboard UI
@@ -340,11 +509,19 @@ class CentralizedServerManager:
                         db.add(c)
                         db_needs_commit = True
                     
+                    c_data = self.registered_clients.get(c.edge_id, {})
+                    dataset_name = c_data.get("dataset", "students")
+                    is_prep = c_data.get("is_preprocessed", False)
+                    avail_ds = c_data.get("available_datasets", {dataset_name: is_prep})
+                    
                     active_clients.append({
                         "id": c.edge_id,
                         "ip": c.ip_address,
                         "status": status.upper(),
-                        "last_seen": wib_time_str
+                        "last_seen": wib_time_str,
+                        "dataset": dataset_name,
+                        "is_preprocessed": is_prep,
+                        "available_datasets": avail_ds
                     })
                     
                 if db_needs_commit:
@@ -357,7 +534,34 @@ class CentralizedServerManager:
                 try:
                     # Sinkronkan versi model dengan database
                     self.model_version = db.query(models.ModelVersion).count()
-                except: pass
+                    latest_version = db.query(models.ModelVersion).order_by(models.ModelVersion.version_id.desc()).first()
+                    if latest_version and latest_version.notes:
+                        notes = latest_version.notes
+                        parts = [p.strip() for p in notes.split("|")]
+                        dataset = "students"
+                        epochs = 0
+                        for p in parts:
+                            if p.startswith("Dataset:"):
+                                dataset = p.split(":")[1].strip()
+                            elif p.startswith("Epochs:"):
+                                epochs = p.split(":")[1].strip()
+                        self.model_version_str = f"cl_{dataset}_{epochs}e"
+                    else:
+                        self.model_version_str = "v0"
+                except: 
+                    self.model_version_str = "v0"
+
+            # Kumpulkan semua dataset unik yang dilaporkan oleh seluruh client
+            all_datasets = set()
+            for cid, c_data in self.registered_clients.items():
+                avail = c_data.get("available_datasets", {})
+                for ds in avail.keys():
+                    all_datasets.add(ds)
+                ds = c_data.get("dataset")
+                if ds:
+                    all_datasets.add(ds)
+            all_datasets.add("students")
+            all_datasets_list = sorted(list(all_datasets))
 
             return {
                 "is_running": self.is_running,
@@ -366,11 +570,13 @@ class CentralizedServerManager:
                 "metrics": self.metrics,
                 "current_logs": self.current_logs,
                 "received_data": self.received_data,
-                "model_version": self.model_version,
+                "model_version": self.model_version_str,
                 "default_epochs": self.default_epochs,
                 "default_batch_size": self.default_batch_size,
                 "inference_threshold": self.inference_threshold,
                 "uptime": int(time.time() - self.start_time) if self.start_time > 0 else 0,
                 "active_clients": active_clients,
+                "available_datasets": all_datasets_list,
+                "current_dataset": self.current_dataset,
                 "inference_logs": self.metrics.get("inference_logs", [])
             }

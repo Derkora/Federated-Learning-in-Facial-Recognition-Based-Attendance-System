@@ -22,7 +22,7 @@ TRAINING_PARAMS = {
     "batch_size_per_client": 32,
     "mu": 0.05,
     "label_smoothing": 0.0,
-    "lr_schedule": "cosine", # Diganti ke Cosine Annealing
+    "lr_schedule": "cosine",
     "initial_lr": 0.05,
     "min_lr": 1e-4
 }

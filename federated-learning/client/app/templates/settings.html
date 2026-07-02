@@ -1,0 +1,569 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="glass" style="padding: 1.5rem; margin-bottom: 1.5rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+        <h2 style="margin: 0; font-size: 1.4rem;">Pengaturan Dataset Lokal</h2>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <select id="dataset-selector" class="glass" style="background: rgba(255,255,255,0.05); color: white; border: 1px solid rgba(255,255,255,0.2); padding: 6px 12px; border-radius: 8px; font-size: 0.9rem; outline: none; cursor: pointer;">
+                <option value="" disabled selected>Memuat dataset...</option>
+            </select>
+            <button onclick="showCreateDatasetModal()" class="btn" style="padding: 6px 14px; font-size: 0.9rem; border-radius: 8px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1); color: white;">+ Dataset</button>
+        </div>
+    </div>
+
+    <!-- Alert status -->
+    <div id="status-alert" style="display: none; padding: 10px 15px; border-radius: 8px; margin-bottom: 1.2rem; font-size: 0.9rem; font-weight: 600; animation: fadeIn 0.3s ease;"></div>
+
+    <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; align-items: start;" class="settings-grid">
+        <!-- List Mahasiswa -->
+        <div class="glass" style="padding: 1.2rem; background: rgba(0,0,0,0.2);">
+            <h3 style="margin-top: 0; margin-bottom: 1rem; font-size: 1.1rem; display: flex; justify-content: space-between; align-items: center;">
+                <span>Daftar Mahasiswa</span>
+                <span id="student-count-badge" class="badge" style="background: rgba(255,255,255,0.1); color: var(--text-muted); font-size: 0.75rem;">0 Mahasiswa</span>
+            </h3>
+            
+            <div id="students-list-container" style="display: flex; flex-direction: column; gap: 0.8rem; max-height: 550px; overflow-y: auto; padding-right: 5px;">
+                <div style="text-align: center; color: var(--text-muted); padding: 2rem 0;">
+                    Memuat data mahasiswa...
+                </div>
+            </div>
+        </div>
+
+        <!-- Form Tambah Mahasiswa -->
+        <div class="glass" style="padding: 1.2rem; background: rgba(0,0,0,0.2);">
+            <h3 style="margin-top: 0; margin-bottom: 1.2rem; font-size: 1.1rem;">Tambah Mahasiswa</h3>
+            
+            <form id="add-student-form" onsubmit="handleSaveStudent(event)" style="display: flex; flex-direction: column; gap: 0.9rem;">
+                <div>
+                    <label style="display: block; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.3rem;">NRP / ID Mahasiswa</label>
+                    <input type="text" id="student-nrp" placeholder="Contoh: 5025211024" required class="glass" style="width: 100%; box-sizing: border-box; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; color: white; outline: none; font-size: 0.9rem;">
+                </div>
+                <div>
+                    <label style="display: block; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.3rem;">Nama Lengkap</label>
+                    <input type="text" id="student-name" placeholder="Contoh: Budi Setiawan" required class="glass" style="width: 100%; box-sizing: border-box; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; color: white; outline: none; font-size: 0.9rem;">
+                </div>
+                <div>
+                    <label style="display: block; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.3rem;">Foto Wajah (Multi-select)</label>
+                    <div id="dropzone" style="border: 2px dashed rgba(255,255,255,0.2); border-radius: 8px; padding: 1.5rem; text-align: center; cursor: pointer; background: rgba(255,255,255,0.02); transition: all 0.2s;" ondragover="event.preventDefault(); this.style.borderColor='var(--accent)';" ondragleave="this.style.borderColor='rgba(255,255,255,0.2)';" ondrop="handleFileDrop(event)">
+                        <span style="font-size: 0.8rem; color: var(--text-muted);">Tarik & Lepas gambar atau Klik untuk memilih</span>
+                        <input type="file" id="student-files" multiple accept="image/*" style="display: none;" onchange="handleFileSelect(event)">
+                    </div>
+                    <div id="file-previews" style="display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px;"></div>
+                </div>
+                <button type="submit" id="btn-save-student" class="btn" style="background: var(--accent); color: white; border: none; padding: 10px; border-radius: 8px; font-weight: bold; cursor: pointer; margin-top: 0.5rem;">
+                    Simpan Mahasiswa
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Modal Edit Mahasiswa -->
+<div id="edit-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(4px); animation: fadeIn 0.2s ease;">
+    <div class="glass" style="width: 90%; max-width: 400px; padding: 1.5rem; background: rgba(20,20,25,0.95); border: 1px solid rgba(255,255,255,0.12);">
+        <h3 style="margin-top: 0; margin-bottom: 1rem; color: white;">Edit Nama Folder</h3>
+        <input type="text" id="edit-folder-name" class="glass" style="width: 100%; box-sizing: border-box; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; color: white; outline: none; font-size: 0.9rem; margin-bottom: 1.2rem;">
+        <div style="display: flex; justify-content: flex-end; gap: 8px;">
+            <button onclick="closeEditModal()" class="btn" style="background: rgba(255,255,255,0.08); color: white; padding: 6px 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1);">Batal</button>
+            <button onclick="submitEditStudent()" class="btn" style="background: var(--accent); color: white; padding: 6px 14px; border-radius: 6px; border: none;">Simpan</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal Dataset Baru -->
+<div id="dataset-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(4px); animation: fadeIn 0.2s ease;">
+    <div class="glass" style="width: 90%; max-width: 400px; padding: 1.5rem; background: rgba(20,20,25,0.95); border: 1px solid rgba(255,255,255,0.12);">
+        <h3 style="margin-top: 0; margin-bottom: 1rem; color: white;">Buat Dataset Baru</h3>
+        <input type="text" id="new-dataset-name" placeholder="Contoh: employees" class="glass" style="width: 100%; box-sizing: border-box; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; color: white; outline: none; font-size: 0.9rem; margin-bottom: 1.2rem;">
+        <div style="display: flex; justify-content: flex-end; gap: 8px;">
+            <button onclick="closeCreateDatasetModal()" class="btn" style="background: rgba(255,255,255,0.08); color: white; padding: 6px 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1);">Batal</button>
+            <button onclick="submitCreateDataset()" class="btn" style="background: var(--accent); color: white; padding: 6px 14px; border-radius: 6px; border: none;">Buat</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal Preview Gambar (Lightbox) -->
+<div id="image-preview-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 1100; align-items: center; justify-content: center; backdrop-filter: blur(5px); animation: fadeIn 0.2s ease;" onclick="closeImagePreview()">
+    <div style="position: relative; max-width: 90%; max-height: 90%; display: flex; flex-direction: column; align-items: center; gap: 10px;" onclick="event.stopPropagation()">
+        <img id="preview-image-content" src="" style="max-width: 100%; max-height: 80vh; object-fit: contain; border-radius: 8px; border: 2px solid rgba(255,255,255,0.1); box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+        <button onclick="closeImagePreview()" class="btn" style="background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.25); color: white; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; transition: background 0.2s;">Tutup</button>
+    </div>
+</div>
+
+<style>
+    @keyframes fadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+    }
+    .student-card {
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 10px;
+        padding: 0.8rem;
+        transition: all 0.2s;
+    }
+    .student-card:hover {
+        background: rgba(255,255,255,0.06);
+        border-color: rgba(255,255,255,0.12);
+        transform: translateY(-2px);
+    }
+    .thumb-img {
+        width: 48px;
+        height: 48px;
+        object-fit: cover;
+        border-radius: 6px;
+        border: 1px solid rgba(255,255,255,0.1);
+        transition: transform 0.2s;
+    }
+    .thumb-img:hover {
+        transform: scale(1.1);
+        z-index: 5;
+    }
+    @media (max-width: 768px) {
+        .settings-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+
+<script>
+    const datasetSelector = document.getElementById('dataset-selector');
+    const studentsContainer = document.getElementById('students-list-container');
+    const studentCountBadge = document.getElementById('student-count-badge');
+    const dropzone = document.getElementById('dropzone');
+    const fileInput = document.getElementById('student-files');
+    const previewsContainer = document.getElementById('file-previews');
+    const statusAlert = document.getElementById('status-alert');
+    
+    let currentSelectedDataset = '';
+    let selectedFilesList = [];
+    let editTargetDir = '';
+    let expandedStudents = {};
+
+    // Inisialisasi
+    async function init() {
+        await loadDatasets();
+        
+        // Setup dropzone click to trigger input selection
+        dropzone.onclick = () => fileInput.click();
+    }
+
+    function showAlert(msg, type='success') {
+        statusAlert.innerText = msg;
+        statusAlert.style.display = 'block';
+        if (type === 'success') {
+            statusAlert.style.background = 'rgba(16, 185, 129, 0.15)';
+            statusAlert.style.border = '1px solid rgba(16, 185, 129, 0.3)';
+            statusAlert.style.color = '#10b981';
+        } else {
+            statusAlert.style.background = 'rgba(239, 68, 68, 0.15)';
+            statusAlert.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+            statusAlert.style.color = '#ef4444';
+        }
+        setTimeout(() => {
+            statusAlert.style.display = 'none';
+        }, 5000);
+    }
+
+    async function loadDatasets() {
+        try {
+            const res = await fetch('/api/datasets/list');
+            const data = await res.json();
+            if (data.status === 'success') {
+                datasetSelector.innerHTML = '';
+                Object.keys(data.datasets).forEach(ds => {
+                    const opt = document.createElement('option');
+                    opt.value = ds;
+                    opt.textContent = `Dataset: ${ds}`;
+                    datasetSelector.appendChild(opt);
+                });
+                
+                if (data.current_dataset) {
+                    datasetSelector.value = data.current_dataset;
+                    currentSelectedDataset = data.current_dataset;
+                } else if (datasetSelector.options.length > 0) {
+                    currentSelectedDataset = datasetSelector.options[0].value;
+                }
+                
+                if (currentSelectedDataset) {
+                    await loadStudentsList(currentSelectedDataset);
+                }
+            }
+        } catch (e) {
+            console.error("Gagal memuat dataset:", e);
+            showAlert("Gagal menghubungi server untuk memuat dataset.", "error");
+        }
+    }
+
+    datasetSelector.onchange = async (e) => {
+        const selected = e.target.value;
+        currentSelectedDataset = selected;
+        // Ubah dataset aktif di client
+        await fetch('/api/dataset/select', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dataset: selected })
+        });
+        await loadStudentsList(selected);
+    };
+
+    async function loadStudentsList(datasetName) {
+        studentsContainer.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 2rem 0;">Memuat data mahasiswa...</div>';
+        try {
+            const res = await fetch(`/api/datasets/${datasetName}/students`);
+            const data = await res.json();
+            if (data.status === 'success') {
+                studentsContainer.innerHTML = '';
+                studentCountBadge.innerText = `${data.students.length} Mahasiswa`;
+                
+                if (data.students.length === 0) {
+                    studentsContainer.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 2rem 0;">Belum ada mahasiswa terdaftar di dataset ini.</div>';
+                    return;
+                }
+                
+                data.students.forEach(student => {
+                    const card = document.createElement('div');
+                    card.className = 'student-card';
+                    card.style.display = 'flex';
+                    card.style.flexDirection = 'column';
+                    card.style.gap = '0.6rem';
+                    
+                    const header = document.createElement('div');
+                    header.style.display = 'flex';
+                    header.style.justifyContent = 'space-between';
+                    header.style.alignItems = 'center';
+                    
+                    const info = document.createElement('div');
+                    info.innerHTML = `<span style="font-weight: 600; color: white;">${student.dir_name}</span> <br><small style="color: var(--text-muted);">${student.image_count} foto wajah</small>`;
+                    
+                    const actions = document.createElement('div');
+                    actions.style.display = 'flex';
+                    actions.style.gap = '6px';
+                    
+                    const editBtn = document.createElement('button');
+                    editBtn.innerText = 'Edit';
+                    editBtn.className = 'btn';
+                    editBtn.style.padding = '4px 10px';
+                    editBtn.style.fontSize = '0.75rem';
+                    editBtn.style.borderRadius = '5px';
+                    editBtn.style.background = 'rgba(255,255,255,0.05)';
+                    editBtn.style.border = '1px solid rgba(255,255,255,0.08)';
+                    editBtn.style.color = 'white';
+                    editBtn.onclick = () => openEditModal(student.dir_name);
+                    
+                    const deleteBtn = document.createElement('button');
+                    deleteBtn.innerText = 'Hapus';
+                    deleteBtn.className = 'btn';
+                    deleteBtn.style.padding = '4px 10px';
+                    deleteBtn.style.fontSize = '0.75rem';
+                    deleteBtn.style.borderRadius = '5px';
+                    deleteBtn.style.background = 'rgba(239, 68, 68, 0.1)';
+                    deleteBtn.style.border = '1px solid rgba(239, 68, 68, 0.2)';
+                    deleteBtn.style.color = '#ef4444';
+                    deleteBtn.onclick = () => handleDeleteStudent(student.dir_name);
+                    
+                    actions.appendChild(editBtn);
+                    actions.appendChild(deleteBtn);
+                    header.appendChild(info);
+                    header.appendChild(actions);
+                    card.appendChild(header);
+                    
+                    // Thumbnail grid
+                    if (student.images && student.images.length > 0) {
+                        const grid = document.createElement('div');
+                        grid.id = `image-grid-${student.dir_name.replace(/[^a-zA-Z0-9-_]/g, '_')}`;
+                        grid.style.display = 'flex';
+                        grid.style.flexWrap = 'wrap';
+                        grid.style.gap = '6px';
+                        card.appendChild(grid);
+                        
+                        const isExpanded = expandedStudents[student.dir_name] || false;
+                        setTimeout(() => {
+                            renderStudentImages(datasetName, student.dir_name, student.images, isExpanded);
+                        }, 0);
+                    }
+                    
+                    studentsContainer.appendChild(card);
+                });
+            }
+        } catch (e) {
+            console.error("Gagal memuat mahasiswa:", e);
+            studentsContainer.innerHTML = '<div style="text-align: center; color: #ef4444; padding: 2rem 0;">Gagal memuat data dari server.</div>';
+        }
+    }
+
+    // Modal Create Dataset
+    function showCreateDatasetModal() {
+        document.getElementById('dataset-modal').style.display = 'flex';
+        document.getElementById('new-dataset-name').value = '';
+        document.getElementById('new-dataset-name').focus();
+    }
+    
+    function closeCreateDatasetModal() {
+        document.getElementById('dataset-modal').style.display = 'none';
+    }
+    
+    async function submitCreateDataset() {
+        const name = document.getElementById('new-dataset-name').value.trim();
+        if (!name) return;
+        
+        try {
+            const res = await fetch('/api/datasets/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                showAlert(data.message, "success");
+                closeCreateDatasetModal();
+                await loadDatasets();
+                datasetSelector.value = name;
+                currentSelectedDataset = name;
+                await loadStudentsList(name);
+            } else {
+                showAlert(data.message, "error");
+            }
+        } catch (e) {
+            showAlert("Gagal membuat dataset.", "error");
+        }
+    }
+
+    // Modal Edit Student
+    function openEditModal(dirName) {
+        editTargetDir = dirName;
+        document.getElementById('edit-modal').style.display = 'flex';
+        const input = document.getElementById('edit-folder-name');
+        input.value = dirName;
+        input.focus();
+    }
+    
+    function closeEditModal() {
+        document.getElementById('edit-modal').style.display = 'none';
+    }
+    
+    async function submitEditStudent() {
+        const newName = document.getElementById('edit-folder-name').value.trim();
+        if (!newName || newName === editTargetDir) {
+            closeEditModal();
+            return;
+        }
+        
+        try {
+            const res = await fetch(`/api/datasets/${currentSelectedDataset}/students/${editTargetDir}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ new_name: newName })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                showAlert(data.message, "success");
+                closeEditModal();
+                await loadStudentsList(currentSelectedDataset);
+            } else {
+                showAlert(data.message, "error");
+            }
+        } catch (e) {
+            showAlert("Gagal mengubah nama mahasiswa.", "error");
+        }
+    }
+
+    // Delete Student
+    async function handleDeleteStudent(dirName) {
+        if (!confirm(`Apakah Anda yakin ingin menghapus folder mahasiswa "${dirName}"? Semua foto wajah di dalamnya akan dihapus permanen.`)) {
+            return;
+        }
+        
+        try {
+            const res = await fetch(`/api/datasets/${currentSelectedDataset}/students/${dirName}`, {
+                method: 'DELETE'
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                showAlert(data.message, "success");
+                await loadStudentsList(currentSelectedDataset);
+            } else {
+                showAlert(data.message, "error");
+            }
+        } catch (e) {
+            showAlert("Gagal menghapus mahasiswa.", "error");
+        }
+    }
+
+    // File Uploader Handlers
+    function handleFileSelect(e) {
+        const files = Array.from(e.target.files);
+        addFiles(files);
+    }
+    
+    function handleFileDrop(e) {
+        e.preventDefault();
+        dropzone.style.borderColor = 'rgba(255,255,255,0.2)';
+        const files = Array.from(e.dataTransfer.files);
+        addFiles(files);
+    }
+    
+    function addFiles(files) {
+        files.forEach(file => {
+            if (file.type.startsWith('image/')) {
+                selectedFilesList.push(file);
+                
+                // Buat preview
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const previewWrapper = document.createElement('div');
+                    previewWrapper.style.position = 'relative';
+                    previewWrapper.style.width = '50px';
+                    previewWrapper.style.height = '50px';
+                    
+                    const img = document.createElement('img');
+                    img.src = e.target.result;
+                    img.style.width = '100%';
+                    img.style.height = '100%';
+                    img.style.objectFit = 'cover';
+                    img.style.borderRadius = '4px';
+                    img.style.border = '1px solid rgba(255,255,255,0.1)';
+                    
+                    const removeBtn = document.createElement('button');
+                    removeBtn.innerHTML = '&times;';
+                    removeBtn.style.position = 'absolute';
+                    removeBtn.style.top = '-5px';
+                    removeBtn.style.right = '-5px';
+                    removeBtn.style.background = '#ef4444';
+                    removeBtn.style.color = 'white';
+                    removeBtn.style.border = 'none';
+                    removeBtn.style.borderRadius = '50%';
+                    removeBtn.style.width = '16px';
+                    removeBtn.style.height = '16px';
+                    removeBtn.style.display = 'flex';
+                    removeBtn.style.alignItems = 'center';
+                    removeBtn.style.justifyContent = 'center';
+                    removeBtn.style.cursor = 'pointer';
+                    removeBtn.style.fontSize = '12px';
+                    removeBtn.onclick = (event) => {
+                        event.stopPropagation();
+                        const idx = selectedFilesList.indexOf(file);
+                        if (idx > -1) selectedFilesList.splice(idx, 1);
+                        previewWrapper.remove();
+                    };
+                    
+                    previewWrapper.appendChild(img);
+                    previewWrapper.appendChild(removeBtn);
+                    previewsContainer.appendChild(previewWrapper);
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+    }
+
+    // Save Student Submit
+    async function handleSaveStudent(e) {
+        e.preventDefault();
+        
+        if (!currentSelectedDataset) {
+            showAlert("Pilih atau buat dataset terlebih dahulu.", "error");
+            return;
+        }
+        
+        const nrp = document.getElementById('student-nrp').value.trim();
+        const name = document.getElementById('student-name').value.trim();
+        
+        if (!nrp || !name) {
+            showAlert("NRP dan nama lengkap harus diisi.", "error");
+            return;
+        }
+        
+        const btnSave = document.getElementById('btn-save-student');
+        btnSave.disabled = true;
+        btnSave.innerText = 'Menyimpan...';
+        
+        const formData = new FormData();
+        formData.append('nrp', nrp);
+        formData.append('name', name);
+        selectedFilesList.forEach(file => {
+            formData.append('files', file);
+        });
+        
+        try {
+            const res = await fetch(`/api/datasets/${currentSelectedDataset}/students/create`, {
+                method: 'POST',
+                body: formData
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                showAlert(data.message, "success");
+                // Reset form
+                document.getElementById('add-student-form').reset();
+                previewsContainer.innerHTML = '';
+                selectedFilesList = [];
+                // Reload list
+                await loadStudentsList(currentSelectedDataset);
+            } else {
+                showAlert(data.message, "error");
+            }
+        } catch (err) {
+            showAlert("Gagal mengirim data ke server.", "error");
+        } finally {
+            btnSave.disabled = false;
+            btnSave.innerText = 'Simpan Mahasiswa';
+        }
+    }
+
+    function renderStudentImages(datasetName, dirName, images, isExpanded) {
+        const safeId = `image-grid-${dirName.replace(/[^a-zA-Z0-9-_]/g, '_')}`;
+        const grid = document.getElementById(safeId);
+        if (!grid) return;
+        grid.innerHTML = '';
+        
+        const limit = isExpanded ? images.length : 8;
+        images.slice(0, limit).forEach(img => {
+            const imgEl = document.createElement('img');
+            imgEl.className = 'thumb-img';
+            imgEl.src = `/api/datasets/${datasetName}/students/${dirName}/image/${img}`;
+            imgEl.alt = img;
+            imgEl.style.cursor = 'pointer';
+            imgEl.onclick = () => openImagePreview(imgEl.src);
+            grid.appendChild(imgEl);
+        });
+        
+        if (images.length > 8) {
+            const toggleBtn = document.createElement('div');
+            toggleBtn.className = 'badge';
+            toggleBtn.style.width = '48px';
+            toggleBtn.style.height = '48px';
+            toggleBtn.style.borderRadius = '6px';
+            toggleBtn.style.background = isExpanded ? 'rgba(239, 68, 68, 0.2)' : 'rgba(255,255,255,0.05)';
+            toggleBtn.style.border = isExpanded ? '1px solid #ef4444' : '1px solid rgba(255,255,255,0.1)';
+            toggleBtn.style.display = 'flex';
+            toggleBtn.style.alignItems = 'center';
+            toggleBtn.style.justifyContent = 'center';
+            toggleBtn.style.fontSize = '0.75rem';
+            toggleBtn.style.cursor = 'pointer';
+            toggleBtn.style.color = isExpanded ? '#ef4444' : 'var(--text-muted)';
+            toggleBtn.style.fontWeight = 'bold';
+            toggleBtn.innerText = isExpanded ? 'Tutup' : `+${images.length - 8}`;
+            toggleBtn.onclick = () => {
+                const nextState = !isExpanded;
+                expandedStudents[dirName] = nextState;
+                renderStudentImages(datasetName, dirName, images, nextState);
+            };
+            grid.appendChild(toggleBtn);
+        }
+    }
+
+    function openImagePreview(src) {
+        const modal = document.getElementById('image-preview-modal');
+        const img = document.getElementById('preview-image-content');
+        img.src = src;
+        modal.style.display = 'flex';
+    }
+
+    function closeImagePreview() {
+        const modal = document.getElementById('image-preview-modal');
+        modal.style.display = 'none';
+    }
+
+    window.onload = init;
+</script>
+{% endblock %}

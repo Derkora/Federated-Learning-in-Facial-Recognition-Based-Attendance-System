@@ -26,7 +26,7 @@ class FLController:
     def __init__(self, fl_manager):
         self.fl_manager = fl_manager
 
-    def start_lifecycle(self, rounds: int = 10, min_clients: int = 2, epochs: int = 1):
+    def start_lifecycle(self, rounds: int = 10, min_clients: int = 2, epochs: int = 1, dataset: str = "students"):
         # Memulai siklus lengkap FL dalam satu tombol.
         self.fl_manager.start_time = time.time()
         # Proses ini berjalan di thread terpisah agar tidak memblokir dashboard.
@@ -38,6 +38,7 @@ class FLController:
         self.fl_manager.session_id = session_id
         self.fl_manager.current_logs = []
         self.fl_manager.received_data = []
+        self.fl_manager.current_dataset = dataset
         
         if epochs: self.fl_manager.default_epochs = epochs
         
@@ -49,10 +50,10 @@ class FLController:
         db.close()
 
         # Jalankan orkestrasi di background
-        Thread(target=self._orchestrate_routine, args=(session_id, rounds, min_clients), daemon=True).start()
+        Thread(target=self._orchestrate_routine, args=(session_id, rounds, min_clients, dataset), daemon=True).start()
         return {"status": "started", "session_id": session_id}
 
-    def _orchestrate_routine(self, session_id: str, rounds: int, min_clients: int):
+    def _orchestrate_routine(self, session_id: str, rounds: int, min_clients: int, dataset: str = "students"):
         # Alur kerja teknis per fase:
         # Konektivitas: Memastikan terminal cukup untuk memulai.
         # Discovery: Sinkronisasi daftar mahasiswa global.
@@ -107,13 +108,66 @@ class FLController:
             self.fl_manager.start_phase("syncing")
             self._log("Fase 1b: Pemrosesan gambar di sisi terminal...")
             self.fl_manager.ready_clients.clear()
-            self._trigger_clients("/api/request-preprocess")
+            self._trigger_clients("/api/request-preprocess", params={"dataset": dataset})
             
             # Tunggu client lapor 'Ready' (Preprocessing selesai)
+            preprocess_start_time = self.fl_manager.start_time if self.fl_manager.start_time > 0 else time.time()
             self._log("SERVER LOG: Menunggu laporan 'Ready' dari seluruh terminal (Timeout: 3 Jam)...")
             if not self._wait_for_ready_clients(min_clients, timeout=10800):
                 self._log("[ERROR] Gagal: Tahap Preprocessing melampaui batas waktu (3 Jam).")
                 return
+            
+            preprocess_duration = time.time() - preprocess_start_time
+            preprocess_energy = 0.0
+            if tracker:
+                try:
+                    emissions = tracker.stop()
+                    if emissions:
+                        preprocess_energy = float(emissions)
+                except: pass
+                
+            try:
+                temp_model = MobileFaceNet()
+                param_size_mb = sum(p.numel() for p in temp_model.parameters()) * 4 / (1024 * 1024)
+            except:
+                param_size_mb = 4.5
+                
+            preprocess_download_mb = (param_size_mb + 0.1) * len(self.fl_manager.ready_clients)
+            
+            self.fl_manager.update_metrics({
+                "preprocess_duration_s": round(preprocess_duration, 2),
+                "preprocess_energy_kwh": round(preprocess_energy, 6),
+                "preprocess_download_mb": round(preprocess_download_mb, 2)
+            })
+
+            # Inisialisasi Ulang Emission Tracker untuk Tahap Pelatihan
+            tracker = None
+            if CODECARBON_AVAILABLE and OfflineEmissionsTracker is not None:
+                try:
+                    emissions_dir = os.path.join(DATA_ROOT, "emissions")
+                    os.makedirs(emissions_dir, exist_ok=True)
+                    tracker = OfflineEmissionsTracker(
+                         country_iso_code="IDN", 
+                         log_level="error", 
+                         save_to_file=True, 
+                         output_dir=emissions_dir
+                    )
+                    tracker.start()
+                except: pass
+
+            # Ambil nama dataset dari seluruh terminal terdaftar yang siap/aktif
+            datasets = sorted(list(set(
+                client_info.get("dataset") for cid, client_info in self.fl_manager.registered_clients.items()
+                if cid in self.fl_manager.ready_clients and client_info.get("dataset")
+            )))
+            dataset_name = "-".join(datasets) if datasets else "students"
+            
+            # Tentukan versi model berdasarkan rounds & epochs serta nama dataset
+            from app.utils.versioning import get_or_create_model_version
+            epochs = self.fl_manager.default_epochs
+            version_num, version_str, is_new = get_or_create_model_version("fl", epochs, rounds, dataset=dataset_name)
+            
+            self.fl_manager.model_version = version_num
             
             # Fase 2: Pelatihan Federated (Flower)
             self.fl_manager.start_phase("training")
@@ -133,8 +187,22 @@ class FLController:
             
             self._aggregate_registry_logic()
             
-            # [INCREMENT VERSION] Naikkan versi SETELAH registry selesai agar sinkron dengan client
-            self.fl_manager.increment_version()
+            # Pastikan model_version di-update setelah registry
+            if is_new:
+                self.fl_manager.increment_version()
+            else:
+                self.fl_manager.model_version = version_num
+                
+            # Copy/rename file untuk menyertakan info versi dan konfigurasi
+            versioned_backbone_path = os.path.join(DATA_ROOT, f"global_model_{version_str}.pth")
+            versioned_registry_path = os.path.join(DATA_ROOT, f"global_embedding_registry_{version_str}.pth")
+            
+            if os.path.exists("data/backbone.pth"):
+                shutil.copy2("data/backbone.pth", versioned_backbone_path)
+                self._log(f"[SUCCESS] Model tersimpan di {versioned_backbone_path}")
+            if os.path.exists(REGISTRY_PATH):
+                shutil.copy2(REGISTRY_PATH, versioned_registry_path)
+                self._log(f"[SUCCESS] Registry tersimpan di {versioned_registry_path}")
             
             # Hitung Real Volume Transmisi
             num_clients = len(self.fl_manager.ready_clients)
@@ -177,6 +245,9 @@ class FLController:
                 "total_round_time_s": round(time.time() - self.fl_manager.start_time, 2)
             })
             
+            # Save versioned metrics
+            self.fl_manager.save_version_metrics(version_str)
+            
             self.fl_manager.start_phase("Completed")
             self._log("[SUCCESS] Seluruh siklus Pembelajaran Terfederasi selesai.")
             
@@ -212,15 +283,15 @@ class FLController:
         else:
             self.fl_manager.logger.info(msg)
 
-    def _trigger_clients(self, endpoint):
-        self.fl_manager.logger.info(f"Memicu endpoint {endpoint} ke seluruh klien...")
+    def _trigger_clients(self, endpoint, params=None):
+        self.fl_manager.logger.info(f"Memicu endpoint {endpoint} ke seluruh klien dengan params={params}...")
         for cid, data in self.fl_manager.registered_clients.items():
             ip = data.get("ip_address")
             port = data.get("port", 8080)
             if ip:
                 try:
                     # Gunakan port yang dilaporkan client saat registrasi
-                    requests.post(f"http://{ip}:{port}{endpoint}", timeout=2)
+                    requests.post(f"http://{ip}:{port}{endpoint}", params=params, timeout=2)
                 except Exception as e:
                     self.fl_manager.logger.warn(f"Gagal memicu {cid} pada {ip}: {e}")
 
@@ -282,3 +353,263 @@ class FLController:
     def _aggregate_registry_logic(self):
         # Memanggil fungsi agregasi fitur dari utilitas terpisah
         aggregate_and_save_registry_assets(self.fl_manager.logger)
+
+    def start_preprocess(self, min_clients: int = 2, dataset: str = "students"):
+        if self.fl_manager.is_running:
+            return {"status": "already_running"}
+            
+        self.fl_manager.current_logs = []
+        self.fl_manager.is_running = True
+        self.fl_manager.start_time = time.time()
+        self.fl_manager.current_dataset = dataset
+        
+        # Jalankan preprocessing di background
+        Thread(target=self._preprocess_routine, args=(min_clients, dataset), daemon=True).start()
+        return {"status": "started"}
+
+    def _preprocess_routine(self, min_clients: int, dataset: str = "students"):
+        # Inisialisasi Emission Tracker (CodeCarbon)
+        tracker = None
+        if CODECARBON_AVAILABLE and OfflineEmissionsTracker is not None:
+            try:
+                emissions_dir = os.path.join(DATA_ROOT, "emissions")
+                os.makedirs(emissions_dir, exist_ok=True)
+                tracker = OfflineEmissionsTracker(
+                     country_iso_code="IDN", 
+                     log_level="error", 
+                     save_to_file=True, 
+                     output_dir=emissions_dir
+                )
+                tracker.start()
+            except: pass
+        preprocess_start_time = time.time()
+        try:
+            self.fl_manager.start_phase("discovery")
+            # Fase 0: Menunggu terminal terhubung
+            self._log(f"Menunggu {min_clients} terminal terhubung...")
+            if not self._wait_for_condition(lambda: len(self.fl_manager.registered_clients) >= min_clients, timeout=3600):
+                self._log("[ERROR] Gagal: Terminal tidak mencukupi setelah 1 jam.")
+                return
+
+            # Fase 1a: Discovery (Sinkronisasi ID)
+            self._log("Fase 1a: Sinkronisasi ID Mahasiswa antar terminal...")
+            self.fl_manager.discovery_clients.clear()
+            self._trigger_clients("/api/request-discovery")
+            
+            if not self._wait_for_condition(lambda: len(self.fl_manager.discovery_clients) >= min_clients, timeout=3600):
+                self._log("[ERROR] Gagal: Tahap Discovery melampaui batas waktu (1 Jam).")
+                return
+
+            # Fase 1b: Preprocessing (Deteksi & Crop)
+            self.fl_manager.start_phase("syncing")
+            self._log("Fase 1b: Pemrosesan gambar di sisi terminal...")
+            self.fl_manager.ready_clients.clear()
+            self._trigger_clients("/api/request-preprocess", params={"dataset": dataset})
+            
+            # Tunggu client lapor 'Ready' (Preprocessing selesai)
+            self._log("SERVER LOG: Menunggu laporan 'Ready' dari seluruh terminal (Timeout: 3 Jam)...")
+            if not self._wait_for_ready_clients(min_clients, timeout=10800):
+                self._log("[ERROR] Gagal: Tahap Preprocessing melampaui batas waktu (3 Jam).")
+                return
+            
+            preprocess_duration = time.time() - preprocess_start_time
+            preprocess_energy = 0.0
+            if tracker:
+                try:
+                    emissions = tracker.stop()
+                    if emissions:
+                        preprocess_energy = float(emissions)
+                except: pass
+                
+            try:
+                temp_model = MobileFaceNet()
+                param_size_mb = sum(p.numel() for p in temp_model.parameters()) * 4 / (1024 * 1024)
+            except:
+                param_size_mb = 4.5
+                
+            preprocess_download_mb = (param_size_mb + 0.1) * len(self.fl_manager.ready_clients)
+            
+            self.fl_manager.update_metrics({
+                "preprocess_duration_s": round(preprocess_duration, 2),
+                "preprocess_energy_kwh": round(preprocess_energy, 6),
+                "preprocess_download_mb": round(preprocess_download_mb, 2)
+            })
+
+            self._log("[SUCCESS] Preprocessing selesai. Seluruh terminal siap untuk pelatihan.")
+        except Exception as e:
+            self._log(f"[ERROR] Kesalahan pada preprocessing: {e}")
+        finally:
+            self.fl_manager.end_phase()
+
+    def start_train(self, rounds: int = 10, min_clients: int = 2, epochs: int = 1, dataset: str = "students"):
+        if self.fl_manager.is_running:
+            return {"status": "already_running"}
+            
+        session_id = f"session_{int(time.time())}"
+        self.fl_manager.session_id = session_id
+        self.fl_manager.current_logs = []
+        self.fl_manager.start_time = time.time()
+        self.fl_manager.is_running = True
+        self.fl_manager.current_dataset = dataset
+        
+        # Sinkronkan ready_clients dari status terminal terdaftar jika ada yang sudah siap
+        for cid, data in list(self.fl_manager.registered_clients.items()):
+            if data.get("fl_status") == "Siap Training" or "READY" in str(data.get("fl_status")):
+                self.fl_manager.ready_clients.add(cid)
+                
+        if len(self.fl_manager.ready_clients) < min_clients:
+            self._log(f"[WARNING] Jumlah terminal siap ({len(self.fl_manager.ready_clients)}) kurang dari min_clients ({min_clients}). Menggunakan terminal terdaftar...")
+            for cid in self.fl_manager.registered_clients.keys():
+                self.fl_manager.ready_clients.add(cid)
+                
+        # Simpan sesi ke database
+        db = SessionLocal()
+        new_session = FLSession(session_id=session_id)
+        db.add(new_session)
+        db.commit()
+        db.close()
+        
+        dataset_name = dataset
+                
+        # Tentukan versi model berdasarkan rounds & epochs serta nama dataset
+        from app.utils.versioning import get_or_create_model_version
+        version_num, version_str, is_new = get_or_create_model_version("fl", epochs, rounds, dataset=dataset_name)
+        
+        if is_new:
+            self._log(f"Konfigurasi baru ({rounds} rounds, {epochs} epochs, dataset {dataset_name}). Menggunakan versi baru: {version_str}")
+        else:
+            self._log(f"Konfigurasi lama ({rounds} rounds, {epochs} epochs, dataset {dataset_name}) dideteksi. Menggunakan kembali versi: {version_str}. Melatih ulang dari v0...")
+            
+        # Jalankan training & registry generation di background
+        Thread(target=self._train_orchestrate_routine, args=(session_id, rounds, min_clients, epochs, version_num, version_str, is_new), daemon=True).start()
+        return {"status": "started", "session_id": session_id}
+
+    def _train_orchestrate_routine(self, session_id: str, rounds: int, min_clients: int, epochs: int, version_num: int, version_str: str, is_new: bool):
+        try:
+            # Inisialisasi Emission Tracker (CodeCarbon)
+            tracker = None
+            if CODECARBON_AVAILABLE and OfflineEmissionsTracker is not None:
+                try:
+                    emissions_dir = os.path.join(DATA_ROOT, "emissions")
+                    os.makedirs(emissions_dir, exist_ok=True)
+                    tracker = OfflineEmissionsTracker(
+                         country_iso_code="IDN", 
+                         log_level="error", 
+                         save_to_file=True, 
+                         output_dir=emissions_dir
+                    )
+                    tracker.start()
+                except: pass
+
+            # Reset folder pengumpulan fitur
+            if os.path.exists(SUBMISSIONS_DIR):
+                shutil.rmtree(SUBMISSIONS_DIR)
+            os.makedirs(SUBMISSIONS_DIR, exist_ok=True)
+            
+            self._log(f"Memulai pelatihan Federated saja (Train Only) - Konfigurasi {rounds} rounds, {epochs} epochs...")
+            
+            # Paksa model ke v0 di database agar selalu melatih dari awal
+            db = SessionLocal()
+            self.fl_manager.force_seed_model_v0(db)
+            db.close()
+            
+            # Tetapkan model_version sesuai mapping
+            self.fl_manager.model_version = version_num
+            self.fl_manager.default_epochs = epochs
+            self.fl_manager.default_rounds = rounds
+            
+            # Fase 2: Pelatihan Federated (Flower)
+            self.fl_manager.start_phase("training")
+            self._log(f"Memulai pelatihan Flower dengan {len(self.fl_manager.ready_clients)} terminal...")
+            self.fl_manager.is_running = True  
+            self.fl_manager.start_training(session_id, rounds=rounds, min_clients=min_clients)
+            
+            # Fase 3: Pembuatan Registry Global
+            self.fl_manager.start_phase("Registry Generation")
+            self._log("Fase 3: Menggabungkan fitur wajah (Centroids) secara global...")
+            
+            # Tunggu pengumpulan aset
+            if self._wait_for_registry_submissions(len(self.fl_manager.ready_clients), timeout=3600):
+                self._log("[SUCCESS] Semua data fitur wajah telah diterima.")
+            else:
+                self._log("[WARNING] Batas waktu habis, memproses data fitur yang tersedia.")
+            
+            self._aggregate_registry_logic()
+            
+            # Pastikan model_version di-update setelah registry
+            if is_new:
+                self.fl_manager.increment_version()
+            else:
+                self.fl_manager.model_version = version_num
+                
+            self.fl_manager.model_version_str = version_str
+            active_version_path = os.path.join(DATA_ROOT, "active_version.txt")
+            try:
+                with open(active_version_path, "w") as f:
+                    f.write(version_str)
+            except: pass
+                
+            # Copy/rename file untuk menyertakan info versi dan konfigurasi
+            versioned_backbone_path = os.path.join(DATA_ROOT, f"global_model_{version_str}.pth")
+            versioned_registry_path = os.path.join(DATA_ROOT, f"global_embedding_registry_{version_str}.pth")
+            
+            if os.path.exists("data/backbone.pth"):
+                shutil.copy2("data/backbone.pth", versioned_backbone_path)
+                self._log(f"[SUCCESS] Model tersimpan di {versioned_backbone_path}")
+            if os.path.exists(REGISTRY_PATH):
+                shutil.copy2(REGISTRY_PATH, versioned_registry_path)
+                self._log(f"[SUCCESS] Registry tersimpan di {versioned_registry_path}")
+                
+            # Hitung volume transmisi
+            num_clients = len(self.fl_manager.ready_clients)
+            try:
+                temp_model = MobileFaceNet()
+                param_size_mb = sum(p.numel() for p in temp_model.parameters()) * 4 / (1024 * 1024)
+            except:
+                param_size_mb = ECONOMICS.get("estimated_backbone_size_mb", 4.5)
+            
+            backbone_mb = param_size_mb * 2 * num_clients * rounds
+            registry_mb = 0
+            if os.path.exists(REGISTRY_PATH):
+                registry_mb += os.path.getsize(REGISTRY_PATH) / (1024 * 1024)
+            if os.path.exists(BN_PATH):
+                registry_mb += os.path.getsize(BN_PATH) / (1024 * 1024)
+            registry_mb = registry_mb * num_clients
+            
+            energy_kwh = 0
+            if tracker:
+                try:
+                    emissions_data = tracker.stop()
+                    if emissions_data:
+                        energy_kwh = float(emissions_data)
+                except: pass
+
+            self.fl_manager.update_metrics({
+                "backbone_sync_mb": round(backbone_mb, 2),
+                "registry_sync_mb": round(registry_mb, 2),
+                "compute_energy_kwh": round(energy_kwh, 6) if energy_kwh > 0 else 0,
+                "total_round_time_s": round(time.time() - self.fl_manager.start_time, 2)
+            })
+            
+            # Save versioned metrics
+            self.fl_manager.save_version_metrics(version_str)
+            
+            self.fl_manager.start_phase("Completed")
+            self._log("[SUCCESS] Pelatihan terfederasi selesai.")
+            
+            # Hapus file cache deteksi video lama
+            try:
+                video_caches_dir = "video_caches"
+                if os.path.exists(video_caches_dir):
+                    for f in os.listdir(video_caches_dir):
+                        if f.endswith(".json"):
+                            os.remove(os.path.join(video_caches_dir, f))
+            except: pass
+            
+            time.sleep(5)
+            
+        except Exception as e:
+            self._log(f"[ERROR] Kesalahan pada orkestrasi training: {e}")
+        finally:
+            self.fl_manager.end_phase()
+            self._mark_session_completed(session_id)

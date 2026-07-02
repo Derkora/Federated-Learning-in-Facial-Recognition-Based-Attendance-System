@@ -24,7 +24,7 @@ body {
 }
 
 .container {
-    max-width: 800px;
+    max-width: 1200px;
     margin: 0 auto;
     padding: 2rem;
     text-align: center;
@@ -128,7 +128,7 @@ video, #hardware-stream {
 /* --- Responsive & Premium Overhaul (Synced) --- */
 
 .container {
-    max-width: 900px;
+    max-width: 1200px;
     margin: 0 auto;
     padding: 1.5rem;
     text-align: center;
@@ -191,4 +191,9 @@ video, #hardware-stream {
 ::-webkit-scrollbar-thumb {
     background: var(--primary);
     border-radius: 10px;
+}
+
+select option {
+    background-color: #0f172a !important;
+    color: #f8fafc !important;
 }

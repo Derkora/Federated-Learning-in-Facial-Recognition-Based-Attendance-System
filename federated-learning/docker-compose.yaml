@@ -31,6 +31,7 @@ services:
       DATABASE_URL: sqlite:////app/data/client.db
       SERVER_API_URL: http://server-fl:8080
       FL_SERVER_ADDRESS: server-fl:8085
+      DATASET_NAME: client1_data
       PYTHONUNBUFFERED: 1
     volumes:
       - ../datasets/client1_data:/app/raw_data
@@ -49,6 +50,7 @@ services:
       DATABASE_URL: sqlite:////app/data/client.db
       SERVER_API_URL: http://server-fl:8080
       FL_SERVER_ADDRESS: server-fl:8085
+      DATASET_NAME: client2_data
       PYTHONUNBUFFERED: 1
     volumes:
       - ../datasets/client2_data:/app/raw_data

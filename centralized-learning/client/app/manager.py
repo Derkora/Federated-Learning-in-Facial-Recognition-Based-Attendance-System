@@ -51,6 +51,7 @@ class CLClientManager:
         self.is_adapting = False # Status proses adaptasi lokal
 
         self.current_model_version = self._load_version()
+        self.is_manual_lock = self._load_manual_lock()
         
         # Muat model ke RAM segera saat inisialisasi
         self.logger.info("Memulai Eager Loading model...")
@@ -102,12 +103,62 @@ class CLClientManager:
         
         return new_id
 
+    def get_processed_path(self, dataset_name: str):
+        if dataset_name == "students":
+            return os.path.join(self.data_path, "processed")
+        return os.path.join(self.data_path, f"processed_{dataset_name}")
+
+    def check_dataset_preprocessed(self, dataset_name: str):
+        processed_dir = self.get_processed_path(dataset_name)
+        if not os.path.exists(processed_dir):
+            return False
+        try:
+            subdirs = [d for d in os.listdir(processed_dir) if os.path.isdir(os.path.join(processed_dir, d))]
+            if not subdirs:
+                return False
+            for sd in subdirs:
+                sd_path = os.path.join(processed_dir, sd)
+                files = os.listdir(sd_path)
+                if any(f.lower().endswith(('.png', '.jpg', '.jpeg')) for f in files):
+                    return True
+            return False
+        except Exception:
+            return False
+
+    def get_available_datasets(self):
+        datasets = {}
+        try:
+            if os.path.exists(self.raw_data_path):
+                subdirs = sorted([
+                    d for d in os.listdir(self.raw_data_path)
+                    if os.path.isdir(os.path.join(self.raw_data_path, d)) and not d.startswith('.')
+                ])
+                for sd in subdirs:
+                    datasets[sd] = self.check_dataset_preprocessed(sd)
+            if not datasets:
+                datasets["students"] = self.check_dataset_preprocessed("students")
+        except Exception as e:
+            self.logger.error(f"Error get_available_datasets: {e}")
+            datasets["students"] = False
+        return datasets
+
+    def get_dataset_name(self):
+        try:
+            from app.main import current_dataset
+            return current_dataset
+        except Exception:
+            return "students"
+
+    def is_preprocessed(self):
+        return self.check_dataset_preprocessed(self.get_dataset_name())
+
     def _load_version(self):
         v_path = os.path.join(self.data_path, "models", "model_version.txt")
         if os.path.exists(v_path):
             with open(v_path, "r") as f:
-                try: return int(f.read().strip())
-                except: return 0
+                content = f.read().strip()
+                try: return int(content)
+                except: return content
         return 0
 
     def _save_version(self, v):
@@ -118,9 +169,30 @@ class CLClientManager:
             with open(temp_path, "w") as f:
                 f.write(str(v))
             os.replace(temp_path, v_path)
-            self.logger.info(f"Berhasil menyimpan versi model terbaru: v{v}")
+            self.logger.info(f"Berhasil menyimpan versi model terbaru: v{str(v).lstrip('v')}")
         except Exception as e:
             self.logger.error(f"Gagal menyimpan model_version.txt secara aman: {e}")
+
+    def _load_manual_lock(self):
+        lock_path = os.path.join(self.data_path, "models", "manual_lock.txt")
+        if os.path.exists(lock_path):
+            try:
+                with open(lock_path, "r") as f:
+                    return f.read().strip().lower() == "true"
+            except: pass
+        return False
+
+    def _save_manual_lock(self, locked: bool):
+        try:
+            os.makedirs(os.path.join(self.data_path, "models"), exist_ok=True)
+            lock_path = os.path.join(self.data_path, "models", "manual_lock.txt")
+            temp_path = lock_path + ".tmp"
+            with open(temp_path, "w") as f:
+                f.write("true" if locked else "false")
+            os.replace(temp_path, lock_path)
+            self.logger.info(f"Berhasil menyimpan status manual lock: {locked}")
+        except Exception as e:
+            self.logger.error(f"Gagal menyimpan manual_lock.txt secara aman: {e}")
 
     def _ensure_models_loaded(self, force_reload=False):
         """Menjamin instance model tersedia di RAM (Tanpa paksa reload dari disk jika sudah ada)."""
@@ -139,14 +211,24 @@ class CLClientManager:
             new_model = MobileFaceNet().to(DEVICE).eval()
             new_refs = {}
             
-            path_m = os.path.join(self.data_path, "models", "global_model.pth")
-            path_r = os.path.join(self.data_path, "models", "reference_embeddings.pth")
+            version = self.current_model_version
+            if version and version != "v0" and version != "0" and version != 0:
+                path_m = os.path.join(self.data_path, "models", f"global_model_{version}.pth")
+                path_r = os.path.join(self.data_path, "models", f"reference_embeddings_{version}.pth")
+            else:
+                path_m = os.path.join(self.data_path, "models", "global_model.pth")
+                path_r = os.path.join(self.data_path, "models", "reference_embeddings.pth")
+
+            # Fallback ke global_model jika berkas versi tidak ditemukan
+            if not os.path.exists(path_m):
+                path_m = os.path.join(self.data_path, "models", "global_model.pth")
+                path_r = os.path.join(self.data_path, "models", "reference_embeddings.pth")
 
             # Muat global model dan reference
             if os.path.exists(path_m):
                 loaded_sd = torch.load(path_m, map_location=DEVICE)
                 new_model.load_state_dict(loaded_sd)
-                self.logger.info(f"Bobot global v{self.current_model_version} (Full State) diterapkan.")
+                self.logger.info(f"Bobot global v{str(self.current_model_version).lstrip('v')} (Full State) diterapkan.")
                 if os.path.exists(path_r):
                     new_refs = torch.load(path_r, map_location=DEVICE)
                     self.logger.info("Menggunakan database referensi embedding dari server CL.")
@@ -157,7 +239,7 @@ class CLClientManager:
             self.has_assets = True
             
             gc.collect()
-            self.logger.success(f"Model CL v{self.current_model_version} berhasil dimuat ke RAM.")
+            self.logger.success(f"Model CL v{str(self.current_model_version).lstrip('v')} berhasil dimuat ke RAM.")
                 
         except Exception as e:
             self.logger.error(f"Reload model CL gagal: {e}")
@@ -360,7 +442,7 @@ class CLClientManager:
                     pass
                 # Registrasi Terminal ke Server (Heartbeat)
                 ip = socket.gethostbyname(socket.gethostname())
-                if self.management.register_client(ip):
+                if self.management.register_client(ip, self):
                     if not self.is_registered:
                         self._log_to_file(f"SUCCESS: Terminal terdaftar pada server (IP: {ip})")
                     self.is_registered = True
@@ -383,9 +465,23 @@ class CLClientManager:
                             self.logger.info(f"Threshold diperbarui: {server_threshold}")
                             self.threshold = server_threshold
                         
-                        # Sinkronisasi jika versi lokal tertinggal
-                        if not self.has_assets or server_version > self.current_model_version:
-                            self._log_to_file(f"SYNC: Memperbarui model (Lokal: v{self.current_model_version}, Server: v{server_version})")
+                        is_manual = self.is_manual_lock
+
+                        # Normalisasi perbandingan versi dengan menghapus prefiks 'v' jika ada
+                        def norm_v(v):
+                            if v is None:
+                                return ""
+                            s = str(v).strip().lower()
+                            return s[1:] if s.startswith("v") else s
+
+                        norm_server = norm_v(server_version)
+                        norm_local = norm_v(self.current_model_version)
+
+                        # Sinkronisasi jika versi lokal tertinggal dan tidak dalam mode manual
+                        if not self.has_assets or (not is_manual and norm_server != norm_local):
+                            local_display = f"v{norm_local}" if norm_local else "v0"
+                            server_display = f"v{norm_server}" if norm_server else "v0"
+                            self._log_to_file(f"SYNC: Memperbarui model (Lokal: {local_display}, Server: {server_display})")
                             
                             # Pastikan model sudah terinisialisasi (Lazy Load Guard)
                             if self.model is None:
@@ -408,6 +504,8 @@ class CLClientManager:
                                 self.reference_embeddings = refs
                                 self.current_model_version = server_version
                                 self._save_version(server_version)
+                                self.is_manual_lock = False
+                                self._save_manual_lock(False)
                                 # Terapkan model terbaru langsung ke RAM
                                 self._reload_inference_models(force_reload=True)
                             else:
@@ -440,3 +538,42 @@ class CLClientManager:
                 self.logger.error(f"Terjadi kesalahan fatal pada loop latar belakang: {e}")
 
             time.sleep(5)
+
+    def select_and_sync_version(self, version: str):
+        # Mengunduh model versi spesifik dari server secara manual dan menerapkannya
+        self.logger.info(f"Diminta memuat model versi: {version}")
+        try:
+            url_m = f"{self.server_url}/api/model?version={version}"
+            url_r = f"{self.server_url}/api/reference?version={version}"
+            
+            res_m = requests.get(url_m, timeout=10)
+            res_r = requests.get(url_r, timeout=10)
+            
+            if res_m.status_code != 200:
+                return False, f"Gagal mengunduh model versi {version}: {res_m.text}"
+            if res_r.status_code != 200:
+                return False, f"Gagal mengunduh referensi versi {version}: {res_r.text}"
+                
+            path_m = os.path.join(self.data_path, "models", f"global_model_{version}.pth")
+            path_r = os.path.join(self.data_path, "models", f"reference_embeddings_{version}.pth")
+            
+            os.makedirs(os.path.dirname(path_m), exist_ok=True)
+            with open(path_m, "wb") as f:
+                f.write(res_m.content)
+            with open(path_r, "wb") as f:
+                f.write(res_r.content)
+                
+            # Update file model_version.txt dengan string versi
+            v_path = os.path.join(self.data_path, "models", "model_version.txt")
+            with open(v_path, "w") as f:
+                f.write(version)
+                
+            self.current_model_version = version
+            self.is_manual_lock = True
+            self._save_manual_lock(True)
+            self._reload_inference_models(force_reload=True)
+            
+            return True, "Berhasil"
+        except Exception as e:
+            self.logger.error(f"Gagal memuat model versi {version}: {e}")
+            return False, str(e)

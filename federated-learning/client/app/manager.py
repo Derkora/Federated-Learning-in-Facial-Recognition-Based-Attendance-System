@@ -85,9 +85,12 @@ class FLClientManager:
         if os.path.exists(self.version_path):
             try:
                 with open(self.version_path, 'r') as f:
-                    self.model_version = int(f.read().strip())
+                    content = f.read().strip()
+                    self.model_version = self.normalize_version(content)
                 self.logger.info(f"Terdeteksi Model Versi: v{self.model_version}")
             except: pass
+
+        self.is_manual_lock = self._load_manual_lock()
 
         # Muat Jumlah Kelas dari Label Map (Sumber Kebenaran Utama)
         if os.path.exists(self.map_path):
@@ -142,7 +145,9 @@ class FLClientManager:
         self.fl_status = "Online (Menunggu Instruksi)"
         self.fl_round = 0 
         self.last_phase = "idle"
+        self.is_syncing_final = False
         self.is_preprocessing_active = False
+        self.current_dataset = "students"
         
         self.is_registered = False
         self.last_register_attempt = 0
@@ -164,6 +169,17 @@ class FLClientManager:
         self.attendance = AttendanceController(self)
         
         self._log("=== FL Client Started / Restarted ===")
+
+    def normalize_version(self, v):
+        if v is None:
+            return 0
+        v_str = str(v).lower().strip()
+        if v_str.startswith('v'):
+            v_str = v_str[1:]
+        try:
+            return int(v_str)
+        except:
+            return v_str
 
     def _log(self, message):
         """Wrapper log untuk kompatibilitas kode lama."""
@@ -191,13 +207,65 @@ class FLClientManager:
                 time.sleep(2)
         return None
 
+    def get_processed_path(self, dataset_name: str):
+        if dataset_name == "students":
+            return os.path.join(self.data_path, "processed")
+        return os.path.join(self.data_path, f"processed_{dataset_name}")
+
+    def check_dataset_preprocessed(self, dataset_name: str):
+        """Mengecek apakah dataset tertentu sudah diproses (memiliki citra terproses di folder processed)."""
+        processed_dir = self.get_processed_path(dataset_name)
+        if not os.path.exists(processed_dir):
+            return False
+        try:
+            subdirs = [d for d in os.listdir(processed_dir) if os.path.isdir(os.path.join(processed_dir, d))]
+            if not subdirs:
+                return False
+            for sd in subdirs:
+                sd_path = os.path.join(processed_dir, sd)
+                files = os.listdir(sd_path)
+                if any(f.lower().endswith(('.png', '.jpg', '.jpeg')) for f in files):
+                    return True
+            return False
+        except Exception:
+            return False
+
+    def get_available_datasets(self):
+        """Mendapatkan daftar dataset yang tersedia di folder raw_data beserta status preprocessingnya."""
+        datasets = {}
+        try:
+            if os.path.exists(self.raw_data_path):
+                subdirs = sorted([
+                    d for d in os.listdir(self.raw_data_path)
+                    if os.path.isdir(os.path.join(self.raw_data_path, d)) and not d.startswith('.')
+                ])
+                for sd in subdirs:
+                    datasets[sd] = self.check_dataset_preprocessed(sd)
+            if not datasets:
+                datasets["students"] = self.check_dataset_preprocessed("students")
+        except Exception as e:
+            self.logger.error(f"Error get_available_datasets: {e}")
+            datasets["students"] = False
+        return datasets
+
+    def get_dataset_name(self):
+        """Mendapatkan nama dataset yang sedang digunakan."""
+        return self.current_dataset
+
+    def is_preprocessed(self):
+        """Mengecek apakah dataset aktif sudah diproses."""
+        return self.check_dataset_preprocessed(self.current_dataset)
+
     def register_to_server(self):
-        """Mendaftarkan client ke server API."""
+        """Mendaftarkan client ke server API beserta nama dataset yang digunakan."""
         try:
             response = self._safe_request("POST", f"{self.server_api_url}{api_clients_register}", json={
                 "client_id": self.client_id,
                 "ip_address": socket.gethostbyname(socket.gethostname()),
-                "port": int(os.getenv("CLIENT_PORT", 8080))
+                "port": int(os.getenv("CLIENT_PORT", 8080)),
+                "dataset": self.get_dataset_name(),
+                "is_preprocessed": self.is_preprocessed(),
+                "available_datasets": self.get_available_datasets()
             })
             if response and response.status_code == 200:
                 self._log(f"[SUCCESS] Client {self.client_id} berhasil terdaftar di server.")
@@ -397,17 +465,51 @@ class FLClientManager:
             if not force_reload and self.inference_backbone is not None:
                 return
                 
+            # Setup path versi spesifik jika ada
+            version = self.model_version
+            if version and version != "v0" and version != "0" and version != 0:
+                path_m = os.path.join(self.data_path, "models", f"backbone_{version}.pth")
+                path_h = os.path.join(self.data_path, "models", f"local_head_{version}.pth")
+                path_l = os.path.join(self.data_path, "models", f"label_map_{version}.json")
+            else:
+                path_m = self.save_path
+                path_h = self.head_path
+                path_l = self.map_path
+
+            # Fallback ke path default jika versi tidak ada
+            if not os.path.exists(path_m):
+                path_m = self.save_path
+                path_h = self.head_path
+                path_l = self.map_path
+
+            # Muat label map versi spesifik
+            if os.path.exists(path_l):
+                try:
+                    with open(path_l, 'r') as f:
+                        data = json.load(f)
+                        self.num_classes = len(data)
+                        if hasattr(self, 'client'):
+                            self.client.label_map = data
+                            if hasattr(self.client, 'trainer'):
+                                self.client.trainer.nrp_to_idx = {nrp: idx for idx, nrp in enumerate(data)}
+                except Exception as e:
+                    self.logger.error(f"Gagal memuat label map versi: {e}")
+
             # Muat ke variabel lokal (Aman terhadap balapan camera loop)
             new_backbone = MobileFaceNet().to(self.device).eval()
             new_head = None
             if self.num_classes > 0:
                 new_head = ArcMarginProduct(128, self.num_classes).to(self.device).eval()
             
-            if os.path.exists(self.save_path):
-                self.logger.info(f"Memuat backbone dari {self.save_path}...")
-                loaded = torch.load(self.save_path, map_location=self.device)
+            if os.path.exists(path_m):
+                self.logger.info(f"Memuat backbone dari {path_m}...")
+                loaded = torch.load(path_m, map_location=self.device)
                 self._apply_backbone_weights(loaded, ignore_bn=False, target_model=new_backbone)
-                if self.model_version > 0:
+                try:
+                    v_num = int(str(version).replace("v", "").split("_")[0])
+                except:
+                    v_num = 0
+                if v_num > 0:
                     try:
                         calibrate_bn(new_backbone, self.raw_data_path, device=self.device, num_samples=50)
                     except Exception as e:
@@ -415,9 +517,9 @@ class FLClientManager:
                 else:
                     self.logger.info("Model adalah v0 (Pre-trained). Melewati kalibrasi BN untuk mempertahankan performa awal.")
 
-            if new_head is not None and os.path.exists(self.head_path):
+            if new_head is not None and os.path.exists(path_h):
                 try:
-                    new_head.load_state_dict(torch.load(self.head_path, map_location=self.device))
+                    new_head.load_state_dict(torch.load(path_h, map_location=self.device))
                 except: pass
 
             # Update model inferensi agar terhindar dari ketidakstabilan
@@ -656,7 +758,10 @@ class FLClientManager:
                 "ip_address": socket.gethostbyname(socket.gethostname()),
                 "port": int(os.getenv("CLIENT_PORT", 8080)),
                 "fl_status": self.fl_status,
-                "last_seen": now
+                "last_seen": now,
+                "dataset": self.get_dataset_name(),
+                "is_preprocessed": self.is_preprocessed(),
+                "available_datasets": self.get_available_datasets()
             }
             response = self._safe_request("POST", f"{self.server_api_url}{api_clients_register}", json=payload, timeout=2)
             if response and response.status_code == 200:
@@ -690,18 +795,20 @@ class FLClientManager:
                 if resp and resp.status_code == 200:
                     data = resp.json()
                     phase = data.get("current_phase", "idle")
-                    server_version = data.get("model_version", 0)
+                    server_version = self.normalize_version(data.get("model_version", 0))
                     
                     # Sinkronisasi threshold dari server
                     if "inference_threshold" in data:
                         self.inference_threshold = float(data["inference_threshold"])
                     
-                    # Update status ketersediaan update
-                    if server_version > self.model_version:
+                    is_manual = self.is_manual_lock
+
+                    # Update status ketersediaan update jika bukan manual lock
+                    if not is_manual and server_version != self.model_version:
                         self.fl_status = f"Update v{server_version} Tersedia"
                         # Jika sistem diam dan versi tertinggal, lakukan sinkronisasi akhir
                         if phase == "idle" and self.last_phase == "idle":
-                             self.handle_phase_transition("completed")
+                             self.trigger_final_sync(server_version)
 
                     if phase != self.last_phase:
                         self.handle_phase_transition(phase)
@@ -713,6 +820,53 @@ class FLClientManager:
                 self.is_registered = False
             time.sleep(5)
 
+
+    def trigger_final_sync(self, server_version=None):
+        if self.is_syncing_final:
+            return
+        self.is_syncing_final = True
+        self.logger.info("Pelatihan selesai atau Update tersedia. Memulai Sinkronisasi Final...")
+        
+        def update_task():
+            try:
+                # Unduh Backbone global terakhir
+                if not self.download_backbone():
+                    self.logger.error("Gagal mengunduh backbone final.")
+                
+                # Unduh BN global terakhir
+                if not self.download_bn():
+                    self.logger.error("Gagal mengunduh BN final.")
+                    
+                # Unduh Registry Centroid 
+                if not self.download_registry_assets():
+                    self.logger.error("Gagal mengunduh registry final.")
+                    
+                # Ambil versi terbaru dan update metadata
+                try:
+                    resp = self._safe_request("GET", f"{self.server_api_url}{api_status}")
+                    if resp and resp.status_code == 200:
+                        v = resp.json().get("model_version", self.model_version)
+                        self.logger.info(f"Menetapkan versi lokal ke v{v}")
+                        self._save_version(v)
+                        self.is_manual_lock = False
+                        self._save_manual_lock(False)
+                except Exception as e:
+                    self.logger.warn(f"Gagal update nomor versi: {e}")
+
+                # Muat ulang model agar inferensi menggunakan versi terbaru
+                self._reload_inference_models(force_reload=True)
+                
+                # Selesaikan label map dan refresh lokal
+                self.sync_label_map()
+                self.refresh_local_embeddings()
+                self.logger.success("Siklus FL selesai, sistem siap untuk inferensi v-terbaru.")
+                
+            except Exception as e:
+                self.logger.error(f"Sinkronisasi pasca-pelatihan gagal: {e}")
+            finally:
+                self.is_syncing_final = False
+        
+        threading.Thread(target=update_task, daemon=True).start()
 
     def handle_phase_transition(self, phase):
         phase = phase.lower().strip().replace(" ", "_")
@@ -743,61 +897,47 @@ class FLClientManager:
             # Cek apakah memang ada kenaikan versi di server
             try:
                 resp = self._safe_request("GET", f"{self.server_api_url}{api_status}")
-                server_v = resp.json().get("model_version", self.model_version) if resp and resp.status_code == 200 else self.model_version
-                if server_v <= self.model_version and not (phase == "completed"):
+                server_v = self.normalize_version(resp.json().get("model_version", self.model_version)) if resp and resp.status_code == 200 else self.model_version
+                if server_v == self.model_version and not (phase == "completed"):
                     return # Tidak perlu sync jika sudah up to date dan bukan fase completion eksplisit
-            except: pass
+            except: 
+                server_v = None
 
-            self.logger.info("Pelatihan selesai atau Update tersedia. Memulai Sinkronisasi Final...")
-            def update_task():
-                try:
-                    # Unduh Backbone global terakhir
-                    if not self.download_backbone():
-                        self.logger.error("Gagal mengunduh backbone final.")
-                    
-                    # Unduh BN global terakhir
-                    if not self.download_bn():
-                        self.logger.error("Gagal mengunduh BN final.")
-                        
-                    # Unduh Registry Centroid 
-                    if not self.download_registry_assets():
-                        self.logger.error("Gagal mengunduh registry final.")
-                        
-                    # Ambil versi terbaru dan update metadata
-                    try:
-                        resp = self._safe_request("GET", f"{self.server_api_url}{api_status}")
-                        if resp and resp.status_code == 200:
-                            v = resp.json().get("model_version", self.model_version)
-                            self.logger.info(f"Menetapkan versi lokal ke v{v}")
-                            self._save_version(v)
-                    except Exception as e:
-                        self.logger.warn(f"Gagal update nomor versi: {e}")
-
-                    # Muat ulang model agar inferensi menggunakan versi terbaru
-                    self._reload_inference_models(force_reload=True)
-                    
-                    # Selesaikan label map dan refresh lokal
-                    self.sync_label_map()
-                    self.refresh_local_embeddings()
-                    self.logger.success("Siklus FL selesai, sistem siap untuk inferensi v-terbaru.")
-                    
-                except Exception as e:
-                    self.logger.error(f"Sinkronisasi pasca-pelatihan gagal: {e}")
-            
-            threading.Thread(target=update_task, daemon=True).start()
+            self.trigger_final_sync(server_v)
 
     def _save_version(self, v):
-        self.model_version = v
+        self.model_version = self.normalize_version(v)
         try:
             v_path = os.path.join(self.data_path, "models", "model_version.txt")
             os.makedirs(os.path.dirname(v_path), exist_ok=True)
             temp_path = v_path + ".tmp"
             with open(temp_path, "w") as f:
-                f.write(str(v))
+                f.write(str(self.model_version))
             os.replace(temp_path, v_path)
-            self.logger.info(f"Berhasil menyimpan versi model terbaru: v{v}")
+            self.logger.info(f"Berhasil menyimpan versi model terbaru: v{self.model_version}")
         except Exception as e:
             self.logger.error(f"Gagal menyimpan model_version.txt secara aman: {e}")
+
+    def _load_manual_lock(self):
+        lock_path = os.path.join(self.data_path, "models", "manual_lock.txt")
+        if os.path.exists(lock_path):
+            try:
+                with open(lock_path, "r") as f:
+                    return f.read().strip().lower() == "true"
+            except: pass
+        return False
+
+    def _save_manual_lock(self, locked: bool):
+        try:
+            os.makedirs(os.path.join(self.data_path, "models"), exist_ok=True)
+            lock_path = os.path.join(self.data_path, "models", "manual_lock.txt")
+            temp_path = lock_path + ".tmp"
+            with open(temp_path, "w") as f:
+                f.write("true" if locked else "false")
+            os.replace(temp_path, lock_path)
+            self.logger.info(f"Berhasil menyimpan status manual lock: {locked}")
+        except Exception as e:
+            self.logger.error(f"Gagal menyimpan manual_lock.txt secara aman: {e}")
 
     def download_backbone(self):
         """Mengambil StateDict Backbone hasil agregasi dari server."""
@@ -806,8 +946,10 @@ class FLClientManager:
             if res_bb and res_bb.status_code == 200:
                 save_path = os.path.join(self.data_path, "models", "backbone.pth")
                 os.makedirs(os.path.dirname(save_path), exist_ok=True)
-                with open(save_path, "wb") as f:
+                tmp_path = save_path + ".tmp"
+                with open(tmp_path, "wb") as f:
                     size = f.write(res_bb.content)
+                os.replace(tmp_path, save_path)
                 self.logger.info(f"Berhasil mengunduh backbone ({size} bytes).")
                 
                 # Terapkan backbone global langsung ke RAM
@@ -861,8 +1003,10 @@ class FLClientManager:
             if res_reg and res_reg.status_code == 200:
                 reg_path = os.path.join(self.data_path, "models", "global_embedding_registry.pth")
                 os.makedirs(os.path.dirname(reg_path), exist_ok=True)
-                with open(reg_path, "wb") as f:
+                tmp_path = reg_path + ".tmp"
+                with open(tmp_path, "wb") as f:
                     f.write(res_reg.content)
+                os.replace(tmp_path, reg_path)
                 self.logger.success("Registry Centroid berhasil diperbarui.")
                 return True
         except Exception as e:
@@ -993,7 +1137,8 @@ class FLClientManager:
                 try:
                     payload = {
                         "nrp": user.user_id, "name": user.name, "client_id": self.client_id,
-                        "embedding": base64.b64encode(embedding_np.tobytes()).decode('utf-8')
+                        "embedding": base64.b64encode(embedding_np.tobytes()).decode('utf-8'),
+                        "dataset": self.current_dataset
                     }
                     self._safe_request("POST", f"{self.server_api_url}{api_training_get_label}", json=payload)
                 except: pass
@@ -1008,10 +1153,10 @@ class FLClientManager:
     def run_discovery_phase(self):
         self.report_status("Processing: Discovery Identitas...")
         try:
-            # Tentukan path folder mahasiswa di raw_data/students
-            student_path = os.path.join(self.raw_data_path, "students")
+            # Tentukan path folder mahasiswa di raw_data sesuai dataset terpilih
+            student_path = os.path.join(self.raw_data_path, self.current_dataset)
             if not os.path.exists(student_path):
-                self._log(f"[DEBUG] Subfolder 'students' tidak ada, mencoba menggunakan root: {self.raw_data_path}")
+                self._log(f"[DEBUG] Subfolder '{self.current_dataset}' tidak ada, mencoba menggunakan root: {self.raw_data_path}")
                 student_path = self.raw_data_path
 
             # Membaca daftar sub-direktori mahasiswa yang terdeteksi
@@ -1024,7 +1169,7 @@ class FLClientManager:
                 # Kirim data identitas mentah ke REST API server pusat
                 try:
                     self._safe_request("POST", f"{self.server_api_url}{api_training_get_label}", json={
-                        "nrp": nrp, "name": name, "client_id": self.client_id
+                        "nrp": nrp, "name": name, "client_id": self.client_id, "dataset": self.current_dataset
                     })
                 except: pass
                 
@@ -1072,37 +1217,40 @@ class FLClientManager:
                 label_map_path = os.path.join(self.data_path, "models", "label_map.json")
                 os.makedirs(os.path.dirname(label_map_path), exist_ok=True)
                 
-                with open(label_map_path, "w") as f:
+                tmp_path = label_map_path + ".tmp"
+                with open(tmp_path, "w") as f:
                     json.dump(self.client.label_map, f)
+                os.replace(tmp_path, label_map_path)
                 return True
         except Exception as e:
             self.logger.error(f"Gagal sinkronisasi label map: {e}")
         return False
 
-    def run_preprocess_phase(self):
+    def run_preprocess_phase(self, dataset_name: str = "students"):
         if getattr(self, "is_preprocessing_active", False):
             self.logger.info("Pra-pemrosesan wajah sudah aktif berjalan. Mengabaikan pemicuan ganda.")
             return
         
         self.is_preprocessing_active = True
         try:
-            self._run_preprocess_phase_internal()
+            self._run_preprocess_phase_internal(dataset_name)
         finally:
             self.is_preprocessing_active = False
 
-    def _run_preprocess_phase_internal(self):
-        self.report_status("Processing: Ekstraksi Wajah (Laplacian Top 50)...")
+    def _run_preprocess_phase_internal(self, dataset_name: str):
+        self.current_dataset = dataset_name
+        self.report_status(f"Processing: Ekstraksi Wajah ({dataset_name})...")
         self._ensure_models_loaded()
         if not self.sync_label_map():
             self.report_status("Error: Gagal Sinkronisasi Global Map")
             return
 
-        students_dir = os.path.join(self.raw_data_path, "students")
+        students_dir = os.path.join(self.raw_data_path, dataset_name)
         if not os.path.exists(students_dir):
-            self._log(f"[DEBUG] Subfolder 'students' tidak ada, mencoba menggunakan root: {self.raw_data_path}")
+            self._log(f"[DEBUG] Subfolder '{dataset_name}' tidak ada, mencoba menggunakan root: {self.raw_data_path}")
             students_dir = self.raw_data_path
             
-        processed_dir = os.path.join(self.data_path, "processed")
+        processed_dir = self.get_processed_path(dataset_name)
         os.makedirs(processed_dir, exist_ok=True)
         
         if not os.path.exists(students_dir) or not os.listdir(students_dir):
@@ -1320,6 +1468,23 @@ class FLClientManager:
     def start_fl(self):
         if self.is_training: return
         self.is_training = True
+        
+        # Ambil dataset aktif dari server
+        try:
+            resp = self._safe_request("GET", f"{self.server_api_url}{api_status}", timeout=5)
+            if resp and resp.status_code == 200:
+                target_ds = resp.json().get("current_dataset", "students")
+                self.current_dataset = target_ds
+                self.logger.info(f"Target dataset disinkronkan dari server: {target_ds}")
+        except Exception as e:
+            self.logger.warn(f"Gagal mengambil dataset target dari server, menggunakan default: {e}")
+
+        # Set path pelatihan lokal sesuai dataset terpilih
+        processed_path = self.get_processed_path(self.current_dataset)
+        if hasattr(self.client, 'trainer'):
+            self.client.trainer.data_path = processed_path
+            self.logger.info(f"Mengonfigurasi trainer path ke: {processed_path}")
+
         def run_client():
             success = False
             retry_count = 0
@@ -1352,5 +1517,64 @@ class FLClientManager:
             # Reload model untuk menggunakan bobot global terbaru (EAGER RELOAD)
             self._reload_inference_models(force_reload=True)
         threading.Thread(target=run_client, daemon=True).start()
+
+    def select_and_sync_version(self, version: str):
+        # Mengunduh model versi spesifik dari server secara manual dan menerapkannya
+        self.logger.info(f"Diminta memuat model versi: {version}")
+        try:
+            url_m = f"{self.server_api_url}/api/model/backbone?version={version}"
+            url_r = f"{self.server_api_url}/api/model/registry?version={version}"
+            
+            res_m = requests.get(url_m, timeout=15)
+            res_r = requests.get(url_r, timeout=15)
+            
+            if res_m.status_code != 200:
+                return False, f"Gagal mengunduh model versi {version}: {res_m.text}"
+            if res_r.status_code != 200:
+                return False, f"Gagal mengunduh referensi versi {version}: {res_r.text}"
+                
+            path_m = os.path.join(self.data_path, "models", f"backbone_{version}.pth")
+            path_r = os.path.join(self.data_path, "models", f"label_map_{version}.json")
+            
+            os.makedirs(os.path.dirname(path_m), exist_ok=True)
+            tmp_m = path_m + ".tmp"
+            with open(tmp_m, "wb") as f:
+                f.write(res_m.content)
+            os.replace(tmp_m, path_m)
+                
+            # Registry di FL berisi label map (JSON yang berisi registry embedding dan user ID)
+            # Kita perlu simpan label map
+            import io
+            import torch
+            buf = io.BytesIO(res_r.content)
+            registry_data = torch.load(buf, map_location="cpu")
+            labels_list = list(registry_data.keys())
+            
+            tmp_r = path_r + ".tmp"
+            with open(tmp_r, "w") as f:
+                json.dump(labels_list, f, indent=4)
+            os.replace(tmp_r, path_r)
+                
+            # Kita juga simpan file registry_embeddings_{version}.pth untuk diproses saat inferensi
+            path_reg = os.path.join(self.data_path, "models", f"registry_embeddings_{version}.pth")
+            tmp_reg = path_reg + ".tmp"
+            torch.save(registry_data, tmp_reg)
+            os.replace(tmp_reg, path_reg)
+                
+            # Update file model_version.txt dengan string versi
+            tmp_ver = self.version_path + ".tmp"
+            with open(tmp_ver, "w") as f:
+                f.write(version)
+            os.replace(tmp_ver, self.version_path)
+                
+            self.model_version = self.normalize_version(version)
+            self.is_manual_lock = True
+            self._save_manual_lock(True)
+            self._reload_inference_models(force_reload=True)
+            
+            return True, "Berhasil"
+        except Exception as e:
+            self.logger.error(f"Gagal memuat model versi {version}: {e}")
+            return False, str(e)
 
 fl_manager = FLClientManager()

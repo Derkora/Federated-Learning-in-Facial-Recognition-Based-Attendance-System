@@ -11,8 +11,9 @@ import numpy as np
 import requests
 from collections import deque
 from PIL import Image
-from fastapi import FastAPI, Request, UploadFile, File, BackgroundTasks, Body
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi import FastAPI, Request, UploadFile, File, BackgroundTasks, Body, Form
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, FileResponse
+from typing import List
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from datetime import datetime
@@ -106,8 +107,8 @@ async def video_feed():
     def gen_frames():
         while True:
             if cl_client.latest_frame is not None:
-                # Kompres ke JPEG dengan kualitas rendah (Optimize bandwidth)
-                ret, buffer = cv2.imencode('.jpg', cl_client.latest_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 40])
+                # Kompres ke JPEG dengan kualitas baik
+                ret, buffer = cv2.imencode('.jpg', cl_client.latest_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
                 frame_bytes = buffer.tobytes()
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
@@ -163,7 +164,7 @@ async def proxy_list_videos():
 @app.get(api_video_cache)
 async def proxy_get_video_cache(video_name: str):
     try:
-        cache_key = f"{cl_client.client_id}_{video_name}"
+        cache_key = f"{cl_client.client_id}_{cl_client.current_model_version}_{video_name}"
         res = requests.get(f"{cl_client.server_url}{api_video_cache.format(video_name=cache_key)}", timeout=5)
         return JSONResponse(res.json(), status_code=res.status_code)
     except Exception as e:
@@ -208,7 +209,7 @@ def proxy_video_stream(video_name: str, request: Request):
 @app.post(api_video_cache)
 async def proxy_save_video_cache(video_name: str, data: dict = Body(...)):
     try:
-        cache_key = f"{cl_client.client_id}_{video_name}"
+        cache_key = f"{cl_client.client_id}_{cl_client.current_model_version}_{video_name}"
         res = requests.post(f"{cl_client.server_url}{api_video_cache.format(video_name=cache_key)}", json=data, timeout=10800)
         return JSONResponse(res.json(), status_code=res.status_code)
     except Exception as e:
@@ -217,7 +218,7 @@ async def proxy_save_video_cache(video_name: str, data: dict = Body(...)):
 @app.delete(api_video_cache)
 async def proxy_delete_video_cache(video_name: str):
     try:
-        cache_key = f"{cl_client.client_id}_{video_name}"
+        cache_key = f"{cl_client.client_id}_{cl_client.current_model_version}_{video_name}"
         res = requests.delete(f"{cl_client.server_url}{api_video_cache.format(video_name=cache_key)}", timeout=5)
         return JSONResponse(res.json(), status_code=res.status_code)
     except Exception as e:
@@ -237,7 +238,7 @@ async def process_and_cache_video(video_name: str, background_tasks: BackgroundT
     Menjalankan pemrosesan AI di Edge secara asinkron (background) pada aliran video stream server,
     menggunakan Frame Skipping, lalu mengirimkan hasilnya ke server untuk di-cache.
     """
-    cache_key = f"{cl_client.client_id}_{video_name}"
+    cache_key = f"{cl_client.client_id}_{cl_client.current_model_version}_{video_name}"
     if not resume:
         # Hapus cache lama di server agar polling mendeteksi cache kosong dan tidak langsung lompat sukses
         try:
@@ -250,7 +251,7 @@ async def process_and_cache_video(video_name: str, background_tasks: BackgroundT
 
 def run_offline_detection_and_cache(video_name: str, resume: bool = False):
     cl_client.logger.info(f"[EDGE PROCESS] Memulai pemrosesan model AI edge untuk video: {video_name} (Resume: {resume})")
-    cache_key = f"{cl_client.client_id}_{video_name}"
+    cache_key = f"{cl_client.client_id}_{cl_client.current_model_version}_{video_name}"
     
     existing_detections = []
     accumulated_time = 0.0
@@ -786,13 +787,13 @@ async def stream_processed_video(start_second: float = 0.0):
                         
                         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
                         label = f"{nrp_only} ({sim:.2f})" if is_confirmed else f"Unknown: {nrp_only} ({sim:.2f})"
-                        cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                        cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
             
             # Update detik video saat ini
             current_video_second = frame_idx / fps
  
             # Compress to JPEG
-            ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 50])
+            ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
             time.sleep(0.015)
@@ -809,6 +810,291 @@ async def get_test_video_events():
         "events": video_detection_events,
         "current_second": current_video_second
     }
+
+@app.get("/api/models/list")
+async def client_list_models():
+    # Mengambil daftar model dari server dan menyajikannya ke frontend
+    try:
+        res = requests.get(f"{cl_client.server_url}/api/models/list", timeout=5)
+        return JSONResponse(res.json(), status_code=res.status_code)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": f"Server offline atau tidak terjangkau: {e}"}, status_code=500)
+
+@app.post("/api/model/select")
+async def client_select_model(data: dict = Body(...)):
+    # Mengunduh model versi terpilih dari server dan memuatnya ke RAM
+    version = data.get("version", "v0")
+    success, msg = cl_client.select_and_sync_version(version)
+    if success:
+        return {"status": "success", "message": f"Model versi {version} berhasil diterapkan.", "version": version}
+    else:
+        return JSONResponse({"status": "error", "message": msg}, status_code=400)
+
+current_dataset = "students"
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    return templates.TemplateResponse("settings.html", {
+        "request": request,
+        "client_id": cl_client.client_id,
+        "model_version": cl_client.current_model_version,
+        "title": "Edge Client - Settings"
+    })
+
+def get_safe_dataset_path(dataset_name: str) -> str:
+    safe_name = os.path.basename(dataset_name)
+    return os.path.join(cl_client.raw_data_path, safe_name)
+
+def get_safe_student_path(dataset_name: str, student_dir: str) -> str:
+    safe_dataset = os.path.basename(dataset_name)
+    safe_student = os.path.basename(student_dir)
+    return os.path.join(cl_client.raw_data_path, safe_dataset, safe_student)
+
+@app.get("/api/datasets/list")
+async def client_list_datasets():
+    datasets = {}
+    if os.path.exists(cl_client.raw_data_path):
+        for d in os.listdir(cl_client.raw_data_path):
+            if os.path.isdir(os.path.join(cl_client.raw_data_path, d)) and not d.startswith('.'):
+                datasets[d] = {"status": "OK"}
+    
+    global current_dataset
+    return {
+        "status": "success",
+        "datasets": datasets,
+        "current_dataset": current_dataset
+    }
+
+@app.post("/api/dataset/select")
+async def client_select_dataset(data: dict = Body(...)):
+    global current_dataset
+    dataset_name = data.get("dataset")
+    if not dataset_name:
+        return JSONResponse({"status": "error", "message": "Nama dataset tidak boleh kosong."}, status_code=400)
+    
+    current_dataset = dataset_name
+    return {"status": "success", "message": f"Dataset aktif diubah ke {dataset_name}.", "current_dataset": dataset_name}
+
+@app.post("/api/datasets/create")
+async def create_dataset(data: dict = Body(...)):
+    name = data.get("name", "").strip()
+    if not name or name.startswith('.'):
+        return JSONResponse({"status": "error", "message": "Nama dataset tidak valid."}, status_code=400)
+    path = get_safe_dataset_path(name)
+    try:
+        os.makedirs(path, exist_ok=True)
+        return {"status": "success", "message": f"Dataset '{name}' berhasil dibuat."}
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+@app.get("/api/datasets/{dataset_name}/students")
+async def list_students(dataset_name: str):
+    dataset_path = get_safe_dataset_path(dataset_name)
+    if not os.path.exists(dataset_path) or not os.path.isdir(dataset_path):
+        return JSONResponse({"status": "error", "message": f"Dataset '{dataset_name}' tidak ditemukan."}, status_code=404)
+    
+    students = []
+    try:
+        for d in os.listdir(dataset_path):
+            dir_path = os.path.join(dataset_path, d)
+            if os.path.isdir(dir_path) and not d.startswith('.'):
+                images = [f for f in os.listdir(dir_path) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))]
+                students.append({
+                    "dir_name": d,
+                    "image_count": len(images),
+                    "images": sorted(images)
+                })
+        students.sort(key=lambda x: x["dir_name"])
+        return {"status": "success", "students": students}
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+@app.post("/api/datasets/{dataset_name}/students/create")
+async def create_student(
+    dataset_name: str,
+    nrp: str = Form(...),
+    name: str = Form(...),
+    files: List[UploadFile] = File(default=[])
+):
+    nrp = nrp.strip()
+    name = name.strip()
+    if not nrp or not name:
+        return JSONResponse({"status": "error", "message": "NRP dan nama tidak boleh kosong."}, status_code=400)
+    
+    student_dir = f"{nrp}_{name}"
+    student_path = get_safe_student_path(dataset_name, student_dir)
+    
+    try:
+        os.makedirs(student_path, exist_ok=True)
+        saved_count = 0
+        for file in files:
+            if file.filename:
+                filename = os.path.basename(file.filename)
+                if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                    dest = os.path.join(student_path, filename)
+                    with open(dest, "wb") as f:
+                        f.write(await file.read())
+                    saved_count += 1
+        return {"status": "success", "message": f"Berhasil menambahkan {name} dengan {saved_count} foto."}
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+@app.put("/api/datasets/{dataset_name}/students/{student_dir}")
+async def rename_student(
+    dataset_name: str,
+    student_dir: str,
+    data: dict = Body(...)
+):
+    new_name = data.get("new_name", "").strip()
+    if not new_name:
+        return JSONResponse({"status": "error", "message": "Nama baru tidak boleh kosong."}, status_code=400)
+    
+    old_path = get_safe_student_path(dataset_name, student_dir)
+    new_path = get_safe_student_path(dataset_name, new_name)
+    
+    if not os.path.exists(old_path):
+        return JSONResponse({"status": "error", "message": "Folder asal tidak ditemukan."}, status_code=404)
+    if os.path.exists(new_path):
+        return JSONResponse({"status": "error", "message": "Folder tujuan sudah ada."}, status_code=400)
+        
+    try:
+        os.rename(old_path, new_path)
+        return {"status": "success", "message": f"Berhasil mengubah nama folder ke '{new_name}'."}
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+@app.delete("/api/datasets/{dataset_name}/students/{student_dir}")
+async def delete_student(dataset_name: str, student_dir: str):
+    student_path = get_safe_student_path(dataset_name, student_dir)
+    if not os.path.exists(student_path):
+        return JSONResponse({"status": "error", "message": "Folder tidak ditemukan."}, status_code=404)
+        
+    try:
+        shutil.rmtree(student_path)
+        return {"status": "success", "message": f"Berhasil menghapus folder '{student_dir}'."}
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+@app.get("/api/datasets/{dataset_name}/students/{student_dir}/image/{image_name}")
+async def get_student_image(dataset_name: str, student_dir: str, image_name: str):
+    student_path = get_safe_student_path(dataset_name, student_dir)
+    safe_image = os.path.basename(image_name)
+    image_path = os.path.join(student_path, safe_image)
+    
+    if not os.path.exists(image_path) or not os.path.isfile(image_path):
+        return JSONResponse({"status": "error", "message": "Gambar tidak ditemukan."}, status_code=404)
+    
+    return FileResponse(image_path)
+
+@app.get("/test-gambar", response_class=HTMLResponse)
+async def test_gambar_page(request: Request):
+    return templates.TemplateResponse("test-gambar.html", {
+        "request": request,
+        "client_id": cl_client.client_id,
+        "model_version": cl_client.current_model_version,
+        "title": "Edge Client - Test Gambar"
+    })
+
+@app.get("/api/stream/dataset-simulation")
+async def stream_dataset_simulation(student: str = None):
+    global current_dataset
+    dataset_path = get_safe_dataset_path(current_dataset)
+    
+    DEVICE = torch.device("cpu")
+    
+    image_list = []
+    if os.path.exists(dataset_path) and os.path.isdir(dataset_path):
+        for student_dir in sorted(os.listdir(dataset_path)):
+            student_path = os.path.join(dataset_path, student_dir)
+            if os.path.isdir(student_path) and not student_dir.startswith('.'):
+                if student and student != "all" and student_dir != student:
+                    continue
+                for img_file in sorted(os.listdir(student_path)):
+                    if img_file.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                        image_list.append((student_dir, img_file, os.path.join(student_path, img_file)))
+                        
+    def gen_frames():
+        if not image_list:
+            frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(frame, "Dataset Kosong atau Tidak Ada Gambar", (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            ret, buffer = cv2.imencode('.jpg', frame)
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            return
+
+        idx = 0
+        while True:
+            student_dir, img_name, img_path = image_list[idx % len(image_list)]
+            idx += 1
+            
+            try:
+                img_pil = Image.open(img_path).convert('RGB')
+                img_pil = img_pil.resize((640, 480), Image.BILINEAR)
+                frame = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+            except Exception as e:
+                time.sleep(0.5)
+                continue
+                
+            detected_faces = image_processor.detect_face(img_pil, keep_all=True)
+            if isinstance(detected_faces, list):
+                detected_faces.sort(key=lambda x: x[2], reverse=True)
+                detected_faces = detected_faces[:3]
+            else:
+                detected_faces = []
+                
+            for face_tensor, box, prob in detected_faces:
+                x1, y1, x2, y2 = [int(b) for b in box]
+                threshold = cl_client.threshold
+                
+                input_tensor = image_processor.prepare_for_model(face_tensor).to(DEVICE)
+                with torch.no_grad():
+                    if cl_client.model is not None:
+                        cl_client.model.eval()
+                        emb_orig = cl_client.model(input_tensor)
+                        face_flipped = torch.flip(input_tensor, dims=[3])
+                        emb_mirror = cl_client.model(face_flipped)
+                        query_embedding_tensor = torch.nn.functional.normalize((emb_orig + emb_mirror) / 2, p=2, dim=1)
+                        
+                        user_ids = list(cl_client.reference_embeddings.keys())
+                        ref_list = []
+                        for nrp in user_ids:
+                            ref = cl_client.reference_embeddings[nrp]
+                            if not isinstance(ref, torch.Tensor):
+                                ref = torch.tensor(ref).to(DEVICE)
+                            ref_list.append(ref.view(1, -1))
+                            
+                        best_match = "Unknown"
+                        max_sim = 0.0
+                        best_candidate = "None"
+                        
+                        if ref_list:
+                            ref_matrix = torch.cat(ref_list, dim=0)
+                            ref_matrix = torch.nn.functional.normalize(ref_matrix, p=2, dim=1)
+                            similarities = torch.mm(query_embedding_tensor, ref_matrix.t()).cpu().numpy()[0]
+                            max_idx = np.argmax(similarities)
+                            max_sim = float(similarities[max_idx])
+                            best_candidate = user_ids[max_idx]
+                            if max_sim >= threshold:
+                                best_match = best_candidate
+                                
+                        is_confirmed = max_sim >= threshold
+                        color = (0, 255, 0) if is_confirmed else (0, 0, 255)
+                        nrp_only = best_candidate.split("_")[0] if "_" in best_candidate else best_candidate
+                        
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
+                        label = f"{nrp_only} ({max_sim:.2f})" if is_confirmed else f"Unknown: {nrp_only} ({max_sim:.2f})"
+                        cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+            
+            info_text = f"Source: {student_dir}/{img_name}"
+            cv2.putText(frame, info_text, (10, 460), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+            
+            ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            
+            time.sleep(1.0)
+
+    return StreamingResponse(gen_frames(), media_type='multipart/x-mixed-replace; boundary=frame')
 
 # Event saat Startup
 @app.on_event("startup")

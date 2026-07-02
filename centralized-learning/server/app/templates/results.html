@@ -1,16 +1,22 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
-    <h1 style="color: var(--accent); margin: 0; font-size: 1.8rem;">Hasil Evaluasi Performa</h1>
-    <p style="color: var(--text-muted); margin-top: 0.5rem;">Analisis performa model global yang dilatih di server pusat
-        (Centralized).</p>
+<div class="glass" style="padding: 1.5rem; margin-bottom: 2rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+    <div>
+        <h1 style="color: var(--accent); margin: 0; font-size: 1.8rem;">Hasil Evaluasi Performa</h1>
+        <p style="color: var(--text-muted); margin-top: 0.5rem; margin-bottom: 0;">Analisis performa model global yang dilatih di server pusat (Centralized).</p>
+    </div>
+    <div style="display: flex; align-items: center; gap: 0.5rem; background: rgba(255,255,255,0.03); padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+        <label style="color: var(--text-muted); font-size: 0.9rem; font-weight: 500; margin: 0;">Pilih Model:</label>
+        <select id="model-select" onchange="loadResults()" style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-size: 0.85rem; padding: 0.35rem 1.5rem 0.35rem 0.75rem; outline: none; cursor: pointer;">
+            <option value="">-- Memuat Model --</option>
+        </select>
+    </div>
 </div>
 
-<!-- Table 1: Global Performance -->
+<!-- Tabel 1: Performa Pelatihan -->
 <div class="glass" style="padding: 1.5rem; margin-bottom: 2rem;">
-    <div
-        style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
         <h2 style="color: var(--accent); margin: 0; font-size: 1.3rem;">1. Performa Pelatihan</h2>
         <button class="btn btn-primary" onclick="copyTable('training-table')">Salin Tabel</button>
     </div>
@@ -18,7 +24,7 @@
         <table id="training-table" class="result-table">
             <thead>
                 <tr>
-                    <th>Ronde</th>
+                    <th><i>Epoch</i></th>
                     <th><i>Loss</i></th>
                     <th><i>Accuracy (%)</i></th>
                     <th><i>Validation Loss</i></th>
@@ -26,37 +32,23 @@
                     <th>Durasi (detik)</th>
                 </tr>
             </thead>
-            <tbody>
-                {% if status.metrics.epoch_history %}
-                {% for h in status.metrics.epoch_history %}
+            <tbody id="training-body">
                 <tr>
-                    <td>{{ h.epoch }}</td>
-                    <td>{{ "%.4f"|format(h.loss|float)|replace('.', ',') }}</td>
-                    <td>{{ "%.2f"|format(h.accuracy|float)|replace('.', ',') }}</td>
-                    <td>{{ "%.4f"|format(h.val_loss|float)|replace('.', ',') if h.val_loss is not none else "-" }}</td>
-                    <td>{{ "%.2f"|format(h.val_accuracy|float)|replace('.', ',') if h.val_accuracy is not none else "-" }}</td>
-                    <td>{{ "%.2f"|format(h.duration_s|float)|replace('.', ',') if h.duration_s is defined and h.duration_s is not none else "-" }}</td>
+                    <td colspan="6" style="text-align: center; padding: 2rem; color: var(--text-muted);">Pilih versi model untuk memuat data.</td>
                 </tr>
-
-                {% endfor %}
-                {% else %}
-                <tr>
-                    <td colspan="7" style="text-align: center;">Data pelatihan tidak tersedia.</td>
-                </tr>
-                {% endif %}
             </tbody>
         </table>
     </div>
 </div>
 
-<!-- Table 2: Economic & Operational Metrics -->
-<div class="glass" style="padding: 2rem;">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <h2 style="color: var(--accent);">2. Nilai Ekonomi & Operasional (Centralized)</h2>
-        <button class="btn btn-primary" onclick="copyTable('economic-table')">Salin Tabel</button>
+<!-- Tabel 2a: Metrik Ekonomi & Operasional - Pra-proses -->
+<div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+        <h2 style="color: var(--accent); margin: 0; font-size: 1.3rem;">2a. Nilai Ekonomi & Operasional - Tahap Pra-proses (Preprocessing)</h2>
+        <button class="btn btn-primary" onclick="copyTable('economic-table-preprocess')">Salin Tabel</button>
     </div>
     <div style="overflow-x: auto;">
-        <table id="economic-table" class="result-table">
+        <table id="economic-table-preprocess" class="result-table">
             <thead>
                 <tr>
                     <th>Tipe Metrik</th>
@@ -65,22 +57,59 @@
                     <th>Biaya (IDR)</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="economic-body-preprocess">
                 <tr>
-                    <td><b>Transmisi Data</b></td>
-                    <td><b>Estimasi Total Bandwidth (MB)</b></td>
-                    <td>{{ "%.2f"|format(status.metrics.upload_volume_mb + status.metrics.download_volume_mb)|replace('.', ',') }}</td>
-                    <td>Rp {{ "%.2f"|format(status.metrics.transmission_cost_idr|float)|replace('.', ',') }}</td>
+                    <td colspan="4" style="text-align: center; padding: 2rem; color: var(--text-muted);">Pilih versi model untuk memuat data.</td>
                 </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Tabel 2b: Metrik Ekonomi & Operasional - Pelatihan -->
+<div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+        <h2 style="color: var(--accent); margin: 0; font-size: 1.3rem;">2b. Nilai Ekonomi & Operasional - Tahap Pelatihan (Training)</h2>
+        <button class="btn btn-primary" onclick="copyTable('economic-table-training')">Salin Tabel</button>
+    </div>
+    <div style="overflow-x: auto;">
+        <table id="economic-table-training" class="result-table">
+            <thead>
                 <tr>
-                    <td rowspan="2"><b>Konsumsi Daya</b></td>
-                    <td><b>Energi Terpakai (kWh)</b></td>
-                    <td>{{ "%.6f"|format(status.metrics.compute_energy_kwh|float)|replace('.', ',') }}</td>
-                    <td rowspan="2">Rp {{ "%.2f"|format(status.metrics.compute_cost_idr|float)|replace('.', ',') }}</td>
+                    <th>Tipe Metrik</th>
+                    <th>Sub-Metrik</th>
+                    <th>Nilai</th>
+                    <th>Biaya (IDR)</th>
                 </tr>
+            </thead>
+            <tbody id="economic-body-training">
                 <tr>
-                    <td><b>Durasi Pelatihan (detik)</b></td>
-                    <td>{{ "%.2f"|format(status.metrics.training_duration_s|float)|replace('.', ',') }}</td>
+                    <td colspan="4" style="text-align: center; padding: 2rem; color: var(--text-muted);">Pilih versi model untuk memuat data.</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Tabel 2c: Metrik Ekonomi & Operasional - Gabungan -->
+<div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+        <h2 style="color: var(--accent); margin: 0; font-size: 1.3rem;">2c. Nilai Ekonomi & Operasional - Gabungan (Combined)</h2>
+        <button class="btn btn-primary" onclick="copyTable('economic-table-combined')">Salin Tabel</button>
+    </div>
+    <div style="overflow-x: auto;">
+        <table id="economic-table-combined" class="result-table">
+            <thead>
+                <tr>
+                    <th>Tipe Metrik</th>
+                    <th>Sub-Metrik</th>
+                    <th>Nilai</th>
+                    <th>Biaya (IDR)</th>
+                </tr>
+            </thead>
+            <tbody id="economic-body-combined">
+                <tr>
+                    <td colspan="4" style="text-align: center; padding: 2rem; color: var(--text-muted);">Pilih versi model untuk memuat data.</td>
                 </tr>
             </tbody>
         </table>
@@ -110,6 +139,7 @@
     .result-table th {
         background-color: white !important;
         font-weight: bold !important;
+        text-transform: none !important;
     }
 
     .result-table tr {
@@ -132,5 +162,175 @@
         }
         window.getSelection().removeAllRanges();
     }
+
+    async function loadModels() {
+        try {
+            const res = await fetch('/api/models/list');
+            const data = await res.json();
+            const select = document.getElementById('model-select');
+            
+            if (data.models && data.models.length > 0) {
+                select.innerHTML = '';
+                
+                // Urutkan model descending agar versi terbaru muncul paling atas
+                const sorted = data.models.sort((a,b) => {
+                    if (a.version === 'active') return -1;
+                    if (b.version === 'active') return 1;
+                    if (a.version === 'v0') return 1;
+                    if (b.version === 'v0') return -1;
+                    return b.version.localeCompare(a.version, undefined, {numeric: true});
+                });
+                
+                sorted.forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = m.version;
+                    opt.innerText = m.label;
+                    select.appendChild(opt);
+                });
+                
+                // Load results untuk model pertama (terbaru)
+                loadResults();
+            } else {
+                select.innerHTML = '<option value="">Tidak ada model tersedia</option>';
+            }
+        } catch(e) {
+            console.error("Gagal memuat daftar model:", e);
+        }
+    }
+
+    async function loadResults() {
+        const version = document.getElementById('model-select').value;
+        if (!version) return;
+        
+        try {
+            const res = await fetch(`/api/results?version=${version}`);
+            const metrics = await res.json();
+            
+            // Membuat Tabel Riwayat Pelatihan
+            const trainingBody = document.getElementById('training-body');
+            const history = metrics.epoch_history || [];
+            
+            if (history.length > 0) {
+                trainingBody.innerHTML = history.map(h => {
+                    const valLoss = h.val_loss !== null && h.val_loss !== undefined ? parseFloat(h.val_loss).toFixed(4).replace('.', ',') : '-';
+                    const valAcc = h.val_accuracy !== null && h.val_accuracy !== undefined ? parseFloat(h.val_accuracy).toFixed(2).replace('.', ',') : '-';
+                    const duration = h.duration_s !== null && h.duration_s !== undefined ? parseFloat(h.duration_s).toFixed(2).replace('.', ',') : '-';
+                    return `
+                        <tr>
+                            <td>${h.epoch}</td>
+                            <td>${parseFloat(h.loss).toFixed(4).replace('.', ',')}</td>
+                            <td>${parseFloat(h.accuracy).toFixed(2).replace('.', ',')}</td>
+                            <td>${valLoss}</td>
+                            <td>${valAcc}</td>
+                            <td>${duration}</td>
+                        </tr>
+                    `;
+                }).join('');
+            } else {
+                trainingBody.innerHTML = '<tr><td colspan="6" style="text-align: center;">Data pelatihan tidak tersedia untuk versi ini.</td></tr>';
+            }
+            
+            // Membuat Tabel Nilai Ekonomi & Operasional (Pra-proses, Pelatihan, Gabungan)
+            const prep = metrics.preprocess || {};
+            const train = metrics.training || {};
+            const comb = metrics.combined || {};
+            
+            // Raw values from old version files as fallbacks
+            const rawUploadMb = parseFloat(metrics.upload_volume_mb || 0);
+            const rawDownloadMb = parseFloat(metrics.download_volume_mb || 0);
+            const rawEnergy = parseFloat(metrics.compute_energy_kwh || 0);
+            const rawDuration = parseFloat(metrics.training_duration_s || metrics.total_round_time_s || 0);
+            
+            // 1. Preprocessing
+            const prepUpload = prep.upload_volume_mb !== undefined ? parseFloat(prep.upload_volume_mb) : rawUploadMb;
+            const prepDownload = prep.download_volume_mb !== undefined ? parseFloat(prep.download_volume_mb) : 0.0;
+            const prepBandwidth = prep.bandwidth_mb !== undefined ? parseFloat(prep.bandwidth_mb) : (prepUpload + prepDownload);
+            const prepTransCost = prep.transmission_cost_idr !== undefined ? parseFloat(prep.transmission_cost_idr) : (prepBandwidth * 3.25);
+            const prepEnergy = prep.compute_energy_kwh !== undefined ? parseFloat(prep.compute_energy_kwh) : 0.0;
+            const prepComputeCost = prep.compute_cost_idr !== undefined ? parseFloat(prep.compute_cost_idr) : (prepEnergy * 1444.7);
+            const prepDuration = prep.duration_s !== undefined ? parseFloat(prep.duration_s) : 0.0;
+            
+            // 2. Training
+            const trainUpload = train.upload_volume_mb !== undefined ? parseFloat(train.upload_volume_mb) : 0.0;
+            const trainDownload = train.download_volume_mb !== undefined ? parseFloat(train.download_volume_mb) : rawDownloadMb;
+            const trainBandwidth = train.bandwidth_mb !== undefined ? parseFloat(train.bandwidth_mb) : (trainUpload + trainDownload);
+            const trainTransCost = train.transmission_cost_idr !== undefined ? parseFloat(train.transmission_cost_idr) : (trainBandwidth * 3.25);
+            const trainEnergy = train.compute_energy_kwh !== undefined ? parseFloat(train.compute_energy_kwh) : rawEnergy;
+            const trainComputeCost = train.compute_cost_idr !== undefined ? parseFloat(train.compute_cost_idr) : (trainEnergy * 1444.7);
+            const trainDuration = train.duration_s !== undefined ? parseFloat(train.duration_s) : rawDuration;
+            
+            // 3. Combined
+            const combUpload = comb.upload_volume_mb !== undefined ? parseFloat(comb.upload_volume_mb) : (prepUpload + trainUpload);
+            const combDownload = comb.download_volume_mb !== undefined ? parseFloat(comb.download_volume_mb) : (prepDownload + trainDownload);
+            const combBandwidth = comb.bandwidth_mb !== undefined ? parseFloat(comb.bandwidth_mb) : (prepBandwidth + trainBandwidth);
+            const combTransCost = comb.transmission_cost_idr !== undefined ? parseFloat(comb.transmission_cost_idr) : (prepTransCost + trainTransCost);
+            const combEnergy = comb.compute_energy_kwh !== undefined ? parseFloat(comb.compute_energy_kwh) : (prepEnergy + trainEnergy);
+            const combComputeCost = comb.compute_cost_idr !== undefined ? parseFloat(comb.compute_cost_idr) : (prepComputeCost + trainComputeCost);
+            const combDuration = comb.duration_s !== undefined ? parseFloat(comb.duration_s) : (prepDuration + trainDuration);
+
+            // Render tables
+            document.getElementById('economic-body-preprocess').innerHTML = `
+                <tr>
+                    <td><b>Transmisi Data</b></td>
+                    <td><b>Estimasi Total Bandwidth (MB)</b></td>
+                    <td>${prepBandwidth.toFixed(2).replace('.', ',')}</td>
+                    <td>Rp ${prepTransCost.toFixed(2).replace('.', ',')}</td>
+                </tr>
+                <tr>
+                    <td rowspan="2"><b>Konsumsi Daya</b></td>
+                    <td><b>Energi Terpakai (kWh)</b></td>
+                    <td>${prepEnergy.toFixed(6).replace('.', ',')}</td>
+                    <td rowspan="2">Rp ${prepComputeCost.toFixed(2).replace('.', ',')}</td>
+                </tr>
+                <tr>
+                    <td><b>Durasi Pra-proses (detik)</b></td>
+                    <td>${prepDuration.toFixed(2).replace('.', ',')}</td>
+                </tr>
+            `;
+
+            document.getElementById('economic-body-training').innerHTML = `
+                <tr>
+                    <td><b>Transmisi Data</b></td>
+                    <td><b>Estimasi Total Bandwidth (MB)</b></td>
+                    <td>${trainBandwidth.toFixed(2).replace('.', ',')}</td>
+                    <td>Rp ${trainTransCost.toFixed(2).replace('.', ',')}</td>
+                </tr>
+                <tr>
+                    <td rowspan="2"><b>Konsumsi Daya</b></td>
+                    <td><b>Energi Terpakai (kWh)</b></td>
+                    <td>${trainEnergy.toFixed(6).replace('.', ',')}</td>
+                    <td rowspan="2">Rp ${trainComputeCost.toFixed(2).replace('.', ',')}</td>
+                </tr>
+                <tr>
+                    <td><b>Durasi Pelatihan (detik)</b></td>
+                    <td>${trainDuration.toFixed(2).replace('.', ',')}</td>
+                </tr>
+            `;
+
+            document.getElementById('economic-body-combined').innerHTML = `
+                <tr>
+                    <td><b>Transmisi Data</b></td>
+                    <td><b>Estimasi Total Bandwidth (MB)</b></td>
+                    <td>${combBandwidth.toFixed(2).replace('.', ',')}</td>
+                    <td>Rp ${combTransCost.toFixed(2).replace('.', ',')}</td>
+                </tr>
+                <tr>
+                    <td rowspan="2"><b>Konsumsi Daya</b></td>
+                    <td><b>Energi Terpakai (kWh)</b></td>
+                    <td>${combEnergy.toFixed(6).replace('.', ',')}</td>
+                    <td rowspan="2">Rp ${combComputeCost.toFixed(2).replace('.', ',')}</td>
+                </tr>
+                <tr>
+                    <td><b>Durasi Total (detik)</b></td>
+                    <td>${combDuration.toFixed(2).replace('.', ',')}</td>
+                </tr>
+            `;
+        } catch(e) {
+            console.error("Gagal memuat metrik model:", e);
+        }
+    }
+
+    // Initialize
+    loadModels();
 </script>
 {% endblock %}

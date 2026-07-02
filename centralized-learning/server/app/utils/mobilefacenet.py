@@ -135,6 +135,7 @@ class ArcMarginProduct(nn.Module):
             cosine, _ = torch.max(cosine_all, dim=2)
         else:
             cosine = cosine_all
+        cosine = cosine.clamp(-1.0 + 1e-7, 1.0 - 1e-7)
         sine = torch.sqrt(1.0 - torch.pow(cosine, 2))
         phi = cosine * self.cos_m - sine * self.sin_m
         phi = torch.where(cosine > self.th, phi, cosine - self.mm)

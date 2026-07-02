@@ -36,10 +36,17 @@ class ManagementController:
         self.client_id = client_id
         self.logger = get_logger()
 
-    def register_client(self, ip_address):
+    def register_client(self, ip_address, client_manager):
         # Mendaftarkan terminal ke database server pusat.
         try:
-            payload = {"edge_id": self.client_id, "ip_address": ip_address, "status": "online"}
+            payload = {
+                "edge_id": self.client_id,
+                "ip_address": ip_address,
+                "status": "online",
+                "dataset": client_manager.get_dataset_name(),
+                "is_preprocessed": client_manager.is_preprocessed(),
+                "available_datasets": client_manager.get_available_datasets()
+            }
             response = requests.post(f"{self.server_url}{api_register_client}", json=payload, timeout=5)
             return response.status_code == 200
         except Exception as e:
@@ -65,9 +72,11 @@ class ManagementController:
             
             if res_m.status_code == 200:
                 path_m = f"{MODEL_DIR}/global_model.pth"
-                with open(path_m, "wb") as f:
+                tmp_m = path_m + ".tmp"
+                with open(tmp_m, "wb") as f:
                     for chunk in res_m.iter_content(chunk_size=8192):
                         if chunk: f.write(chunk)
+                os.replace(tmp_m, path_m)
                 
                 state_dict = torch.load(path_m, map_location=DEVICE)
                 model.load_state_dict(state_dict)
@@ -81,9 +90,11 @@ class ManagementController:
             res_r = requests.get(url_r, stream=True, timeout=15)
             if res_r.status_code == 200:
                 path_r = f"{MODEL_DIR}/reference_embeddings.pth"
-                with open(path_r, "wb") as f:
+                tmp_r = path_r + ".tmp"
+                with open(tmp_r, "wb") as f:
                     for chunk in res_r.iter_content(chunk_size=8192):
                         if chunk: f.write(chunk)
+                os.replace(tmp_r, path_r)
                 
                 refs = torch.load(path_r, map_location=DEVICE)
                 
@@ -101,8 +112,15 @@ class ManagementController:
 
     def package_and_upload(self):
         # Mengunggah dataset lokal (ZIP) ke server pusat untuk proses pelatihan.
-        if not os.path.exists(DATA_DIR) or not os.listdir(DATA_DIR):
-            return False, "Data tidak ditemukan."
+        try:
+            from app.main import current_dataset
+            active_dataset = current_dataset
+        except Exception:
+            active_dataset = "students"
+
+        dataset_dir = os.path.join(os.getenv("RAW_DATA_PATH", "/app/raw_data"), active_dataset)
+        if not os.path.exists(dataset_dir) or not os.listdir(dataset_dir):
+            return False, f"Data dataset '{active_dataset}' tidak ditemukan."
         
         tracker = None
         energy_kwh = 0.0
@@ -120,21 +138,21 @@ class ManagementController:
             # Hitung statistik dataset sebelum dikemas
             folder_count = 0
             file_count = 0
-            for root, dirs, files in os.walk(DATA_DIR):
+            for root, dirs, files in os.walk(dataset_dir):
                 folder_count += len(dirs)
                 file_count += len(files)
             
-            self.logger.info(f"Mengemas {file_count} gambar dari {folder_count} mahasiswa.")
+            self.logger.info(f"Mengemas {file_count} gambar dari {folder_count} mahasiswa (dataset: {active_dataset}).")
 
             if file_count == 0:
                 if tracker: tracker.stop()
                 return False, "Tidak ada gambar untuk diunggah."
                 
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                for root, dirs, files in os.walk(DATA_DIR):
+                for root, dirs, files in os.walk(dataset_dir):
                     for file in files:
                         full_path = os.path.join(root, file)
-                        rel_path = os.path.relpath(full_path, DATA_DIR)
+                        rel_path = os.path.relpath(full_path, dataset_dir)
                         zipf.write(full_path, rel_path)
             
             with open(zip_path, 'rb') as f:

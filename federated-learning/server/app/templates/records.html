@@ -1,10 +1,17 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div class="glass" style="padding: 1.5rem; margin-bottom: 2rem;">
-    <h2 style="color: var(--accent); margin-top: 0; font-size: 1.4rem;">Papan Kehadiran Real-time</h2>
-    <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 2rem;">Pemantauan aktivitas presensi dari
-        seluruh terminal secara langsung (<i>Federated</i>).</p>
+<div class="glass" style="padding: 1.5rem; margin-bottom: 2rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+    <div>
+        <h2 style="color: var(--accent); margin-top: 0; font-size: 1.4rem;">Papan Kehadiran Real-time</h2>
+        <p style="color: var(--text-muted); font-size: 0.9rem; margin: 0;">Pemantauan aktivitas presensi dari seluruh terminal secara langsung (<i>Federated</i>).</p>
+    </div>
+    <div style="display: flex; align-items: center; gap: 0.5rem; background: rgba(255,255,255,0.03); padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+        <label style="color: var(--text-muted); font-size: 0.9rem; font-weight: 500; margin: 0;">Filter Dataset:</label>
+        <select id="dataset-filter" onchange="updateAttendance()" style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-size: 0.85rem; padding: 0.35rem 1.5rem 0.35rem 0.75rem; outline: none; cursor: pointer;">
+            <option value="students">students</option>
+        </select>
+    </div>
 </div>
 
 <div class="glass" style="padding: 1rem; overflow: hidden;">
@@ -64,9 +71,32 @@
 </style>
 
 <script>
+    async function loadDatasets() {
+        try {
+            const res = await fetch('/api/status');
+            const data = await res.json();
+            const select = document.getElementById('dataset-filter');
+            if (data.available_datasets && data.available_datasets.length > 0) {
+                const currentVal = select.value;
+                select.innerHTML = '';
+                data.available_datasets.forEach(ds => {
+                    const opt = document.createElement('option');
+                    opt.value = ds;
+                    opt.innerText = ds;
+                    if (ds === currentVal) opt.selected = true;
+                    select.appendChild(opt);
+                });
+            }
+        } catch(e) {
+            console.error("Load datasets error:", e);
+        }
+    }
+
     async function updateAttendance() {
         try {
-            const res = await fetch('/api/attendance');
+            const select = document.getElementById('dataset-filter');
+            const dataset = select ? select.value : 'students';
+            const res = await fetch(`/api/attendance?dataset=${dataset}`);
             const data = await res.json();
             const body = document.getElementById('attendance-body');
 
@@ -89,7 +119,7 @@
                     `;
                 }).join('');
             } else {
-                body.innerHTML = '<tr><td colspan="6" style="padding: 40px; text-align: center; color: var(--text-muted);">Belum ada data mahasiswa yang terdaftar di sistem.</td></tr>';
+                body.innerHTML = '<tr><td colspan="6" style="padding: 40px; text-align: center; color: var(--text-muted);">Belum ada data mahasiswa yang terdaftar di sistem untuk dataset ini.</td></tr>';
             }
         } catch (e) {
             console.error("Attendance Update Error:", e);
@@ -97,7 +127,12 @@
     }
 
     // Initial load and 2s polling
-    updateAttendance();
-    setInterval(updateAttendance, 2000);
+    async function init() {
+        await loadDatasets();
+        updateAttendance();
+        setInterval(updateAttendance, 2000);
+    }
+    
+    init();
 </script>
 {% endblock %}

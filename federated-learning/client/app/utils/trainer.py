@@ -107,9 +107,6 @@ class FaceDataset(Dataset):
             for p in selected:
                 self.samples.append({"type": "image", "path": p, "label": idx})
                 self.class_counts[idx] += 1
-                        
-            gc.collect()
-            time.sleep(0.1)
 
         if global_embeddings:
             for item in global_embeddings:
@@ -171,12 +168,17 @@ class LocalTrainer:
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.50196, 0.50196, 0.50196])
         ])
 
-    def save_checkpoint(self, round_num, epoch, history):
+    def save_checkpoint(self, round_num, epoch, history, session_id=""):
         try:
             checkpoint_dir = os.path.join(os.path.dirname(self.data_path), "models")
             os.makedirs(checkpoint_dir, exist_ok=True)
-            checkpoint_path = os.path.join(checkpoint_dir, "training_checkpoint.pth")
+            if session_id:
+                checkpoint_name = f"training_checkpoint_{session_id}_round{round_num}.pth"
+            else:
+                checkpoint_name = f"training_checkpoint_round{round_num}.pth"
+            checkpoint_path = os.path.join(checkpoint_dir, checkpoint_name)
             torch.save({
+                'session_id': session_id,
                 'round_num': round_num,
                 'epoch': epoch,
                 'backbone_state_dict': self.backbone.state_dict(),
@@ -186,9 +188,9 @@ class LocalTrainer:
             self.logger.info(f"Progress disimpan (Ronde {round_num}, Epoch {epoch+1})")
         except Exception as e:
             self.logger.error(f"Gagal menyimpan checkpoint: {e}")
-
+ 
     # Loop Pelatihan PyTorch (Local Training Loop)
-    def train(self, epochs=5, lr=0.0001, round_num=0, global_embeddings=None, label_map=None, mu=0.05, lam=0.1, status_callback=None):
+    def train(self, epochs=5, lr=0.0001, round_num=0, global_embeddings=None, label_map=None, mu=0.05, lam=0.1, session_id="", status_callback=None):
         if self.backbone is None or self.head is None:
              self.logger.warn("Model belum terinisialisasi..")
              return 0.0, 0.0, 0, [], 0.0
@@ -197,11 +199,20 @@ class LocalTrainer:
         
         # Pemuatan checkpoint lokal jika terputus di tengah jalan
         start_epoch = 0
-        checkpoint_path = os.path.join(os.path.dirname(self.data_path), "models", "training_checkpoint.pth")
+        if session_id:
+            checkpoint_name = f"training_checkpoint_{session_id}_round{round_num}.pth"
+        else:
+            checkpoint_name = f"training_checkpoint_round{round_num}.pth"
+        checkpoint_path = os.path.join(os.path.dirname(self.data_path), "models", checkpoint_name)
         if os.path.exists(checkpoint_path):
             try:
                 ckpt = torch.load(checkpoint_path, map_location=self.device)
-                if ckpt.get('round_num') == round_num:
+                if session_id and ckpt.get('session_id') != session_id:
+                    self.logger.info("Sesi baru dideteksi, menghapus checkpoint lama...")
+                    try:
+                        os.remove(checkpoint_path)
+                    except: pass
+                elif ckpt.get('round_num') == round_num:
                     self.backbone.load_state_dict(ckpt['backbone_state_dict'])
                     self.head.load_state_dict(ckpt['head_state_dict'])
                     start_epoch = ckpt.get('epoch', -1) + 1
@@ -225,13 +236,19 @@ class LocalTrainer:
         # Bandingkan dengan num_classes asli untuk menghindari false mismatch.
         head_k = getattr(self.head, 'k', 1)
         head_num_classes = self.head.weight.shape[0] // head_k
+        
+        head_was_updated = False
         if dataset.num_classes > 0 and dataset.num_classes != head_num_classes:
             self.update_head(dataset.num_classes, dataset.nrp_to_idx)
+            head_was_updated = True
         else:
             self.nrp_to_idx = dataset.nrp_to_idx
-        # Selalu anchor bobot head setiap awal training agar sinkron dengan backbone global baru
-        # (Sama persis dengan perilaku Centralized Learning yang selalu seed metric_fc)
-        self.anchor_head_weights()
+            
+        # Hanya lakukan anchoring jika ronde 1 (seeding awal), head baru diperbarui, atau belum pernah di-anchor.
+        # Reset head ke embedding statis DB setiap ronde akan menghapus progres belajar classifier head lokal.
+        if round_num <= 1 or head_was_updated or not getattr(self, '_head_anchored', False):
+            self.anchor_head_weights()
+            self._head_anchored = True
 
         # Inisialisasi data loader pembagi batch
         dataloader = DataLoader(dataset, batch_size=32, shuffle=True, collate_fn=hybrid_collate, drop_last=True)
@@ -288,10 +305,11 @@ class LocalTrainer:
         start_train_time = time.time()
         self.logger.info(f"Ronde {round_num}: Melatih {len(dataset)} sampel data untuk {epochs} epoch")
         total_loss, correct, total = 0.0, 0, 0
-        epoch_history = []
+        if not epoch_history:
+            epoch_history = []
         
         # Loop iterasi epochs pelatihan
-        for epoch in range(epochs):
+        for epoch in range(start_epoch, epochs):
             epoch_loss = 0.0
             correct = 0
             total = 0
@@ -327,7 +345,7 @@ class LocalTrainer:
                 prox_loss = torch.tensor(0.0, device=self.device)
                 for name, param in self.backbone.named_parameters():
                     if name in global_ref:
-                        prox_loss += (mu / 2) * torch.norm(param - global_ref[name])**2
+                        prox_loss += (mu / 2) * torch.sum((param - global_ref[name])**2)
                 
                 # Gabungkan nilai total loss klasifikasi dan penalti regulasi
                 loss = ce_loss + prox_loss
@@ -343,8 +361,8 @@ class LocalTrainer:
                 loss.backward()
                 optimizer.step()
                 
-                total_loss += loss.item()
-                epoch_loss += loss.item()
+                total_loss += ce_loss.item()
+                epoch_loss += ce_loss.item()
                 
                 # Hitung performa akurasi prediksi batch latih
                 with torch.no_grad():
@@ -355,12 +373,22 @@ class LocalTrainer:
             
             acc = correct / total if total > 0 else 0.0
             avg_epoch_loss = epoch_loss / len(dataloader) if len(dataloader) > 0 else 0.0
-            self.logger.info(f"  > Epoch {epoch+1}/{epochs} | Loss: {avg_epoch_loss:.4f} | Acc: {acc:.4f}")
+            
+            # Hitung evaluasi lokal per epoch untuk visualisasi lebih rinci
+            val_loss, val_acc, _ = self.evaluate(global_embeddings=global_embeddings, label_map=label_map)
+            
+            self.logger.info(f"  > Epoch {epoch+1}/{epochs} | Loss: {avg_epoch_loss:.4f} | Acc: {acc:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
             if status_callback:
                 status_callback(epoch + 1, epochs, avg_epoch_loss, acc)
-            epoch_history.append({"epoch": epoch + 1, "loss": avg_epoch_loss, "accuracy": acc})
+            epoch_history.append({
+                "epoch": epoch + 1, 
+                "loss": avg_epoch_loss, 
+                "accuracy": acc,
+                "val_loss": val_loss,
+                "val_accuracy": val_acc
+            })
             
-            self.save_checkpoint(round_num, epoch, epoch_history)
+            self.save_checkpoint(round_num, epoch, epoch_history, session_id=session_id)
                 
         avg_loss = total_loss / (len(dataloader) * epochs) if len(dataloader) > 0 else 0.0
         accuracy = correct / total if total > 0 else 0.0
@@ -429,7 +457,7 @@ class LocalTrainer:
         if old_head is not None:
             embedding_size = old_head.weight.shape[1]
             
-        new_head = ArcMarginProduct(embedding_size, new_num_classes, k=3).to(self.device)
+        new_head = ArcMarginProduct(embedding_size, new_num_classes, k=1).to(self.device)
         
         # Penanganan penyalinan bobot terlatih dari head lama (jika ada)
         k = new_head.k
@@ -640,7 +668,12 @@ class LocalTrainer:
 
     def _is_shared_param(self, name):
         name = name.lower()
-        return any(x in name for x in ['weight', 'bias', 'bn', 'running_', 'num_batches_tracked'])
+        # Parameter BN yang harus tetap lokal (tidak dishare) demi personalisasi pFedFace
+        is_bn = any(x in name for x in ['.bn.', '.conv.1.', '.conv.4.', '.conv.7.', 'running_', 'num_batches_tracked'])
+        if is_bn:
+            return False
+        # Hanya share parameter bobot & bias dari layer konvolusi/linear (backbone)
+        return any(x in name for x in ['weight', 'bias'])
 
     def get_backbone_parameters(self, personalized=True):
         if self.backbone is None: return []
@@ -675,20 +708,53 @@ class LocalTrainer:
             self.backbone.eval()
             
         state_dict = self.backbone.state_dict()
-        shared_keys = [k for k in state_dict.keys() if not personalized or self._is_shared_param(k)]
-        num_backbone = len(shared_keys)
-
-        self.logger.info(f"Menginjeksi {num_backbone} parameter backbone.")
-        new_state_dict = OrderedDict(state_dict)
-        for i, k in enumerate(shared_keys):
-            try:
+        all_keys = list(state_dict.keys())
+        
+        # Cari semua parameter BN
+        bn_filter = lambda name: any(x in name.lower() for x in ['.bn.', '.conv.1.', '.conv.4.', '.conv.7.', 'running_', 'num_batches_tracked'])
+        conv_keys = [k for k in all_keys if not bn_filter(k)]
+        
+        # Mencegah mismatch indeks dengan memetakan parameter secara eksplisit berdasarkan panjang payload
+        payload_dict = {}
+        if len(parameters) == len(all_keys):
+            # Payload lengkap (Backbone + BN)
+            payload_dict = {all_keys[i]: torch.from_numpy(parameters[i].copy()) for i in range(len(parameters))}
+        elif len(parameters) == len(conv_keys):
+            # Payload terpersonalisasi (Backbone saja)
+            payload_dict = {conv_keys[i]: torch.from_numpy(parameters[i].copy()) for i in range(len(parameters))}
+        elif len(parameters) > len(all_keys):
+            # Payload lengkap + Head (kemungkinan Standard Full Sync)
+            payload_dict = {all_keys[i]: torch.from_numpy(parameters[i].copy()) for i in range(len(all_keys))}
+        else:
+            self.logger.warn(f"Panjang parameter tidak cocok (payload: {len(parameters)}, conv: {len(conv_keys)}, total: {len(all_keys)}). Mencoba pemetaan sekuensial...")
+            shared_keys = [k for k in state_dict.keys() if not personalized or self._is_shared_param(k)]
+            new_state_dict = OrderedDict(state_dict)
+            for i, k in enumerate(shared_keys):
                 if i < len(parameters):
-                    tensor_v = torch.from_numpy(parameters[i].copy())
-                    if tensor_v.shape == state_dict[k].shape:
-                        new_state_dict[k] = tensor_v
-            except: continue
-        self.backbone.load_state_dict(new_state_dict, strict=False)
+                    try:
+                        tensor_v = torch.from_numpy(parameters[i].copy())
+                        if tensor_v.shape == state_dict[k].shape:
+                            new_state_dict[k] = tensor_v
+                    except: continue
+            self.backbone.load_state_dict(new_state_dict, strict=False)
+            return
 
+        # Injeksi parameter dari payload_dict ke state_dict backbone
+        shared_keys = [k for k in state_dict.keys() if not personalized or self._is_shared_param(k)]
+        new_state_dict = OrderedDict(state_dict)
+        injected_count = 0
+        for k in shared_keys:
+            if k in payload_dict:
+                tensor_v = payload_dict[k]
+                if tensor_v.shape == state_dict[k].shape:
+                    new_state_dict[k] = tensor_v
+                    injected_count += 1
+        
+        self.backbone.load_state_dict(new_state_dict, strict=False)
+        self.logger.info(f"Berhasil menginjeksi {injected_count} parameter backbone secara aman.")
+
+        # Pasang Head Parameters jika Full Sync (bukan personalized) dan ada sisa data di payload
+        num_backbone = len(shared_keys)
         if not personalized and len(parameters) > num_backbone and self.head is not None:
             head_params = parameters[num_backbone:]
             self.logger.info(f"Menginjeksi {len(head_params)} parameter classification head.")

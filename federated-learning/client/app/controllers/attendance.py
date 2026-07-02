@@ -239,7 +239,7 @@ class AttendanceController:
 
         else:
             if confidence > 0.1: 
-                self.fl_manager.logger.info(f"Model v{current_v} | Terbaik: {best_match} | Sim: {confidence:.4f} | Thres: {threshold:.2f}")
+                self.fl_manager.logger.info(f"Model {current_v} | Terbaik: {best_match} | Sim: {confidence:.4f} | Thres: {threshold:.2f}")
             
         latency = int((time.perf_counter() - start_time) * 1000)
         
@@ -395,7 +395,15 @@ class AttendanceController:
                 local_user_ids = {row[0] for row in local_ids_res}
             except Exception: pass
 
-            registry_path = os.path.join(self.fl_manager.data_path, "models", "global_embedding_registry.pth")
+            version = getattr(self.fl_manager, 'model_version', 0)
+            if version and version != "v0" and version != "0" and version != 0:
+                registry_path = os.path.join(self.fl_manager.data_path, "models", f"registry_embeddings_{version}.pth")
+            else:
+                registry_path = os.path.join(self.fl_manager.data_path, "models", "global_embedding_registry.pth")
+                
+            if not os.path.exists(registry_path):
+                registry_path = os.path.join(self.fl_manager.data_path, "models", "global_embedding_registry.pth")
+                
             if os.path.exists(registry_path):
                 try:
                     registry = torch.load(registry_path, map_location="cpu")

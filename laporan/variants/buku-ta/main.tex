@@ -36,6 +36,8 @@
 
 % Package lainnya
 \usepackage{changepage}
+\usepackage{caption}
+\captionsetup{labelsep=space}
 \usepackage{enumitem}
 \usepackage{eso-pic}
 \usepackage{times} 
@@ -49,6 +51,8 @@
 \usepackage{algorithmic}
 \usepackage{amsmath} % For enhanced math mode including \text command
 \usepackage{amssymb} % For additional math symbols
+\usepackage{multirow}
+
 
 % Definisi untuk "Hati ini sengaja dikosongkan"
 \patchcmd{\cleardoublepage}{\hbox{}}{
@@ -121,6 +125,7 @@
 
 % Pengaturan format potongan kode
 \usepackage{listings}
+\usepackage{upquote}
 \usepackage[T1]{fontenc} % Fix for quote character encoding
 \definecolor{comment}{RGB}{0,128,0}
 \definecolor{string}{RGB}{255,0,0}
@@ -139,9 +144,11 @@
   showstringspaces=false,
   upquote=true,
   tabsize=2,
-  literate={"}{{\textquotedbl}}1,
+  captionpos=b,
 }
 \lstset{style=codestyle}
+\renewcommand{\lstlistingname}{Kode Sumber}
+\renewcommand{\lstlistlistingname}{Daftar Kode Sumber}
 
 % Isi keseluruhan dokumen
 \begin{document}
@@ -212,6 +219,17 @@
 \listoftables
 \clearpage
 
+% Daftar lampiran
+\chapter*{DAFTAR LAMPIRAN}
+\addcontentsline{toc}{chapter}{DAFTAR LAMPIRAN}
+\vspace{2ex}
+\noindent Lampiran 1 Hasil Uji Cukup Cahaya Federated Learning dan Centralized Learning \dotfill \pageref{lampiran:1} \\
+\noindent Lampiran 2 Hasil Uji Minim Cahaya Federated Learning dan Centralized Learning \dotfill \pageref{lampiran:2} \\
+\noindent Lampiran 3 Hasil Uji Video Federated Learning dan Centralized Learning \dotfill \pageref{lampiran:3} \\
+\noindent Lampiran 4 Video Simulasi Uji Federated Learning dan Centralized Learning \dotfill \pageref{lampiran:4}
+\clearpage
+
+
 % Nomor halaman isi dimulai dari sini
 \pagenumbering{arabic}
 
@@ -244,6 +262,10 @@
 \def\chapter*#1{}
 \printbibliography
 \endgroup
+\cleardoublepage
+
+% Lampiran
+\input{lainnya/lampiran.tex}
 \cleardoublepage
 
 % Biografi penulis

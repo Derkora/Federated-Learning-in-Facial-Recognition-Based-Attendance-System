@@ -46,9 +46,24 @@ class FaceHandler:
         """
         try:
             img = Image.open(img_path).convert('RGB')
-            boxes, _, landmarks = self.mtcnn.detect(img, landmarks=True)
+            
+            # Optimasi MTCNN: Batasi ukuran deteksi maks 640px demi CPU/RAM
+            w, h = img.size
+            max_size = 640
+            if max(w, h) > max_size:
+                scale = max_size / max(w, h)
+                img_detect = img.resize((int(w * scale), int(h * scale)), Image.BILINEAR)
+            else:
+                img_detect = img
+                scale = 1.0
+
+            boxes, _, landmarks = self.mtcnn.detect(img_detect, landmarks=True)
 
             if boxes is not None and len(boxes) > 0:
+                if scale != 1.0:
+                    boxes = boxes / scale
+                    if landmarks is not None:
+                        landmarks = landmarks / scale
                 face_img = None
 
                 # Landmark Alignment (Prioritas Utama)

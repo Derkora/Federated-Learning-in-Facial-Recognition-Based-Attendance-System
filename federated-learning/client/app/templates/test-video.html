@@ -54,6 +54,12 @@
 <div class="glass" style="padding: 2rem; margin-bottom: 2rem; text-align: left;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.8rem;">
         <h2 style="margin: 0; font-size: 1.6rem; font-weight: 800; background: linear-gradient(135deg, #a78bfa, #3b82f6); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Uji Model via File Video</h2>
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <select id="model-selector" class="glass" style="background: rgba(255,255,255,0.05); color: white; border: 1px solid rgba(255,255,255,0.2); padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; outline: none; cursor: pointer;">
+                <option value="" disabled selected>Memuat model...</option>
+            </select>
+            <span class="badge" id="model-badge" style="background: var(--accent); color: white; padding: 6px 12px; border-radius: 20px; font-size: 0.8rem; font-weight: bold;">{% if model_version == 'active' %}Model Aktif (Live){% else %}Model {{ model_version }}{% endif %}</span>
+        </div>
     </div>
     
     <!-- Tab Content 2: Streaming Video Server -->
@@ -1238,6 +1244,82 @@
         };
     }
 
+    // Mengambil daftar model dari server dan menampilkannya di dropdown
+    async function loadModelsList() {
+        try {
+            let currentDataset = '';
+            try {
+                const dsRes = await fetch('/api/datasets/list');
+                const dsData = await dsRes.json();
+                if (dsData.status === 'success' && dsData.current_dataset) {
+                    currentDataset = dsData.current_dataset;
+                }
+            } catch (dsErr) {
+                console.error("Gagal memuat dataset aktif:", dsErr);
+            }
+
+            const res = await fetch('/api/models/list');
+            const data = await res.json();
+            if (data.status === 'success') {
+                const selector = document.getElementById('model-selector');
+                selector.innerHTML = '';
+                
+                const filtered = data.models.filter(m => {
+                    return m.version === 'v0' || m.dataset === currentDataset;
+                });
+
+                filtered.forEach(model => {
+                    const opt = document.createElement('option');
+                    opt.value = model.version;
+                    opt.textContent = model.label;
+                    selector.appendChild(opt);
+                });
+                
+                // Pilih versi model aktif saat ini
+                const currentV = '{{ model_version }}';
+                for (let i = 0; i < selector.options.length; i++) {
+                    if (selector.options[i].value === currentV || selector.options[i].value === 'v' + currentV) {
+                        selector.selectedIndex = i;
+                        break;
+                    }
+                }
+            }
+        } catch (e) {
+            console.error("Gagal memuat daftar model:", e);
+        }
+    }
+    
+    // Ganti model ketika opsi dropdown diubah oleh pengguna
+    document.getElementById('model-selector').onchange = async (e) => {
+        const selectedVersion = e.target.value;
+        const alertDiv = document.createElement('div');
+        alertDiv.style.color = 'var(--accent)';
+        alertDiv.style.marginTop = '1rem';
+        alertDiv.textContent = `Mengunduh dan menerapkan model ${selectedVersion}...`;
+        document.querySelector('.glass').appendChild(alertDiv);
+        try {
+            const res = await fetch('/api/model/select', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ version: selectedVersion })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                alertDiv.style.color = '#10b981';
+                 alertDiv.textContent = `Model ${selectedVersion === 'active' ? 'Aktif (Live)' : selectedVersion} berhasil diterapkan!`;
+                 document.getElementById('model-badge').innerText = (selectedVersion === 'active') ? 'Model Aktif (Live)' : (selectedVersion.startsWith('v') ? `Model ${selectedVersion}` : `Model v${selectedVersion}`);
+                setTimeout(() => alertDiv.remove(), 3000);
+            } else {
+                alertDiv.style.color = '#ef4444';
+                alertDiv.textContent = `Gagal menerapkan model: ${data.message}`;
+            }
+        } catch (err) {
+            alertDiv.style.color = '#ef4444';
+            alertDiv.textContent = `Error saat memuat model: ${err}`;
+        }
+    };
+    
+    loadModelsList();
     // Load server videos initially on page load
     loadServerVideos();
 </script>

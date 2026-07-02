@@ -1,16 +1,22 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
-    <h1 style="color: var(--accent); margin: 0; font-size: 1.8rem;">Hasil Evaluasi Performa</h1>
-    <p style="color: var(--text-muted); margin-top: 0.5rem;">Analisis performa model global dan kontribusi tiap
-        terminal (Federated).</p>
+<div class="glass" style="padding: 1.5rem; margin-bottom: 2rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+    <div>
+        <h1 style="color: var(--accent); margin: 0; font-size: 1.8rem;">Hasil Evaluasi Performa</h1>
+        <p style="color: var(--text-muted); margin-top: 0.5rem; margin-bottom: 0;">Analisis performa model global dan kontribusi tiap terminal (Federated).</p>
+    </div>
+    <div style="display: flex; align-items: center; gap: 0.5rem; background: rgba(255,255,255,0.03); padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+        <label style="color: var(--text-muted); font-size: 0.9rem; font-weight: 500; margin: 0;">Pilih Sesi/Model:</label>
+        <select id="model-select" onchange="loadResults()" style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-size: 0.85rem; padding: 0.35rem 1.5rem 0.35rem 0.75rem; outline: none; cursor: pointer;">
+            <option value="">-- Memuat Sesi --</option>
+        </select>
+    </div>
 </div>
 
 <!-- Table 1: Global Server Aggregation -->
 <div class="glass" style="padding: 1.5rem; margin-bottom: 2rem;">
-    <div
-        style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
         <h2 style="color: var(--accent); margin: 0; font-size: 1.3rem;">1. Performa Agregasi Global</h2>
         <button class="btn btn-primary" onclick="copyTable('server-table')">Salin Tabel</button>
     </div>
@@ -26,98 +32,26 @@
                     <th>Durasi (detik)</th>
                 </tr>
             </thead>
-            <tbody>
-                {% if status.metrics.round_history %}
-                {% for r in status.metrics.round_history %}
+            <tbody id="server-body">
                 <tr>
-                    <td>{{ r.round }}</td>
-                    <td>{{ "%.4f"|format(r.server.loss)|replace('.', ',') if r.server.loss is defined and r.server.loss is not none else "-" }}</td>
-                    <td>{{ "%.2f"|format(r.server.accuracy * 100)|replace('.', ',') if r.server.accuracy is defined and r.server.accuracy is not none else "-" }}</td>
-                    <td>{{ "%.4f"|format(r.server.val_loss)|replace('.', ',') if r.server.val_loss is defined and r.server.val_loss is not none else "-" }}</td>
-                    <td>{{ "%.2f"|format(r.server.val_accuracy * 100)|replace('.', ',') if r.server.val_accuracy is defined and r.server.val_accuracy is not none else "-" }}</td>
-                    <td>{{ "%.2f"|format(r.server.total_round_time_s|float)|replace('.', ',') if r.server.total_round_time_s is defined and r.server.total_round_time_s is not none else "-" }}</td>
+                    <td colspan="6" style="text-align: center; padding: 2rem; color: var(--text-muted);">Pilih versi model untuk memuat data.</td>
                 </tr>
-
-
-                {% endfor %}
-                {% else %}
-                <tr>
-                    <td colspan="7" style="text-align: center;">Belum ada ronde pelatihan yang selesai.</td>
-                </tr>
-                {% endif %}
             </tbody>
         </table>
     </div>
 </div>
 
-<!-- Table 2: Dynamic Client Performance Tables -->
-{% for cid in status.metrics.unique_client_ids %}
+<!-- Dynamic Client Performance Tables Container -->
+<div id="clients-container"></div>
+
+<!-- Table: Economic & Operational Metrics - Preprocessing -->
 <div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <h2 style="color: var(--accent);">{{ loop.index + 1 }}. Performa Client: {{ cid }}</h2>
-        <button class="btn btn-primary" onclick="copyTable('table-{{ cid }}')">Salin Tabel</button>
-    </div>
-        <div style="overflow-x: auto;">
-            <table id="table-{{ cid }}" class="result-table">
-                <thead>
-                    <tr>
-                        <th>Ronde</th>
-                        <th>Samples</th>
-                        <th><i>Loss Lokal</i></th>
-                        <th><i>Accuracy Lokal (%)</i></th>
-                        <th><i>Validation Loss Lokal</i></th>
-                        <th><i>Validation Accuracy Lokal (%)</i></th>
-                        <th>Durasi (detik)</th>
-                        <th>Riwayat Epoch (Loss / Acc)</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for r in status.metrics.round_history %}
-                    {% if cid in r.clients %}
-                    {% set c = r.clients[cid] %}
-                    <tr>
-                        <td>{{ r.round }}</td>
-                        <td>{{ c.num_samples }}</td>
-                        <td>{{ "%.4f"|format(c.loss)|replace('.', ',') }}</td>
-                        <td>{{ "%.2f"|format(c.accuracy * 100)|replace('.', ',') }}</td>
-                        <td>{{ "%.4f"|format(c.val_loss)|replace('.', ',') if c.val_loss is defined and c.val_loss is not none else "-" }}</td>
-                        <td>{{ "%.2f"|format(c.val_accuracy * 100)|replace('.', ',') if c.val_accuracy is defined and c.val_accuracy is not none else "-" }}</td>
-                        <td>{{ "%.2f"|format(c.duration_s)|replace('.', ',') if c.duration_s is defined and c.duration_s is not none else "-" }}</td>
-
-
-                        <td style="font-size: 0.85rem; font-family: 'JetBrains Mono';">
-                            {% if c.epoch_history %}
-                            <div style="max-height: 100px; overflow-y: auto;">
-                                {% for eh in c.epoch_history %}
-                                {# Ensure eh is a dictionary before accessing properties #}
-                                {% if eh is mapping %}
-                                    E{{ eh.epoch }}: {{ "%.3f"|format(eh.loss)|replace('.', ',') if eh.loss is defined else "-" }} / {{ "%.1f"|format(eh.accuracy * 100)|replace('.', ',') if eh.accuracy is defined else "-" }}%<br>
-                                {% else %}
-                                    {{ eh }}<br>
-                                {% endif %}
-                                {% endfor %}
-                            </div>
-                            {% else %}
-                            -
-                            {% endif %}
-                        </td>
-                    </tr>
-                    {% endif %}
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
-{% endfor %}
-
-<!-- Table: Economic & Operational Metrics -->
-<div class="glass" style="padding: 2rem;">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <h2 style="color: var(--accent);">{{ status.metrics.unique_client_ids|length + 2 }}. Nilai Ekonomi & Operasional (Federated)</h2>
-        <button class="btn btn-primary" onclick="copyTable('economic-table')">Salin Tabel</button>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+        <h2 style="color: var(--accent); margin: 0; font-size: 1.3rem;">2a. Nilai Ekonomi & Operasional - Tahap Pra-proses (Preprocessing)</h2>
+        <button class="btn btn-primary" onclick="copyTable('economic-table-preprocess')">Salin Tabel</button>
     </div>
     <div style="overflow-x: auto;">
-        <table id="economic-table" class="result-table">
+        <table id="economic-table-preprocess" class="result-table">
             <thead>
                 <tr>
                     <th>Tipe Metrik</th>
@@ -126,22 +60,59 @@
                     <th>Biaya (Estimasi IDR)</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="economic-body-preprocess">
                 <tr>
-                    <td><b>Transmisi Data</b></td>
-                    <td><b>Estimasi Total Bandwidth (MB)</b></td>
-                    <td>{{ "%.2f"|format(status.metrics.backbone_sync_mb|float + status.metrics.registry_sync_mb|float)|replace('.', ',') }}</td>
-                    <td>Rp {{ "%.2f"|format(status.metrics.transmission_cost_idr|float)|replace('.', ',') }}</td>
+                    <td colspan="4" style="text-align: center; padding: 2rem; color: var(--text-muted);">Pilih versi model untuk memuat data.</td>
                 </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Table: Economic & Operational Metrics - Training -->
+<div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+        <h2 style="color: var(--accent); margin: 0; font-size: 1.3rem;">2b. Nilai Ekonomi & Operasional - Tahap Pelatihan (Training)</h2>
+        <button class="btn btn-primary" onclick="copyTable('economic-table-training')">Salin Tabel</button>
+    </div>
+    <div style="overflow-x: auto;">
+        <table id="economic-table-training" class="result-table">
+            <thead>
                 <tr>
-                    <td rowspan="2"><b>Konsumsi Daya</b></td>
-                    <td><b>Energi Terpakai (kWh)</b></td>
-                    <td>{{ "%.6f"|format(status.metrics.compute_energy_kwh|float)|replace('.', ',') }}</td>
-                    <td rowspan="2">Rp {{ "%.2f"|format(status.metrics.compute_cost_idr|float)|replace('.', ',') }}</td>
+                    <th>Tipe Metrik</th>
+                    <th>Sub-Metrik</th>
+                    <th>Nilai</th>
+                    <th>Biaya (Estimasi IDR)</th>
                 </tr>
+            </thead>
+            <tbody id="economic-body-training">
                 <tr>
-                    <td><b>Durasi Pelatihan (detik)</b></td>
-                    <td>{{ "%.2f"|format(status.metrics.total_round_time_s|float)|replace('.', ',') }}</td>
+                    <td colspan="4" style="text-align: center; padding: 2rem; color: var(--text-muted);">Pilih versi model untuk memuat data.</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Table: Economic & Operational Metrics - Combined -->
+<div class="glass" style="padding: 2rem; margin-bottom: 2rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+        <h2 style="color: var(--accent); margin: 0; font-size: 1.3rem;">2c. Nilai Ekonomi & Operasional - Gabungan (Combined)</h2>
+        <button class="btn btn-primary" onclick="copyTable('economic-table-combined')">Salin Tabel</button>
+    </div>
+    <div style="overflow-x: auto;">
+        <table id="economic-table-combined" class="result-table">
+            <thead>
+                <tr>
+                    <th>Tipe Metrik</th>
+                    <th>Sub-Metrik</th>
+                    <th>Nilai</th>
+                    <th>Biaya (Estimasi IDR)</th>
+                </tr>
+            </thead>
+            <tbody id="economic-body-combined">
+                <tr>
+                    <td colspan="4" style="text-align: center; padding: 2rem; color: var(--text-muted);">Pilih versi model untuk memuat data.</td>
                 </tr>
             </tbody>
         </table>
@@ -171,6 +142,7 @@
     .result-table th {
         background-color: white !important;
         font-weight: bold !important;
+        text-transform: none !important;
     }
 
     .result-table tr {
@@ -193,5 +165,287 @@
         }
         window.getSelection().removeAllRanges();
     }
+
+    async function loadModels() {
+        try {
+            const res = await fetch('/api/models/list');
+            const data = await res.json();
+            const select = document.getElementById('model-select');
+            
+            if (data.models && data.models.length > 0) {
+                select.innerHTML = '';
+                
+                // Urutkan model descending agar versi terbaru muncul paling atas
+                const sorted = data.models.sort((a,b) => {
+                    if (a.version === 'active') return -1;
+                    if (b.version === 'active') return 1;
+                    if (a.version === 'v0') return 1;
+                    if (b.version === 'v0') return -1;
+                    return b.version.localeCompare(a.version, undefined, {numeric: true});
+                });
+                
+                sorted.forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = m.version;
+                    opt.innerText = m.label;
+                    select.appendChild(opt);
+                });
+                
+                // Load results untuk model pertama (terbaru)
+                loadResults();
+            } else {
+                select.innerHTML = '<option value="">Tidak ada sesi FL tersedia</option>';
+            }
+        } catch(e) {
+            console.error("Gagal memuat daftar model:", e);
+        }
+    }
+
+    async function loadResults() {
+        const version = document.getElementById('model-select').value;
+        if (!version) return;
+        
+        try {
+            const res = await fetch(`/api/results?version=${version}`);
+            const metrics = await res.json();
+            
+            // Build Server Aggregation Table
+            const serverBody = document.getElementById('server-body');
+            const history = metrics.round_history || [];
+            
+            if (history.length > 0) {
+                let serverRows = '';
+                history.forEach(r => {
+                    const server = r.server || {};
+                    const duration = server.total_round_time_s !== undefined && server.total_round_time_s !== null ? parseFloat(server.total_round_time_s).toFixed(2).replace('.', ',') : '-';
+                    
+                    let loss = '-';
+                    let acc = '-';
+                    let valLoss = '-';
+                    let valAcc = '-';
+                    
+                    if (server.epoch_history && server.epoch_history.length > 0) {
+                        const lastEpoch = server.epoch_history[server.epoch_history.length - 1];
+                        loss = lastEpoch.loss !== undefined && lastEpoch.loss !== null ? parseFloat(lastEpoch.loss).toFixed(4).replace('.', ',') : '-';
+                        acc = lastEpoch.accuracy !== undefined && lastEpoch.accuracy !== null ? parseFloat(lastEpoch.accuracy * 100).toFixed(2).replace('.', ',') : '-';
+                        valLoss = lastEpoch.val_loss !== undefined && lastEpoch.val_loss !== null ? parseFloat(lastEpoch.val_loss).toFixed(4).replace('.', ',') : '-';
+                        valAcc = lastEpoch.val_accuracy !== undefined && lastEpoch.val_accuracy !== null ? parseFloat(lastEpoch.val_accuracy * 100).toFixed(2).replace('.', ',') : '-';
+                    } else {
+                        loss = server.loss !== undefined && server.loss !== null ? parseFloat(server.loss).toFixed(4).replace('.', ',') : '-';
+                        acc = server.accuracy !== undefined && server.accuracy !== null ? parseFloat(server.accuracy * 100).toFixed(2).replace('.', ',') : '-';
+                        valLoss = server.val_loss !== undefined && server.val_loss !== null ? parseFloat(server.val_loss).toFixed(4).replace('.', ',') : '-';
+                        valAcc = server.val_accuracy !== undefined && server.val_accuracy !== null ? parseFloat(server.val_accuracy * 100).toFixed(2).replace('.', ',') : '-';
+                    }
+                    
+                    serverRows += `
+                        <tr>
+                            <td>${r.round}</td>
+                            <td>${loss}</td>
+                            <td>${acc}</td>
+                            <td>${valLoss}</td>
+                            <td>${valAcc}</td>
+                            <td>${duration}</td>
+                        </tr>
+                    `;
+                });
+                serverBody.innerHTML = serverRows;
+            } else {
+                serverBody.innerHTML = '<tr><td colspan="6" style="text-align: center;">Belum ada ronde pelatihan yang selesai.</td></tr>';
+            }
+            
+            // Membuat Tabel Client Secara Dinamis
+            const clientsContainer = document.getElementById('clients-container');
+            clientsContainer.innerHTML = '';
+            
+            const uniqueClients = metrics.unique_client_ids || [];
+            uniqueClients.forEach((cid, index) => {
+                let clientRows = '';
+                history.forEach(r => {
+                    if (r.clients && r.clients[cid]) {
+                        const c = r.clients[cid];
+                        const duration = c.duration_s !== undefined && c.duration_s !== null ? parseFloat(c.duration_s).toFixed(2).replace('.', ',') : '-';
+                        
+                        if (c.epoch_history && c.epoch_history.length > 0) {
+                            const numEpochs = c.epoch_history.length;
+                            c.epoch_history.forEach((eh, epochIdx) => {
+                                const epochNum = eh.epoch || 1;
+                                const loss = eh.loss !== undefined && eh.loss !== null ? parseFloat(eh.loss).toFixed(4).replace('.', ',') : '-';
+                                const acc = eh.accuracy !== undefined && eh.accuracy !== null ? parseFloat(eh.accuracy * 100).toFixed(2).replace('.', ',') : '-';
+                                const valLoss = eh.val_loss !== undefined && eh.val_loss !== null ? parseFloat(eh.val_loss).toFixed(4).replace('.', ',') : '-';
+                                const valAcc = eh.val_accuracy !== undefined && eh.val_accuracy !== null ? parseFloat(eh.val_accuracy * 100).toFixed(2).replace('.', ',') : '-';
+                                
+                                let rondeCell = '';
+                                let durasiCell = '';
+                                if (epochIdx === 0) {
+                                    rondeCell = `<td rowspan="${numEpochs}" style="vertical-align: middle; text-align: left;">${r.round}</td>`;
+                                    durasiCell = `<td rowspan="${numEpochs}" style="vertical-align: middle; text-align: left;">${duration}</td>`;
+                                }
+                                
+                                clientRows += `
+                                    <tr>
+                                        ${rondeCell}
+                                        <td>${epochNum}</td>
+                                        <td>${loss}</td>
+                                        <td>${acc}</td>
+                                        <td>${valLoss}</td>
+                                        <td>${valAcc}</td>
+                                        ${durasiCell}
+                                    </tr>
+                                `;
+                            });
+                        } else {
+                            const valLoss = c.val_loss !== undefined && c.val_loss !== null ? parseFloat(c.val_loss).toFixed(4).replace('.', ',') : '-';
+                            const valAcc = c.val_accuracy !== undefined && c.val_accuracy !== null ? parseFloat(c.val_accuracy * 100).toFixed(2).replace('.', ',') : '-';
+                            clientRows += `
+                                <tr>
+                                    <td>${r.round}</td>
+                                    <td>-</td>
+                                    <td>${parseFloat(c.loss).toFixed(4).replace('.', ',')}</td>
+                                    <td>${parseFloat(c.accuracy * 100).toFixed(2).replace('.', ',')}</td>
+                                    <td>${valLoss}</td>
+                                    <td>${valAcc}</td>
+                                    <td>${duration}</td>
+                                </tr>
+                            `;
+                        }
+                    }
+                });
+
+                const clientCard = document.createElement('div');
+                clientCard.className = 'glass';
+                clientCard.style.padding = '2rem';
+                clientCard.style.marginBottom = '2rem';
+                clientCard.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                        <h2 style="color: var(--accent); margin: 0; font-size: 1.3rem;">${index + 2}. Performa Client: ${cid}</h2>
+                        <button class="btn btn-primary" onclick="copyTable('table-${cid}')">Salin Tabel</button>
+                    </div>
+                    <div style="overflow-x: auto;">
+                        <table id="table-${cid}" class="result-table">
+                            <thead>
+                                <tr>
+                                    <th>Ronde</th>
+                                    <th><i>Epoch</i></th>
+                                    <th><i>Loss Lokal</i></th>
+                                    <th><i>Accuracy Lokal (%)</i></th>
+                                    <th><i>Validation Loss Lokal</i></th>
+                                    <th><i>Validation Accuracy Lokal (%)</i></th>
+                                    <th>Durasi (detik)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${clientRows || '<tr><td colspan="7" style="text-align: center;">Tidak ada data kontribusi dari client ini.</td></tr>'}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+                clientsContainer.appendChild(clientCard);
+            });
+            
+            // Build Economic & Operational Tables (Preprocessing, Training, Combined)
+            const prep = metrics.preprocess || {};
+            const train = metrics.training || {};
+            const comb = metrics.combined || {};
+            
+            // Raw fallbacks
+            const rawBackboneSync = parseFloat(metrics.backbone_sync_mb || 0);
+            const rawRegistrySync = parseFloat(metrics.registry_sync_mb || 0);
+            const rawTotalBandwidth = rawBackboneSync + rawRegistrySync;
+            const rawTransmissionCost = parseFloat(metrics.transmission_cost_idr || 0);
+            const rawComputeEnergy = parseFloat(metrics.compute_energy_kwh || 0);
+            const rawComputeCost = parseFloat(metrics.compute_cost_idr || 0);
+            const rawDuration = parseFloat(metrics.total_round_time_s || 0);
+
+            // 1. Preprocessing
+            const prepUpload = prep.upload_volume_mb !== undefined ? parseFloat(prep.upload_volume_mb) : 0.0;
+            const prepDownload = prep.download_volume_mb !== undefined ? parseFloat(prep.download_volume_mb) : 0.0;
+            const prepBandwidth = prep.bandwidth_mb !== undefined ? parseFloat(prep.bandwidth_mb) : (prepUpload + prepDownload);
+            const prepTransCost = prep.transmission_cost_idr !== undefined ? parseFloat(prep.transmission_cost_idr) : (prepBandwidth * 3.25);
+            const prepEnergy = prep.compute_energy_kwh !== undefined ? parseFloat(prep.compute_energy_kwh) : 0.0;
+            const prepComputeCost = prep.compute_cost_idr !== undefined ? parseFloat(prep.compute_cost_idr) : (prepEnergy * 1444.7);
+            const prepDuration = prep.duration_s !== undefined ? parseFloat(prep.duration_s) : 0.0;
+
+            // 2. Training
+            const trainUpload = train.upload_volume_mb !== undefined ? parseFloat(train.upload_volume_mb) : ((rawBackboneSync / 2.0) + rawRegistrySync);
+            const trainDownload = train.download_volume_mb !== undefined ? parseFloat(train.download_volume_mb) : (rawBackboneSync / 2.0);
+            const trainBandwidth = train.bandwidth_mb !== undefined ? parseFloat(train.bandwidth_mb) : rawTotalBandwidth;
+            const trainTransCost = train.transmission_cost_idr !== undefined ? parseFloat(train.transmission_cost_idr) : rawTransmissionCost;
+            const trainEnergy = train.compute_energy_kwh !== undefined ? parseFloat(train.compute_energy_kwh) : rawComputeEnergy;
+            const trainComputeCost = train.compute_cost_idr !== undefined ? parseFloat(train.compute_cost_idr) : rawComputeCost;
+            const trainDuration = train.duration_s !== undefined ? parseFloat(train.duration_s) : rawDuration;
+
+            // 3. Combined
+            const combUpload = comb.upload_volume_mb !== undefined ? parseFloat(comb.upload_volume_mb) : (prepUpload + trainUpload);
+            const combDownload = comb.download_volume_mb !== undefined ? parseFloat(comb.download_volume_mb) : (prepDownload + trainDownload);
+            const combBandwidth = comb.bandwidth_mb !== undefined ? parseFloat(comb.bandwidth_mb) : (prepBandwidth + trainBandwidth);
+            const combTransCost = comb.transmission_cost_idr !== undefined ? parseFloat(comb.transmission_cost_idr) : (prepTransCost + trainTransCost);
+            const combEnergy = comb.compute_energy_kwh !== undefined ? parseFloat(comb.compute_energy_kwh) : (prepEnergy + trainEnergy);
+            const combComputeCost = comb.compute_cost_idr !== undefined ? parseFloat(comb.compute_cost_idr) : (prepComputeCost + trainComputeCost);
+            const combDuration = comb.duration_s !== undefined ? parseFloat(comb.duration_s) : (prepDuration + trainDuration);
+
+            // Render tables
+            document.getElementById('economic-body-preprocess').innerHTML = `
+                <tr>
+                    <td><b>Transmisi Data</b></td>
+                    <td><b>Estimasi Total Bandwidth (MB)</b></td>
+                    <td>${prepBandwidth.toFixed(2).replace('.', ',')}</td>
+                    <td>Rp ${prepTransCost.toFixed(2).replace('.', ',')}</td>
+                </tr>
+                <tr>
+                    <td rowspan="2"><b>Konsumsi Daya</b></td>
+                    <td><b>Energi Terpakai (kWh)</b></td>
+                    <td>${prepEnergy.toFixed(6).replace('.', ',')}</td>
+                    <td rowspan="2">Rp ${prepComputeCost.toFixed(2).replace('.', ',')}</td>
+                </tr>
+                <tr>
+                    <td><b>Durasi Pra-proses (detik)</b></td>
+                    <td>${prepDuration.toFixed(2).replace('.', ',')}</td>
+                </tr>
+            `;
+
+            document.getElementById('economic-body-training').innerHTML = `
+                <tr>
+                    <td><b>Transmisi Data</b></td>
+                    <td><b>Estimasi Total Bandwidth (MB)</b></td>
+                    <td>${trainBandwidth.toFixed(2).replace('.', ',')}</td>
+                    <td>Rp ${trainTransCost.toFixed(2).replace('.', ',')}</td>
+                </tr>
+                <tr>
+                    <td rowspan="2"><b>Konsumsi Daya</b></td>
+                    <td><b>Energi Terpakai (kWh)</b></td>
+                    <td>${trainEnergy.toFixed(6).replace('.', ',')}</td>
+                    <td rowspan="2">Rp ${trainComputeCost.toFixed(2).replace('.', ',')}</td>
+                </tr>
+                <tr>
+                    <td><b>Durasi Pelatihan (detik)</b></td>
+                    <td>${trainDuration.toFixed(2).replace('.', ',')}</td>
+                </tr>
+            `;
+
+            document.getElementById('economic-body-combined').innerHTML = `
+                <tr>
+                    <td><b>Transmisi Data</b></td>
+                    <td><b>Estimasi Total Bandwidth (MB)</b></td>
+                    <td>${combBandwidth.toFixed(2).replace('.', ',')}</td>
+                    <td>Rp ${combTransCost.toFixed(2).replace('.', ',')}</td>
+                </tr>
+                <tr>
+                    <td rowspan="2"><b>Konsumsi Daya</b></td>
+                    <td><b>Energi Terpakai (kWh)</b></td>
+                    <td>${combEnergy.toFixed(6).replace('.', ',')}</td>
+                    <td rowspan="2">Rp ${combComputeCost.toFixed(2).replace('.', ',')}</td>
+                </tr>
+                <tr>
+                    <td><b>Durasi Total (detik)</b></td>
+                    <td>${combDuration.toFixed(2).replace('.', ',')}</td>
+                </tr>
+            `;
+        } catch(e) {
+            console.error("Gagal memuat metrik model:", e);
+        }
+    }
+
+    // Initialize
+    loadModels();
 </script>
 {% endblock %}

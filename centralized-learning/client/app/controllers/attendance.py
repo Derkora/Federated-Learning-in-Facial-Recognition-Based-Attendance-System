@@ -227,12 +227,13 @@ class AttendanceController:
             
             # Mendapatkan versi model saat ini dari manager
             current_v = getattr(self.manager, 'current_model_version', 0)
+            current_v_clean = str(current_v).lstrip('v')
             
             # Inferensi murni PyTorch untuk optimasi edge
             backbone_start = time.perf_counter()
             try:
                 if current_v != self._last_version_loaded:
-                    self.logger.info(f"Menggunakan model PyTorch v{current_v}. Input: {face_tensor_ready.shape}")
+                    self.logger.info(f"Menggunakan model PyTorch v{current_v_clean}. Input: {face_tensor_ready.shape}")
                     self._last_version_loaded = current_v
                 
                 with torch.no_grad():
@@ -308,13 +309,13 @@ class AttendanceController:
             gc.collect()
 
             if max_sim > threshold:
-                self.logger.success(f"{best_match} terdeteksi (Sim: {max_sim:.4f}) [Model: v{current_v}]")
+                self.logger.success(f"{best_match} terdeteksi (Sim: {max_sim:.4f}) [Model: v{current_v_clean}]")
                 nrp_only = best_match.split("_")[0] if "_" in best_match else best_match
                 self.submit_attendance(nrp_only, max_sim, latency)
                 return nrp_only, max_sim, True # True = Terverifikasi
             else:
                 if max_sim > 0.1:
-                    self.logger.info(f"Model v{current_v} | Terbaik: {best_match} | Sim: {max_sim:.4f} | Thres: {threshold:.2f}")
+                    self.logger.info(f"Model v{current_v_clean} | Terbaik: {best_match} | Sim: {max_sim:.4f} | Thres: {threshold:.2f}")
                 return "Unknown", max_sim, False # False = Tidak Terverifikasi
         
         return "Unknown", 0, False

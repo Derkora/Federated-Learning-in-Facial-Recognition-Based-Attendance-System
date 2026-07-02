@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Edge Terminal | Attendance</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=1.0.2">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono&display=swap"
         rel="stylesheet">
 </head>
@@ -18,8 +18,10 @@
                 <div class="terminal-badge" style="margin: 0.3rem 0 0 0; padding: 0.2rem 0.8rem;">ID: {{ client_id }}</div>
             </div>
             <nav style="display: flex; gap: 0.8rem;">
-                <a href="/" id="nav-live" style="text-decoration: none; padding: 10px 18px; border-radius: 10px; color: var(--text-main); font-weight: 600; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.05); transition: all 0.2s; font-size: 0.9rem;" class="nav-btn">Live Camera</a>
-                <a href="/test-video" id="nav-video" style="text-decoration: none; padding: 10px 18px; border-radius: 10px; color: var(--text-muted); font-weight: 600; border: 1px solid rgba(255,255,255,0.05); background: rgba(255,255,255,0.02); transition: all 0.2s; font-size: 0.9rem;" class="nav-btn">Test Video File</a>
+                <a href="/" id="nav-live" class="nav-btn" style="text-decoration: none; padding: 10px 18px; border-radius: 10px; color: var(--text-muted); font-weight: 600; border: 1px solid rgba(255,255,255,0.05); background: rgba(255,255,255,0.02); transition: all 0.2s; font-size: 0.9rem;">Live Camera</a>
+                <a href="/test-video" id="nav-video" class="nav-btn" style="text-decoration: none; padding: 10px 18px; border-radius: 10px; color: var(--text-muted); font-weight: 600; border: 1px solid rgba(255,255,255,0.05); background: rgba(255,255,255,0.02); transition: all 0.2s; font-size: 0.9rem;">Test Video File</a>
+                <a href="/test-gambar" id="nav-image" class="nav-btn" style="text-decoration: none; padding: 10px 18px; border-radius: 10px; color: var(--text-muted); font-weight: 600; border: 1px solid rgba(255,255,255,0.05); background: rgba(255,255,255,0.02); transition: all 0.2s; font-size: 0.9rem;">Test Gambar</a>
+                <a href="/settings" id="nav-settings" class="nav-btn" style="text-decoration: none; padding: 10px 18px; border-radius: 10px; color: var(--text-muted); font-weight: 600; border: 1px solid rgba(255,255,255,0.05); background: rgba(255,255,255,0.02); transition: all 0.2s; font-size: 0.9rem;">Pengaturan</a>
             </nav>
         </header>
 
@@ -27,6 +29,31 @@
             {% block content %}{% endblock %}
         </main>
     </div>
+    
+    <script>
+        const path = window.location.pathname;
+        if (path === '/') {
+            const active = document.getElementById('nav-live');
+            active.style.color = 'var(--text-main)';
+            active.style.background = 'rgba(255,255,255,0.08)';
+            active.style.borderColor = 'rgba(255,255,255,0.12)';
+        } else if (path === '/test-video') {
+            const active = document.getElementById('nav-video');
+            active.style.color = 'var(--text-main)';
+            active.style.background = 'rgba(255,255,255,0.08)';
+            active.style.borderColor = 'rgba(255,255,255,0.12)';
+        } else if (path === '/test-gambar') {
+            const active = document.getElementById('nav-image');
+            active.style.color = 'var(--text-main)';
+            active.style.background = 'rgba(255,255,255,0.08)';
+            active.style.borderColor = 'rgba(255,255,255,0.12)';
+        } else if (path === '/settings') {
+            const active = document.getElementById('nav-settings');
+            active.style.color = 'var(--text-main)';
+            active.style.background = 'rgba(255,255,255,0.08)';
+            active.style.borderColor = 'rgba(255,255,255,0.12)';
+        }
+    </script>
 </body>
 
 </html>

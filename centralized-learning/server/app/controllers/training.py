@@ -124,7 +124,7 @@ class TrainingController:
             "images": last_img_count
         }
 
-    def workflow_preprocess(self, wait_timeout=3600, expected_clients=None):
+    def workflow_preprocess(self, wait_timeout=3600, expected_clients=None, dataset="students"):
         # Tahap Seleksi Laplacian (Ketajaman) dan Penyelarasan Landmark Wajah
         tracker = None
         energy_kwh = 0.0
@@ -135,21 +135,37 @@ class TrainingController:
             except: pass
 
         try:
-            if not os.path.exists(UPLOAD_DIR):
-                return {"status": "error", "message": "Dataset tidak ditemukan. Silakan impor data terlebih dahulu."}
+            upload_dir = UPLOAD_DIR
+            processed_dir = PROCESSED_DATA
             
-            folders = [f for f in os.listdir(UPLOAD_DIR) if os.path.isdir(os.path.join(UPLOAD_DIR, f))]
+            if dataset and dataset != "students":
+                opt_datasets_path = f"/app/datasets/{dataset}/students"
+                if os.path.exists(opt_datasets_path):
+                    upload_dir = opt_datasets_path
+                else:
+                    alt_path = os.path.join(os.path.dirname(UPLOAD_DIR), f"students_{dataset}")
+                    if os.path.exists(alt_path):
+                        upload_dir = alt_path
+                    else:
+                        upload_dir = os.path.join(UPLOAD_DIR, dataset)
+                
+                processed_dir = os.path.join(os.path.dirname(PROCESSED_DATA), f"datasets_processed_{dataset}")
+
+            if not os.path.exists(upload_dir):
+                return {"status": "error", "message": f"Dataset {dataset} tidak ditemukan di {upload_dir}."}
+            
+            folders = [f for f in os.listdir(upload_dir) if os.path.isdir(os.path.join(upload_dir, f))]
             total_folders = len(folders)
             
             if total_folders == 0:
-                return {"status": "error", "message": "Tidak ada data mahasiswa untuk diproses."}
+                return {"status": "error", "message": f"Tidak ada data mahasiswa di {upload_dir} untuk diproses."}
 
-            self.logger.info(f"Memulai tahap preprocessing wajah untuk {total_folders} mahasiswa...")
+            self.logger.info(f"Memulai tahap preprocessing wajah untuk {total_folders} mahasiswa di {dataset}...")
             
             for i, nrp_folder in enumerate(folders):
                 self.logger.info(f"[{i+1}/{total_folders}] Memproses: {nrp_folder}...")
-                src = os.path.join(UPLOAD_DIR, nrp_folder)
-                dst = os.path.join(PROCESSED_DATA, nrp_folder)
+                src = os.path.join(upload_dir, nrp_folder)
+                dst = os.path.join(processed_dir, nrp_folder)
                 
                 # Paksa proses ulang agar pengguna dapat memantau log Laplace Variance
                 tmp_dst = dst + ".tmp"
@@ -178,17 +194,21 @@ class TrainingController:
                     cl_manager.update_metrics({"compute_energy_kwh": cl_manager.metrics.get("compute_energy_kwh", 0) + energy_kwh})
                 except: pass
 
-            self.logger.success("Preprocessing selesai. Seluruh wajah berhasil diselaraskan (Aligned).")
+            self.logger.success(f"Preprocessing {dataset} selesai. Seluruh wajah berhasil diselaraskan (Aligned).")
             return {"status": "success", "message": "Seleksi Laplacian dan Landmark Alignment selesai."}
         except Exception as e:
             if tracker: tracker.stop()
-            self.logger.error(f"Gagal melakukan preprocessing data wajah: {e}")
+            self.logger.error(f"Gagal melakukan preprocessing data wajah {dataset}: {e}")
             return {"status": "error", "message": str(e)}
 
-    def sync_nrp_from_processed(self, dbs):
+    def sync_nrp_from_processed(self, dbs, dataset="students"):
         # Sinkronisasi ulang tabel UserGlobal dari processed data untuk keteraturan NRP.
-        if not os.path.exists(PROCESSED_DATA): return
-        folders = sorted([f for f in os.listdir(PROCESSED_DATA) if os.path.isdir(os.path.join(PROCESSED_DATA, f))])
+        processed_dir = PROCESSED_DATA
+        if dataset and dataset != "students":
+            processed_dir = os.path.join(os.path.dirname(PROCESSED_DATA), f"datasets_processed_{dataset}")
+
+        if not os.path.exists(processed_dir): return
+        folders = sorted([f for f in os.listdir(processed_dir) if os.path.isdir(os.path.join(processed_dir, f))])
         for folder in folders:
             parts = folder.split("_", 1)
             nrp = parts[0].strip()
@@ -198,7 +218,7 @@ class TrainingController:
             if not existing:
                 dbs.add(models.UserGlobal(name=name, nrp=nrp))
         dbs.commit()
-        self.logger.success(f"Sinkronisasi {len(folders)} identitas NRP dari folder processed berhasil.")
+        self.logger.success(f"Sinkronisasi {len(folders)} identitas NRP dari folder processed {dataset} berhasil.")
 
 
     def _get_lr(self, epoch, total_epochs=None):
@@ -212,7 +232,7 @@ class TrainingController:
         lr = min_lr + 0.5 * (initial_lr - min_lr) * (1 + math.cos(math.pi * epoch / total_epochs))
         return lr
 
-    def train_model(self, epochs=None):
+    def train_model(self, epochs=None, dataset="students", dbs=None, model_version_id=None):
         if epochs is None:
             epochs = cl_manager.default_epochs
             
@@ -230,6 +250,13 @@ class TrainingController:
             except: pass
 
         try:
+            processed_dir = PROCESSED_DATA
+            if dataset and dataset != "students":
+                processed_dir = os.path.join(os.path.dirname(PROCESSED_DATA), f"datasets_processed_{dataset}")
+
+            if not os.path.exists(processed_dir):
+                return {"status": "error", "message": f"Dataset terproses {dataset} tidak ditemukan di {processed_dir}. Harap pra-proses terlebih dahulu."}
+
             train_transform = transforms.Compose([
                 transforms.Resize((112, 96), interpolation=InterpolationMode.BILINEAR),
                 transforms.RandomHorizontalFlip(),
@@ -252,8 +279,8 @@ class TrainingController:
             ])
             
             # Buat dua instance ImageFolder agar transformasinya terdekopel
-            train_dataset_full = datasets.ImageFolder(PROCESSED_DATA, transform=train_transform)
-            val_dataset_full = datasets.ImageFolder(PROCESSED_DATA, transform=val_transform)
+            train_dataset_full = datasets.ImageFolder(processed_dir, transform=train_transform)
+            val_dataset_full = datasets.ImageFolder(processed_dir, transform=val_transform)
             num_classes = len(train_dataset_full.classes)
             
             # Lakukan pemisahan indeks secara deterministik
@@ -374,16 +401,22 @@ class TrainingController:
             if os.path.exists(checkpoint_path):
                 try:
                     ckpt = torch.load(checkpoint_path, map_location=DEVICE)
-                    model.load_state_dict(ckpt['model_state_dict'])
-                    metric_fc.load_state_dict(ckpt['metric_fc_state_dict'])
-                    if 'ema_model_state_dict' in ckpt:
-                        ema_model.load_state_dict(ckpt['ema_model_state_dict'])
-                    start_epoch = ckpt.get('epoch', -1) + 1
-                    epoch_history = ckpt.get('history', [])
-                    if start_epoch < epochs:
-                        self.logger.info(f"Melanjutkan pelatihan CL dari Epoch {start_epoch+1}")
+                    if ckpt.get('dataset') != dataset or ckpt.get('total_epochs') != epochs:
+                        self.logger.info("Konfigurasi pelatihan CL berubah. Menghapus checkpoint lama...")
+                        try:
+                            os.remove(checkpoint_path)
+                        except: pass
                     else:
-                        self.logger.info("Checkpoint menunjukkan pelatihan terpusat telah selesai.")
+                        model.load_state_dict(ckpt['model_state_dict'])
+                        metric_fc.load_state_dict(ckpt['metric_fc_state_dict'])
+                        if 'ema_model_state_dict' in ckpt:
+                            ema_model.load_state_dict(ckpt['ema_model_state_dict'])
+                        start_epoch = ckpt.get('epoch', -1) + 1
+                        epoch_history = ckpt.get('history', [])
+                        if start_epoch < epochs:
+                            self.logger.info(f"Melanjutkan pelatihan CL dari Epoch {start_epoch+1}")
+                        else:
+                            self.logger.info("Checkpoint menunjukkan pelatihan terpusat telah selesai.")
                 except Exception as e:
                     self.logger.warn(f"Gagal memuat checkpoint CL: {e}")
 
@@ -412,13 +445,13 @@ class TrainingController:
                         mu = 0.05 # Nilai parameter penalti disamakan persis dengan FL
                         for name, param in model.named_parameters():
                             if name in pretrained_ref:
-                                l2_sp_loss += (mu / 2) * torch.norm(param - pretrained_ref[name])**2
+                                l2_sp_loss += (mu / 2) * torch.sum((param - pretrained_ref[name])**2)
                                 
                     loss = ce_loss + l2_sp_loss
                     loss.backward()
                     optimizer.step()
                     
-                    total_loss += loss.item()
+                    total_loss += ce_loss.item()
                     
                     # Pembaruan Rerata Konsensus Bobot secara Temporal (EMA)
                     # Meniru proses consensus averaging di FL untuk menstabilkan konvergensi domain
@@ -435,10 +468,7 @@ class TrainingController:
                         total += label.size(0)
                         correct += (pred == label).sum().item()
                     
-                    # Log progres per batch data latih
-                    if (b + 1) % 10 == 0 or (b + 1) == len(train_loader):
-                        batch_acc = round(100 * correct / total, 2)
-                        self.logger._log("TRAIN", f"  Epoch {epoch+1}: Batch {b+1}/{len(train_loader)} - Loss: {loss.item():.4f} - Akurasi: {batch_acc}%")
+
                 
                 # Jalankan Evaluasi Validasi Internal menggunakan model EMA (model averaged yang stabil)
                 ema_model.eval()
@@ -488,6 +518,26 @@ class TrainingController:
                     "epoch_history": [current_epoch_data]
                 })
 
+                # Simpan ronde pelatihan langsung ke database secara real-time
+                if dbs is not None:
+                    try:
+                        cl_manager.save_training_round(
+                            dbs,
+                            epoch + 1,
+                            avg_loss,
+                            epoch_acc,
+                            val_loss=val_avg_loss,
+                            val_accuracy=val_acc,
+                            duration=epoch_duration,
+                            energy=0.0,
+                            upload=0.0,
+                            download=0.0,
+                            start_time=now_wib,
+                            model_version_id=model_version_id
+                        )
+                    except Exception as db_err:
+                        self.logger.error(f"Gagal menyimpan TrainingRound real-time: {db_err}")
+
                 msg = f"Epoch {epoch+1}/{epochs} | Akurasi: {epoch_acc/100:.4f} | Loss: {avg_loss:.4f} | Val Akurasi (EMA): {val_acc/100:.4f} | Val Loss (EMA): {val_avg_loss:.4f}"
                 self.logger.success(msg)
 
@@ -501,7 +551,9 @@ class TrainingController:
                         'model_state_dict': model.state_dict(),
                         'ema_model_state_dict': ema_model.state_dict(),
                         'metric_fc_state_dict': metric_fc.state_dict(),
-                        'history': epoch_history
+                        'history': epoch_history,
+                        'dataset': dataset,
+                        'total_epochs': epochs
                     }, tmp_ckpt_path)
                     os.replace(tmp_ckpt_path, checkpoint_path)
                 except: pass
@@ -534,10 +586,14 @@ class TrainingController:
             self.logger.error(f"Pelatihan model terpusat gagal: {e}")
             return {"status": "error", "message": str(e)}
 
-    def generate_reference_and_eval(self, dbs=None):
+    def generate_reference_and_eval(self, dbs=None, dataset="students"):
         # Tahap Pembuatan Basis Data Referensi Wajah dan Evaluasi Transmisi
         try:
-            self.logger.info("Membuat basis data referensi identitas mahasiswa...")
+            processed_dir = PROCESSED_DATA
+            if dataset and dataset != "students":
+                processed_dir = os.path.join(os.path.dirname(PROCESSED_DATA), f"datasets_processed_{dataset}")
+
+            self.logger.info(f"Membuat basis data referensi identitas mahasiswa untuk dataset {dataset}...")
             
             # Instansiasi model murni evaluasi
             model = MobileFaceNet().to(DEVICE)
@@ -554,54 +610,55 @@ class TrainingController:
             model.eval()
             
             ref_db = {}
-            with torch.no_grad():
-                for nrp in os.listdir(PROCESSED_DATA):
-                    p = os.path.join(PROCESSED_DATA, nrp)
-                    if not os.path.isdir(p): continue
-                    all_files = sorted(os.listdir(p))
-                    train_files = all_files[:50]
-                    
-                    tensors = []
-                    for f in train_files:
-                        try:
-                            img_p = Image.open(os.path.join(p, f)).convert('RGB')
-                            if img_p.size != (96, 112):
-                                img_p = img_p.resize((96, 112), Image.BILINEAR)
-                            tensors.append(face_handler.transform(img_p))
-                        except: continue
+            if os.path.exists(processed_dir):
+                with torch.no_grad():
+                    for nrp in os.listdir(processed_dir):
+                        p = os.path.join(processed_dir, nrp)
+                        if not os.path.isdir(p): continue
+                        all_files = sorted(os.listdir(p))
+                        train_files = all_files[:50]
                         
-                    if tensors:
-                        # Batch forward pass for optimal performance
-                        batch_tensor = torch.stack(tensors).to(DEVICE)
-                        batch_flipped = torch.flip(batch_tensor, [3])
-                        with torch.no_grad():
-                            emb_orig = model(batch_tensor)
-                            emb_flip = model(batch_flipped)
-                            combined = F.normalize(emb_orig + emb_flip, p=2, dim=1)
-                            centroid = torch.mean(combined, dim=0)
-                            centroid = F.normalize(centroid.unsqueeze(0), p=2, dim=1)
-                            ref_db[nrp] = centroid.cpu()
+                        tensors = []
+                        for f in train_files:
+                            try:
+                                img_p = Image.open(os.path.join(p, f)).convert('RGB')
+                                if img_p.size != (96, 112):
+                                    img_p = img_p.resize((96, 112), Image.BILINEAR)
+                                tensors.append(face_handler.transform(img_p))
+                            except: continue
+                            
+                        if tensors:
+                            # Batch forward pass for optimal performance
+                            batch_tensor = torch.stack(tensors).to(DEVICE)
+                            batch_flipped = torch.flip(batch_tensor, [3])
+                            with torch.no_grad():
+                                emb_orig = model(batch_tensor)
+                                emb_flip = model(batch_flipped)
+                                combined = F.normalize(emb_orig + emb_flip, p=2, dim=1)
+                                centroid = torch.mean(combined, dim=0)
+                                centroid = F.normalize(centroid.unsqueeze(0), p=2, dim=1)
+                                ref_db[nrp] = centroid.cpu()
 
-                # Jalankan uji mandiri konsistensi model server
-                self.logger.info("Menjalankan uji mandiri integritas embedding...")
-                test_results = []
-                for nrp, centroid in ref_db.items():
-                    p = os.path.join(PROCESSED_DATA, nrp)
-                    if not os.path.isdir(p): continue
+                    # Jalankan uji mandiri konsistensi model server
+                    self.logger.info("Menjalankan uji mandiri integritas embedding...")
+                    test_results = []
+                    for nrp, centroid in ref_db.items():
+                        p = os.path.join(processed_dir, nrp)
+                        if not os.path.isdir(p): continue
+                        
+                        files = sorted(os.listdir(p))
+                        if not files: continue
+                        
+                        first_img = files[0]
+                        img_p = Image.open(os.path.join(p, first_img)).convert('RGB')
+                        test_emb = face_handler.get_embedding(model, img_p).cpu()
+                        
+                        sim = torch.sum(test_emb.view(-1) * centroid.view(-1)).item()
+                        test_results.append(sim)
+                        self.logger.info(f"  > [UJI] nrp: {nrp} | Similarity: {sim:.4f}")
                     
-                    files = sorted(os.listdir(p))
-                    if not files: continue
-                    
-                    first_img = files[0]
-                    img_p = Image.open(os.path.join(p, first_img)).convert('RGB')
-                    test_emb = face_handler.get_embedding(model, img_p).cpu()
-                    
-                    sim = torch.sum(test_emb.view(-1) * centroid.view(-1)).item()
-                    test_results.append(sim)
-                    self.logger.info(f"  > [UJI] nrp: {nrp} | Similarity: {sim:.4f}")
-                
-                avg_self_sim = sum(test_results) / len(test_results) if test_results else 0
-                self.logger.success(f"Uji mandiri selesai. Rata-rata Similarity Wajah: {avg_self_sim:.4f}")
+                    avg_self_sim = sum(test_results) / len(test_results) if test_results else 0
+                    self.logger.success(f"Uji mandiri selesai. Rata-rata Similarity Wajah: {avg_self_sim:.4f}")
             
             self.logger.success(f"Registri identitas ({len(ref_db)} identitas) berhasil disimpan.")
             ref_path = f"{MODEL_DIR}/reference_embeddings.pth"
@@ -609,17 +666,21 @@ class TrainingController:
             torch.save(ref_db, tmp_ref_path)
             os.replace(tmp_ref_path, ref_path)
 
-            # Catat dan simpan versi model baru ke basis data server
+            # Catat dan simpan versi model baru ke basis data server jika belum dibuat saat training
             if dbs:
                 try:
-                    now_wib = datetime.now(timezone(timedelta(hours=7)))
-                    new_v = models.ModelVersion(notes=f"Dibuat pada {now_wib.strftime('%Y-%m-%d %H:%M:%S')}")
-                    dbs.add(new_v)
-                    dbs.commit()
-                    dbs.refresh(new_v)
-                    self.logger.success(f"Versi model v{new_v.version_id} berhasil disimpan ke database.")
+                    version_id = getattr(cl_manager, "current_db_version_id", None)
+                    if version_id is None:
+                        now_wib = datetime.now(timezone(timedelta(hours=7)))
+                        new_v = models.ModelVersion(notes=f"Dataset: {dataset} | Dibuat pada {now_wib.strftime('%Y-%m-%d %H:%M:%S')}")
+                        dbs.add(new_v)
+                        dbs.commit()
+                        dbs.refresh(new_v)
+                        cl_manager.current_db_version_id = new_v.version_id
+                    else:
+                        pass
                 except Exception as e:
-                    self.logger.error(f"Gagal menyimpan versi model baru ke database: {e}")
+                    self.logger.error(f"Gagal menyimpan/memperbarui versi model di database: {e}")
                     dbs.rollback()
             
             # Hitung total volume transmisi download klien

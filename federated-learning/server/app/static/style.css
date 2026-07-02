@@ -243,3 +243,8 @@ td {
     background: var(--primary);
     border-radius: 10px;
 }
+
+select option {
+    background-color: #0f172a !important;
+    color: #f8fafc !important;
+}

@@ -60,7 +60,7 @@ class FaceRecognitionClient(fl.client.NumPyClient):
             self.fl_manager._ensure_models_loaded()
             
         rnd = config.get("round", 0)
-        self.logger.info(f"FL Fit [Ronde {rnd}]: Menerima {len(parameters)} parameter global...")
+        self.logger.info(f"FL Fit [Ronde {rnd}]: Menerima {len(parameters)} parameter global... Config: {config}")
         
         # Sinkronisasi pemetaan label kelas mahasiswa terpadu
         if not self.label_map and "label_map" in config:
@@ -115,6 +115,14 @@ class FaceRecognitionClient(fl.client.NumPyClient):
                 tracker.start()
             except: pass
 
+        session_id = config.get("session_id", "")
+        active_dataset = config.get("dataset", "students")
+        if active_dataset == "students":
+            processed_path = os.path.join(self.data_path, "processed")
+        else:
+            processed_path = os.path.join(self.data_path, f"processed_{active_dataset}")
+        self.trainer.data_path = processed_path
+
         # Jalankan proses pelatihan PyTorch (Local Training)
         try:
             if hasattr(self, 'fl_manager'):
@@ -127,13 +135,18 @@ class FaceRecognitionClient(fl.client.NumPyClient):
                 global_embeddings=global_embs,
                 label_map=self.label_map,
                 mu=mu, lam=lam,
+                session_id=session_id,
                 status_callback=lambda e, total_e, l, a: self._update_training_status(rnd, e, total_e, l, a, config.get("total_rounds", 10))
             )
 
             status = "Success"
             # Hapus file checkpoint lama karena latihan ronde ini berhasil selesai
             try:
-                ckpt_path = os.path.join(self.data_path, "models", "training_checkpoint.pth")
+                if session_id:
+                    checkpoint_name = f"training_checkpoint_{session_id}_round{rnd}.pth"
+                else:
+                    checkpoint_name = f"training_checkpoint_round{rnd}.pth"
+                ckpt_path = os.path.join(self.data_path, "models", checkpoint_name)
                 if os.path.exists(ckpt_path):
                     os.remove(ckpt_path)
                     self.logger.success("Pembersihan checkpoint berhasil.")
@@ -204,6 +217,14 @@ class FaceRecognitionClient(fl.client.NumPyClient):
         if hasattr(self, 'fl_manager'):
             self.fl_manager._ensure_models_loaded()
             
+        active_dataset = config.get("dataset")
+        if active_dataset:
+            if active_dataset == "students":
+                processed_path = os.path.join(self.data_path, "processed")
+            else:
+                processed_path = os.path.join(self.data_path, f"processed_{active_dataset}")
+            self.trainer.data_path = processed_path
+
         # Terapkan bobot model global terbaru ke backbone lokal
         try:
             self.trainer.set_backbone_parameters(parameters, personalized=True)

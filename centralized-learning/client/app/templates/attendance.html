@@ -5,7 +5,15 @@
     <div
         style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.8rem;">
         <h2 style="margin: 0; font-size: 1.4rem;">Edge Client: {{ client_id }}</h2>
-        <span class="badge" id="model-badge">Model v{{ model_version }}</span>
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <select id="dataset-selector" class="glass" style="background: rgba(255,255,255,0.05); color: white; border: 1px solid rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 6px; font-size: 0.85rem; outline: none; cursor: pointer;">
+                <option value="" disabled selected>Memuat dataset...</option>
+            </select>
+            <select id="model-selector" class="glass" style="background: rgba(255,255,255,0.05); color: white; border: 1px solid rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 6px; font-size: 0.85rem; outline: none; cursor: pointer;">
+                <option value="" disabled selected>Memuat model...</option>
+            </select>
+            <span class="badge" id="model-badge">{% if model_version == 'active' %}Model Aktif (Live){% else %}Model {{ model_version }}{% endif %}</span>
+        </div>
     </div>
     <div
         style="position: relative; overflow: hidden; border-radius: 12px; background: #000; box-shadow: 0 10px 25px rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center;">
@@ -109,7 +117,8 @@
 
     function updateResultUI(data) {
         if (data.model_version !== undefined) {
-            document.getElementById('model-badge').innerText = `Model v${data.model_version}`;
+            const v = data.model_version;
+            document.getElementById('model-badge').innerText = (v === 'active') ? 'Model Aktif (Live)' : (v.startsWith('v') ? `Model ${v}` : `Model v${v}`);
         }
 
         if (data.matched && data.matched !== "Standby") {
@@ -240,6 +249,132 @@
             console.error("Gagal sinkronisasi status awal:", e);
         }
     }
+    let cachedModels = [];
+
+    // Mengambil daftar model dari server dan menampilkannya di dropdown
+    async function loadModelsList() {
+        try {
+            const res = await fetch('/api/models/list');
+            const data = await res.json();
+            if (data.status === 'success') {
+                cachedModels = data.models;
+                renderFilteredModels();
+            }
+        } catch (e) {
+            console.error("Gagal memuat daftar model:", e);
+        }
+    }
+
+    function renderFilteredModels() {
+        const datasetSelector = document.getElementById('dataset-selector');
+        const modelSelector = document.getElementById('model-selector');
+        if (!modelSelector) return;
+        
+        const selectedDataset = datasetSelector ? datasetSelector.value : '';
+        modelSelector.innerHTML = '';
+        
+        // Filter model berdasarkan dataset terpilih
+        const filtered = cachedModels.filter(m => {
+            return m.version === 'v0' || m.dataset === selectedDataset;
+        });
+        
+        filtered.forEach(model => {
+            const opt = document.createElement('option');
+            opt.value = model.version;
+            opt.textContent = model.label;
+            modelSelector.appendChild(opt);
+        });
+        
+        // Pilih versi model aktif saat ini
+        const currentV = '{{ model_version }}';
+        let matchedIndex = 0;
+        for (let i = 0; i < modelSelector.options.length; i++) {
+            if (modelSelector.options[i].value === currentV || modelSelector.options[i].value === 'v' + currentV) {
+                matchedIndex = i;
+                break;
+            }
+        }
+        if (modelSelector.options.length > 0) {
+            modelSelector.selectedIndex = matchedIndex;
+        }
+    }
+    
+    // Ganti model ketika opsi dropdown diubah oleh pengguna
+    document.getElementById('model-selector').onchange = async (e) => {
+        const selectedVersion = e.target.value;
+        statusCard.innerHTML = `<span style="color: var(--accent);">Mengunduh dan menerapkan model ${selectedVersion}...</span>`;
+        statusCard.style.display = 'block';
+        try {
+            const res = await fetch('/api/model/select', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ version: selectedVersion })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                statusCard.innerHTML = `<span style="color: #10b981;">Model ${selectedVersion === 'active' ? 'Aktif (Live)' : selectedVersion} berhasil diterapkan!</span>`;
+                document.getElementById('model-badge').innerText = (selectedVersion === 'active') ? 'Model Aktif (Live)' : (selectedVersion.startsWith('v') ? `Model ${selectedVersion}` : `Model v${selectedVersion}`);
+            } else {
+                statusCard.innerHTML = `<span style="color: #ef4444;">Gagal menerapkan model: ${data.message}</span>`;
+            }
+        } catch (err) {
+            statusCard.innerHTML = `<span style="color: #ef4444;">Error saat memuat model: ${err}</span>`;
+        }
+    };
+
+    // Mengambil daftar dataset dari client API dan menampilkannya di dropdown
+    async function loadDatasetsList() {
+        try {
+            const res = await fetch('/api/datasets/list');
+            const data = await res.json();
+            if (data.status === 'success') {
+                const selector = document.getElementById('dataset-selector');
+                selector.innerHTML = '';
+                
+                Object.keys(data.datasets).forEach(ds => {
+                    const opt = document.createElement('option');
+                    opt.value = ds;
+                    opt.textContent = `Dataset: ${ds}`;
+                    selector.appendChild(opt);
+                });
+                
+                // Pilih dataset aktif saat ini
+                if (data.current_dataset) {
+                    selector.value = data.current_dataset;
+                }
+                
+                renderFilteredModels();
+            }
+        } catch (e) {
+            console.error("Gagal memuat daftar dataset:", e);
+        }
+    }
+
+    // Ganti dataset ketika opsi dropdown diubah oleh pengguna
+    document.getElementById('dataset-selector').onchange = async (e) => {
+        const selectedDataset = e.target.value;
+        statusCard.innerHTML = `<span style="color: var(--accent);">Mengubah rute dataset aktif ke ${selectedDataset}...</span>`;
+        statusCard.style.display = 'block';
+        try {
+            const res = await fetch('/api/dataset/select', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ dataset: selectedDataset })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                statusCard.innerHTML = `<span style="color: #10b981;">Dataset aktif dialihkan ke: ${selectedDataset}</span>`;
+                renderFilteredModels();
+            } else {
+                statusCard.innerHTML = `<span style="color: #ef4444;">Gagal mengubah dataset: ${data.message}</span>`;
+            }
+        } catch (err) {
+            statusCard.innerHTML = `<span style="color: #ef4444;">Error saat mengubah dataset: ${err}</span>`;
+        }
+    };
+    
+    loadDatasetsList();
+    loadModelsList();
     syncInitialState();
 
     setInterval(pollServerStatus, 1000);

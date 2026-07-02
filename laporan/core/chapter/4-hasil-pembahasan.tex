@@ -9,7 +9,40 @@ Pada penelitian ini, analisis performa sistem dibagi menjadi dua tahapan utama, 
 \subsection{Skenario Eksperimen Pelatihan Model}
 \label{subsec:skenario-pelatihan}
 
-Skenario eksperimen pelatihan dilakukan untuk membandingkan proses pembentukan model serta beban ekosistem komputasi antara dua metode pembelajaran yang berbeda, dengan rincian sebagai berikut:
+Skenario eksperimen pelatihan dilakukan untuk membandingkan proses pembentukan model serta beban ekosistem komputasi antara dua metode pembelajaran yang berbeda, dengan rincian parameter pelatihan yang dirangkum pada Tabel \ref{tab:perbandingan-parameter-pelatihan}.
+
+\begin{table}[H]
+  \centering
+  \footnotesize
+  \caption{Perbandingan Parameter Pelatihan \textit{Centralized Learning} dan \textit{Federated Learning}}
+  \label{tab:perbandingan-parameter-pelatihan}
+  \begin{tabular}{|p{3.2cm}|p{5.8cm}|p{5.8cm}|}
+    \hline
+    \textbf{Parameter} & \textbf{\textit{Centralized Learning}} & \textbf{\textit{Federated Learning}} \\
+    \hline
+    Arsitektur \textit{Backbone} & \textit{MobileFaceNet} (128-dim) & \textit{MobileFaceNet} (128-dim) \\
+    \hline
+    \textit{Loss Function} & \textit{ArcMarginProduct} & \textit{ArcMarginProduct} \\
+    \hline
+    Total Iterasi & 10 \textit{epoch} & 10 \textit{round} $\times$ 1 \textit{local epoch} (Total 10) \\
+    \hline
+    \textit{Partial Freezing} & 14 dari 19 lapisan dibekukan (\textit{Stage} 1 \& 2) & 14 dari 19 lapisan dibekukan (\textit{Stage} 1 \& 2) \\
+    \hline
+    Metode Inferensi & \textit{Flip Trick} + \textit{Temporal Voting} & \textit{Flip Trick} + \textit{Temporal Voting} \\
+    \hline
+    Manajemen Resolusi & \textit{Downscale} 640px + \textit{Vectorization} & \textit{Downscale} 640px + \textit{Vectorization} \\
+    \hline
+    \textit{Learning Rate} & \textit{Cosine Decay} & \textit{Cosine Decay} \\
+    \hline
+    Augmentasi Data &
+    \textit{Random Horizontal Flip, Random Rotation, Random Perspective, Color Jitter, Random Grayscale, Random Autocontrast, Gaussian Blur, Random Adjust Sharpness,} dan \textit{Random Erasing} &
+    \textit{Random Horizontal Flip, Random Rotation, Random Perspective, Color Jitter, Random Grayscale, Random Autocontrast, Gaussian Blur, Random Adjust Sharpness,} dan \textit{Random Erasing} \\
+    \hline
+  \end{tabular}
+\end{table}
+
+
+Dengan rincian skenario sebagai berikut:
 
 \subsubsection{Federated Learning}
 
@@ -26,19 +59,48 @@ Eksperimen ini bertujuan untuk mengukur performa komputasi dan kualitas model tr
 
 Skenario pengujian inferensi dirancang untuk memvalidasi keandalan operasional model global hasil pelatihan terdistribusi secara langsung pada perangkat \textit{edge} saat mengeksekusi layanan verifikasi kehadiran mahasiswa. Pengujian pada tahap ini difokuskan pada penilaian fungsionalitas sistem secara biner dengan parameter keputusan berupa status Berhasil atau Gagal melalui serangkaian eksperimen terkontrol. Proses evaluasi terkontrol dilakukan dengan memetakan kemampuan pengenalan wajah pada variasi rentang jarak pemindaian subjek, mulai dari 0,5 meter hingga 3 meter, di bawah dua kondisi visual ruangan dengan tingkat intensitas cahaya yang diukur secara spesifik, yaitu kondisi pencahayaan cukup sebesar 341,01 lux dan pencahayaan minim sebesar 47,54 lux. Status pengujian dinyatakan Berhasil apabila sistem pada perangkat keras lokal mampu mendeteksi keberadaan objek wajah secara presisi serta memiliki kemampuan inferensi lintas perangkat untuk mengenali mahasiswa yang terdaftar di perangkat \textit{edge} lain berkat transfer kecerdasan model global. Sebaliknya, pengujian dikategorikan Gagal jika sistem salah mengenali identitas, memicu status tidak dikenal (\textit{UNKNOWN}) pada data terdaftar, atau mengalami pemutusan waktu pemrosesan (\textit{timeout}) komputasi.
 
-Untuk membandingkan performa secara adil antara \textit{Centralized Learning} dan \textit{Federated Learning}, pengujian inferensi ini dilakukan pada empat skenario konfigurasi perangkat operasional sebagai berikut:
-\begin{itemize}
-    \item \textbf{\textit{Centralized Learning Client} 1:} Perangkat \textit{edge} Jetson Nano yang menjalankan model hasil \textit{Centralized Learning}.
-    \item \textbf{\textit{Centralized Learning Client} 2:} Perangkat \textit{edge} Raspberry Pi yang menjalankan model hasil \textit{Centralized Learning}.
-    \item \textbf{\textit{Federated Learning} A:} Perangkat \textit{edge} Jetson Nano yang menjalankan model hasil \textit{Federated Learning} dengan data dari Jetson Nano (registrasi dilakukan di \textit{Client} 1 dan absensi dilakukan di \textit{Client} 1).
-    \item \textbf{\textit{Federated Learning} B:} Perangkat \textit{edge} Raspberry Pi yang menjalankan model hasil \textit{Federated Learning} untuk melakukan absensi (registrasi dilakukan di \textit{Client} 1 dan absensi dilakukan di \textit{Client} 2).
-\end{itemize}
+Untuk membandingkan performa secara adil antara \textit{Centralized Learning} dan \textit{Federated Learning}, pengujian inferensi ini dilakukan pada empat skenario konfigurasi perangkat operasional yang dirangkum pada Tabel \ref{tab:skenario-operasional} sebagai berikut:
+
+\begin{table}[H]
+  \centering
+  \caption{Skenario Konfigurasi Perangkat Operasional}
+  \label{tab:skenario-operasional}
+  \begin{tabular}{|l|p{9.5cm}|}
+    \hline
+    \textbf{Skenario} & \textbf{Keterangan} \\
+    \hline
+    \textit{Centralized Learning Client} 1 & Perangkat \textit{edge} Jetson Nano yang menjalankan model hasil \textit{Centralized Learning}. \\
+    \textit{Centralized Learning Client} 2 & Perangkat \textit{edge} Raspberry Pi yang menjalankan model hasil \textit{Centralized Learning}. \\
+    \textit{Federated Learning} A & Perangkat \textit{edge} Jetson Nano yang menjalankan model hasil \textit{Federated Learning} dengan data dari Jetson Nano (registrasi dilakukan di \textit{Client} 1 dan absensi dilakukan di \textit{Client} 1). \\
+    \textit{Federated Learning} B & Perangkat \textit{edge} Raspberry Pi yang menjalankan model hasil \textit{Federated Learning} untuk melakukan absensi (registrasi dilakukan di \textit{Client} 1 dan absensi dilakukan di \textit{Client} 2). \\
+    \hline
+  \end{tabular}
+\end{table}
 
 Evaluasi fungsionalitas biner (Berhasil/Gagal) dicatat untuk setiap variasi jarak pemindaian. Sementara itu, pengukuran tingkat keberhasilan klasifikasi (akurasi), nilai \textit{Cosine Similarity} (rata-rata, maksimum, dan minimum), serta durasi latensi komputasi inferensi (rata-rata, maksimum, dan minimum) dihitung berdasarkan data pencatatan dari 30 log riwayat inferensi terakhir pada masing-masing skenario perangkat.
 
 \subsubsection{Video}
 
-Selanjutnya, pengujian dilakukan pada kondisi nyata (\textit{real-life testing}) untuk memvalidasi keandalan fitur pelacakan multi-wajah secara kontinu menggunakan berkas rekaman video aktivitas sekelompok mahasiswa di dalam ruang kelas saat perkuliahan berlangsung. Melalui skenario simulasi kelas dinamis ini, skrip pengujian pada sisi \textit{client} akan membaca aliran video secara sekuensial untuk menguji efektivitas algoritma jaring pengaman \textit{voting temporal} dalam meredam fluktuasi gangguan visual alami di lapangan. Parameter pengujian pada skenario ini dinyatakan Berhasil atau Gagal berdasarkan apakah sistem mampu mendeteksi dan mengenali subjek mahasiswa pada beberapa video.
+Selanjutnya, pengujian dilakukan menggunakan berkas rekaman video yang berisi aktivitas mahasiswa melewati pintu untuk mensimulasikan keadaan kondisi nyata. Pengujian ini menggunakan 5 berkas video simulasi (Video A, B, C, D, dan E) dengan rincian skenario yang dirangkum pada Tabel \ref{tab:skenario-video}. Untuk menjaga agar performa perangkat keras \textit{edge} lokal tidak mengalami kelebihan beban komputasi, pemrosesan video dikonfigurasi dengan melakukan deteksi wajah setiap 5 \textit{frame} sekali, serta membatasi pengenalan wajah maksimal 3 wajah secara bersamaan dalam satu \textit{frame}. Evaluasi pada skenario pengujian video ini dinilai berdasarkan tiga indikator utama, yaitu mahasiswa terdeteksi yang merupakan rasio antara jumlah mahasiswa di dalam berkas video yang berhasil dicatat kehadirannya oleh sistem dengan total mahasiswa di dalam video yang terdaftar di dalam basis data, salah absen yang merupakan jumlah orang luar (tidak terdaftar) atau mahasiswa lain yang tidak terdaftar namun salah dikenali sehingga masuk ke dalam daftar kehadiran mahasiswa, serta durasi dalam satuan detik yang merupakan waktu yang dibutuhkan oleh sistem untuk memproses keseluruhan aliran berkas video absensi dari awal hingga selesai.
+
+\begin{table}[H]
+  \centering
+  \caption{Skenario Pengujian Video Simulasi}
+  \label{tab:skenario-video}
+  \begin{tabular}{|l|c|p{8.5cm}|}
+    \hline
+    \textbf{Sumber Video} & \textbf{Kode} & \textbf{Keterangan} \\
+    \hline
+    rec\_feed\_20260507\_1150\_010.mp4 & A & Terdapat 2 mahasiswa yang terdaftar tidak mengenakan kacamata. \\
+    rec\_feed\_20260519\_0957\_003.mp4 & B & Terdapat 1 mahasiswa yang terdaftar mengenakan kacamata. \\
+    rec\_feed\_20260521\_1006\_008.mp4 & C & Terdapat 2 mahasiswa yang terdaftar mengenakan kacamata. \\
+    rec\_feed\_20260526\_0956\_003.mp4 & D & Terdapat 2 mahasiswa yang terdaftar dengan 1 mahasiswa tidak mengenakan kacamata dan 1 mahasiswa mengenakan kacamata tapi saat pengambilan data tidak mengenakan kacamata. \\
+    rec\_feed\_20260526\_0956\_023.mp4 & E & Terdapat 0 mahasiswa yang terdaftar tujuan untuk menguji ketahanan sistem terhadap kasus salah absen \\
+    \hline
+  \end{tabular}
+\end{table}
+
+
 
 \section{Hasil Uji Coba}
 \label{sec:hasil-uji-coba}
@@ -50,7 +112,7 @@ Pengujian performa komputasi dan karakteristik pembaruan bobot model dilakukan u
 
 \subsubsection{Federated Learning}
 
-Hasil pencatatan metrik kecerdasan model pada skenario pelatihan desentralisasi terdistribusi disajikan secara terpisah berdasarkan peran masing-masing \textit{node} infrastruktur. Pergerakan nilai \textit{loss} dan \textit{accuracy} global pada sisi \textit{server} dirangkum pada Tabel \ref{tab:hasil-fl-server}. Sementara itu, fluktuasi metrik \textit{loss}, \textit{accuracy}, \textit{validation loss}, dan \textit{validation accuracy} hasil komputasi lokal pada perangkat \textit{edge} Jetson Nano disajikan pada Tabel \ref{tab:hasil-fl-client1}, yang kemudian disandingkan dengan hasil performa lokal perangkat Raspberry Pi pada Tabel \ref{tab:hasil-fl-client2}. Selanjutnya, seluruh parameter fisik riil terkait konsumsi sumber daya dari ketiga \textit{node} terdistribusi tersebut, yang meliputi durasi waktu latih (detik), volume transmisi data koordinasi parameter model (MB), serta total konsumsi energi listrik perangkat (kWh), dirangkum secara kolektif pada Tabel \ref{tab:ekonomi-fl}.
+Hasil pencatatan metrik kecerdasan model pada skenario pelatihan desentralisasi terdistribusi disajikan secara terpisah berdasarkan peran masing-masing \textit{node} infrastruktur. Pergerakan nilai \textit{loss} dan \textit{accuracy} global pada sisi \textit{server} dirangkum pada Tabel \ref{tab:hasil-fl-server} dan diilustrasikan pada Gambar \ref{fig:chart-fl-server}. Sementara itu, fluktuasi metrik \textit{loss}, \textit{accuracy}, \textit{validation loss}, dan \textit{validation accuracy} hasil komputasi lokal pada perangkat \textit{edge} Jetson Nano disajikan pada Tabel \ref{tab:hasil-fl-client1} dan Gambar \ref{fig:chart-fl-client1}, yang kemudian disandingkan dengan hasil performa lokal perangkat Raspberry Pi pada Tabel \ref{tab:hasil-fl-client2} dan Gambar \ref{fig:chart-fl-client2}. Selanjutnya, seluruh parameter fisik riil terkait konsumsi sumber daya dari ketiga \textit{node} terdistribusi tersebut, yang meliputi durasi waktu latih (detik), volume transmisi data koordinasi parameter model (MB), serta total konsumsi energi listrik perangkat (kWh), dirangkum secara kolektif pada Tabel \ref{tab:ekonomi-fl}.
 
 \begin{table}[H]
   \centering
@@ -74,6 +136,13 @@ Hasil pencatatan metrik kecerdasan model pada skenario pelatihan desentralisasi 
   \end{tabular}
 \end{table}
 
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.9\textwidth]{gambar/chart_fl_server.png}
+  \caption{Grafik Performa Pelatihan Federated Learning Server}
+  \label{fig:chart-fl-server}
+\end{figure}
+
 \begin{table}[H]
   \centering
   \caption{Hasil Pelatihan \textit{Federated Learning Client} 1 (Jetson Nano)}
@@ -95,6 +164,13 @@ Hasil pencatatan metrik kecerdasan model pada skenario pelatihan desentralisasi 
     \hline
   \end{tabular}
 \end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.9\textwidth]{gambar/chart_fl_client1.png}
+  \caption{Grafik Performa Pelatihan Federated Learning Client 1 (Jetson Nano)}
+  \label{fig:chart-fl-client1}
+\end{figure}
 
 \begin{table}[H]
   \centering
@@ -118,6 +194,14 @@ Hasil pencatatan metrik kecerdasan model pada skenario pelatihan desentralisasi 
   \end{tabular}
 \end{table}
 
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.9\textwidth]{gambar/chart_fl_client2.png}
+  \caption{Grafik Performa Pelatihan Federated Learning Client 2 (Raspberry Pi)}
+  \label{fig:chart-fl-client2}
+\end{figure}
+
+
 \begin{table}[H]
   \centering
   \caption{Hasil Nilai Ekonomi \textit{Federated Learning}}
@@ -135,7 +219,7 @@ Hasil pencatatan metrik kecerdasan model pada skenario pelatihan desentralisasi 
 
 \subsubsection{Centralized Learning}
 
-Sebagai standar tolok ukur (\textit{baseline}), akumulasi data performa latih tradisional terpusat dirangkum ke dalam dua bagian tabel utama. Rekapitulasi pergerakan metrik kecerdasan model yang meliputi nilai \textit{loss}, \textit{accuracy}, \textit{validation loss}, dan \textit{validation accuracy} murni pada sisi \textit{server} pusat di setiap \textit{epoch} disajikan secara urut pada Tabel \ref{tab:hasil-cl}. Bersamaan dengan itu, seluruh parameter fisik penggunaan sumber daya dari infrastruktur terpusat ini, yang mencakup total durasi waktu latih (detik), volume akumulasi \textit{bandwidth} jaringan untuk transmisi seluruh citra mentah dari tingkat lokal ke \textit{server} (MB), serta total konsumsi energi listrik perangkat \textit{server} (kWh), dirangkum secara lengkap pada Tabel \ref{tab:ekonomi-cl}.
+Sebagai standar tolok ukur (\textit{baseline}), akumulasi data performa latih tradisional terpusat dirangkum ke dalam dua bagian tabel utama. Rekapitulasi pergerakan metrik kecerdasan model yang meliputi nilai \textit{loss}, \textit{accuracy}, \textit{validation loss}, dan \textit{validation accuracy} murni pada sisi \textit{server} pusat di setiap \textit{epoch} disajikan secara urut pada Tabel \ref{tab:hasil-cl} dan diilustrasikan pada Gambar \ref{fig:chart-cl}. Bersamaan dengan itu, seluruh parameter fisik penggunaan sumber daya dari infrastruktur terpusat ini, yang mencakup total durasi waktu latih (detik), volume akumulasi \textit{bandwidth} jaringan untuk transmisi seluruh citra mentah dari tingkat lokal ke \textit{server} (MB), serta total konsumsi energi listrik perangkat \textit{server} (kWh), dirangkum secara lengkap pada Tabel \ref{tab:ekonomi-cl}.
 
 \begin{table}[H]
   \centering
@@ -158,6 +242,14 @@ Sebagai standar tolok ukur (\textit{baseline}), akumulasi data performa latih tr
     \hline
   \end{tabular}
 \end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.9\textwidth]{gambar/chart_cl.png}
+  \caption{Grafik Performa Pelatihan Centralized Learning}
+  \label{fig:chart-cl}
+\end{figure}
+
 
 \begin{table}[H]
   \centering
@@ -267,30 +359,44 @@ Hasil pengujian inferensi pelacakan multi-wajah secara kontinu menggunakan berka
   \centering
   \caption{Hasil Pengujian Inferensi Video Simulasi}
   \label{tab:inferensi-video}
-  \begin{tabular}{|l|l|c|}
+  \begin{tabular}{|c|l|c|c|c|c|}
     \hline
-    Skenario & Sumber Video & Status Pengujian \\
+    \textbf{Skenario Video} & \textbf{Indikator} & \textbf{\begin{tabular}[c]{@{}c@{}}Centralized\\Learning\\Client 1\end{tabular}} & \textbf{\begin{tabular}[c]{@{}c@{}}Centralized\\Learning\\Client 2\end{tabular}} & \textbf{\begin{tabular}[c]{@{}c@{}}Federated\\Learning A\end{tabular}} & \textbf{\begin{tabular}[c]{@{}c@{}}Federated\\Learning B\end{tabular}} \\
     \hline
-    \textit{Centralized Learning} & video\_1.mp4 & Berhasil \\
-    & video\_2.mp4 & Berhasil \\
-    & video\_3.mp4 & Berhasil \\
-    & video\_4.mp4 & Berhasil \\
-    & video\_5.mp4 & Berhasil \\
+    \multirow{3}{*}{Video A} & Mahasiswa Terdeteksi & 2/2 & 2/2 & 2/2 & 2/2 \\
+    \cline{2-6}
+    & Salah Absen & 0 & 0 & 2 & 2 \\
+    \cline{2-6}
+    & Durasi (detik) & 835,83 & 1795,57 & 811,89 & 1790,22 \\
     \hline
-    \textit{Federated Learning} A & video\_1.mp4 & Berhasil \\
-    & video\_2.mp4 & Berhasil \\
-    & video\_3.mp4 & Berhasil \\
-    & video\_4.mp4 & Berhasil \\
-    & video\_5.mp4 & Berhasil \\
+    \multirow{3}{*}{Video B} & Mahasiswa Terdeteksi & 1/1 & 1/1 & 1/1 & 1/1 \\
+    \cline{2-6}
+    & Salah Absen & 0 & 0 & 0 & 0 \\
+    \cline{2-6}
+    & Durasi (detik) & 454,28 & 1044,80 & 486,58 & 1030,19 \\
     \hline
-    \textit{Federated Learning} B & video\_1.mp4 & Berhasil \\
-    & video\_2.mp4 & Berhasil \\
-    & video\_3.mp4 & Berhasil \\
-    & video\_4.mp4 & Berhasil \\
-    & video\_5.mp4 & Berhasil \\
+    \multirow{3}{*}{Video C} & Mahasiswa Terdeteksi & 1/2 & 1/2 & 1/2 & 1/2 \\
+    \cline{2-6}
+    & Salah Absen & 0 & 0 & 0 & 0 \\
+    \cline{2-6}
+    & Durasi (detik) & 364,06 & 850,78 & 392,94 & 843,67 \\
+    \hline
+    \multirow{3}{*}{Video D} & Mahasiswa Terdeteksi & 2/2 & 2/2 & 2/2 & 2/2 \\
+    \cline{2-6}
+    & Salah Absen & 0 & 0 & 1 & 2 \\
+    \cline{2-6}
+    & Durasi (detik) & 553,52 & 1216,38 & 562,58 & 1201,21 \\
+    \hline
+    \multirow{3}{*}{Video E} & Mahasiswa Terdeteksi & 0/0 & 0/0 & 0/0 & 0/0 \\
+    \cline{2-6}
+    & Salah Absen & 0 & 0 & 0 & 0 \\
+    \cline{2-6}
+    & Durasi (detik) & 388,20 & 888,18 & 390,55 & 878,88 \\
     \hline
   \end{tabular}
 \end{table}
+
+
 
 \section{Pembahasan}
 \label{sec:pembahasan}
@@ -321,4 +427,14 @@ Evaluasi lebih mendalam berdasarkan pencatatan dari 30 log riwayat inferensi ter
 
 Kondisi yang serupa juga ditemui pada hasil evaluasi pengujian dalam kondisi minim cahaya (47,54 lux). Tingkat keberhasilan klasifikasi (akurasi) tetap stabil di atas 90\% untuk semua skenario (97\% untuk \textit{Centralized Learning Client} 1 dan \textit{Federated Learning} A, 93\% untuk \textit{Centralized Learning Client} 2, serta 90\% untuk \textit{Federated Learning} B), dengan nilai rata-rata \textit{Cosine Similarity} yang tetap tinggi dan kompetitif (0,8248 untuk \textit{Federated Learning} A dan 0,8607 untuk \textit{Federated Learning} B). Selaras dengan kondisi pencahayaan cukup, perbedaan latensi inferensi kembali terlihat secara konsisten, di mana Jetson Nano mencatatkan rata-rata waktu pemrosesan yang cepat (737,23 ms dan 719,13 ms) sementara Raspberry Pi membutuhkan waktu rata-rata yang lambat (3231,83 ms dan 3147,57 ms). Hal ini membuktikan bahwa penurunan intensitas cahaya ruangan hingga 47,54 lux tidak mendegradasi kualitas pengenalan maupun kecepatan waktu proses inferensi model secara signifikan. Perbedaan latensi pemrosesan yang terjadi murni disebabkan by perbedaan spesifikasi dan kapasitas komputasi dari masing-masing unit perangkat keras lokal.
 
-Berdasarkan hasil pengujian inferensi video yang disajikan pada Tabel \ref{tab:inferensi-video}, baik metode \textit{Centralized Learning} maupun \textit{Federated Learning} (skenario A dan B) menunjukkan status pengujian Berhasil untuk seluruh video uji (video\_1.mp4 hingga video\_5.mp4). Penggunaan metode \textit{Temporal Voting} secara efektif mampu meredam fluktuasi gangguan visual (\textit{transient noise}) akibat pergerakan dinamis wajah mahasiswa di dalam kelas, seperti ketika menoleh, menunduk, atau terhalang sebagian oleh objek lain, sehingga keputusan identitas akhir tetap stabil dan akurat selama simulasi kelas berlangsung.
+\subsubsection{Video}
+
+Berdasarkan data hasil pengujian pada Tabel \ref{tab:inferensi-video}, durasi pemrosesan video pada perangkat Jetson Nano (\textit{Centralized Learning Client} 1 dan \textit{Federated Learning} A) terbukti jauh lebih cepat secara konsisten dibandingkan perangkat Raspberry Pi (\textit{Centralized Learning Client} 2 dan \textit{Federated Learning} B). Sebagai contoh pada Video A, Jetson Nano menyelesaikan pemrosesan masing-masing dalam durasi 835,83 detik dan 811,89 detik, sementara Raspberry Pi membutuhkan waktu masing-masing hingga 1795,57 detik dan 1790,22 detik. Meskipun kedua perangkat dikondisikan sama-sama hanya menggunakan CPU untuk mengeksekusi inferensi model agar perbandingan berjalan setara, perbedaan performa waktu proses ini dipengaruhi secara signifikan oleh kapasitas memori acak (\textit{Random Access Memory} atau RAM). Jetson Nano didukung oleh kapasitas RAM sebesar 4 GB, sedangkan Raspberry Pi 3 Model B hanya memiliki kapasitas RAM sebesar 1 GB. Keterbatasan kapasitas memori pada Raspberry Pi mengakibatkan tingginya beban alokasi memori sistem operasi dan memicu proses pertukaran memori virtual (\textit{memory swapping}) yang memperlambat laju eksekusi pipa deteksi wajah per \textit{frame}.
+
+Analisis terhadap kasus salah absen menunjukkan adanya perbedaan karakteristik ketahanan antara kedua metode pembelajaran. Kasus salah absen terdeteksi pada Video A untuk skenario \textit{Federated Learning} A dan B yang mencatatkan 2 kasus salah absen, serta Video D yang mencatatkan 1 kasus pada \textit{Federated Learning} A dan 2 kasus pada \textit{Federated Learning} B. Sebaliknya, metode \textit{Centralized Learning} (baik \textit{Client} 1 maupun \textit{Client} 2) berhasil mencatatkan 0 kasus salah absen pada seluruh berkas video uji. Pada Video A, kesalahan absensi pada metode \textit{Federated Learning} dipicu oleh keberadaan subjek mahasiswi yang mengenakan kerudung (hijab) yang salah dikenali sebagai mahasiswa terdaftar lain yang juga berkerudung. Sementara itu, model \textit{Centralized Learning} mampu membedakan identitas subjek tersebut secara tepat. Keunggulan metode terpusat ini terjadi karena pelatihan model dilakukan secara langsung dengan mengakses seluruh kumpulan data gambar wajah secara utuh dalam satu repositori penyimpanan pusat, sehingga model dapat mengenali fitur-fitur wajah secara komprehensif untuk membentuk batas keputusan (\textit{decision boundary}) yang lebih matang. Pada metode \textit{Federated Learning}, data latih terdistribusi secara lokal sehingga model agregasi global memiliki keterbatasan dalam menangkap karakteristik biometrik minor yang spesifik akibat tidak adanya pembagian data mentah secara langsung antarperangkat \textit{edge}.
+
+Mengenai indikator mahasiswa terdeteksi, pada Video C, seluruh skenario pengujian hanya berhasil mencatatkan rasio deteksi sebesar 1/2 mahasiswa terdaftar. Kegagalan sistem dalam mengenali salah satu mahasiswa tersebut disebabkan oleh perubahan atribut visual subjek pada saat pengujian. Mahasiswa yang bersangkutan tidak mengenakan kacamata selama proses pengambilan data latih awal (\textit{data gathering}), namun mengenakan kacamata saat proses perekaman video uji coba presensi dilakukan. Penambahan atribut kacamata ini menghasilkan perubahan representasi spasial pada area mata sehingga sistem mengalami kebingungan dalam memetakan vektor \textit{embedding} wajah subjek terhadap data referensi yang tersimpan di dalam basis data.
+
+
+
+
